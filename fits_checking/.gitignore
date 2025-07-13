@@ -10,12 +10,13 @@ __pycache__/
 # 数据文件
 *.csv
 
-# 配置文件（包含敏感信息）
+# 配置文件（包含用户特定路径）
 config.json
 
 # 测试数据
 test_*.csv
 demo_*.csv
+*_data.csv
 
 # IDE文件
 .vscode/
@@ -26,3 +27,11 @@ demo_*.csv
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+
+# 备份文件
+*.bak
+*.backup
