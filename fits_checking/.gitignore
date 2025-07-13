@@ -10,8 +10,8 @@ __pycache__/
 # 数据文件
 *.csv
 
-# 配置文件（包含用户特定路径）
-config.json
+# 配置文件（如果包含敏感信息请取消注释下一行）
+# config.json
 
 # 测试数据
 test_*.csv
