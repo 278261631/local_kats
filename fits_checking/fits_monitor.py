@@ -17,6 +17,8 @@ from photutils.detection import DAOStarFinder
 from scipy.ndimage import gaussian_filter
 import warnings
 import glob
+import csv
+import json
 
 # 忽略一些常见的警告
 warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -27,11 +29,70 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('fits_monitor.log'),
+        logging.FileHandler('fits_monitor.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+
+class DataRecorder:
+    """数据记录器，用于保存分析结果到CSV文件"""
+
+    def __init__(self, csv_filename='fits_quality_log.csv'):
+        self.csv_filename = csv_filename
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+        # 创建CSV文件并写入表头
+        self.initialize_csv()
+
+    def initialize_csv(self):
+        """初始化CSV文件"""
+        try:
+            with open(self.csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'timestamp', 'filename', 'n_sources', 'fwhm', 'ellipticity',
+                    'lm5sig', 'background_mean', 'background_rms'
+                ]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+
+            self.logger.info(f"CSV记录文件已创建: {self.csv_filename}")
+
+        except Exception as e:
+            self.logger.error(f"初始化CSV文件时出错: {str(e)}")
+
+    def record_data(self, filename, metrics):
+        """记录数据到CSV文件"""
+        try:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            # 准备数据行
+            row_data = {
+                'timestamp': timestamp,
+                'filename': os.path.basename(filename),
+                'n_sources': metrics.get('n_sources', ''),
+                'fwhm': metrics.get('fwhm', '') if not np.isnan(metrics.get('fwhm', np.nan)) else '',
+                'ellipticity': metrics.get('ellipticity', '') if not np.isnan(metrics.get('ellipticity', np.nan)) else '',
+                'lm5sig': metrics.get('lm5sig', '') if not np.isnan(metrics.get('lm5sig', np.nan)) else '',
+                'background_mean': metrics.get('background_mean', ''),
+                'background_rms': metrics.get('background_rms', '')
+            }
+
+            # 写入CSV文件
+            with open(self.csv_filename, 'a', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'timestamp', 'filename', 'n_sources', 'fwhm', 'ellipticity',
+                    'lm5sig', 'background_mean', 'background_rms'
+                ]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writerow(row_data)
+
+            self.logger.info(f"数据已记录到CSV: {os.path.basename(filename)}")
+
+        except Exception as e:
+            self.logger.error(f"记录数据到CSV时出错: {str(e)}")
 
 
 class FITSQualityAnalyzer:
@@ -262,41 +323,41 @@ class FITSQualityAnalyzer:
         # FWHM评估
         if not np.isnan(metrics['fwhm']):
             if metrics['fwhm'] < 2.0:
-                self.logger.info("✓ FWHM: 优秀 (< 2.0 像素)")
+                self.logger.info("[OK] FWHM: 优秀 (< 2.0 像素)")
             elif metrics['fwhm'] < 3.0:
-                self.logger.info("○ FWHM: 良好 (2.0-3.0 像素)")
+                self.logger.info("[GOOD] FWHM: 良好 (2.0-3.0 像素)")
             elif metrics['fwhm'] < 5.0:
-                self.logger.info("△ FWHM: 一般 (3.0-5.0 像素)")
+                self.logger.info("[FAIR] FWHM: 一般 (3.0-5.0 像素)")
             else:
-                self.logger.info("✗ FWHM: 较差 (> 5.0 像素)")
+                self.logger.info("[POOR] FWHM: 较差 (> 5.0 像素)")
                 quality_issues.append("FWHM过大")
         
         # 椭圆度评估
         if not np.isnan(metrics['ellipticity']):
             if metrics['ellipticity'] < 0.1:
-                self.logger.info("✓ 椭圆度: 优秀 (< 0.1)")
+                self.logger.info("[OK] 椭圆度: 优秀 (< 0.1)")
             elif metrics['ellipticity'] < 0.2:
-                self.logger.info("○ 椭圆度: 良好 (0.1-0.2)")
+                self.logger.info("[GOOD] 椭圆度: 良好 (0.1-0.2)")
             elif metrics['ellipticity'] < 0.3:
-                self.logger.info("△ 椭圆度: 一般 (0.2-0.3)")
+                self.logger.info("[FAIR] 椭圆度: 一般 (0.2-0.3)")
             else:
-                self.logger.info("✗ 椭圆度: 较差 (> 0.3)")
+                self.logger.info("[POOR] 椭圆度: 较差 (> 0.3)")
                 quality_issues.append("椭圆度过高")
         
         # 源数量评估
         if metrics['n_sources'] < 10:
-            self.logger.info("✗ 源数量: 较少 (< 10)")
+            self.logger.info("[POOR] 源数量: 较少 (< 10)")
             quality_issues.append("检测到的源数量过少")
         elif metrics['n_sources'] < 50:
-            self.logger.info("○ 源数量: 一般 (10-50)")
+            self.logger.info("[GOOD] 源数量: 一般 (10-50)")
         else:
-            self.logger.info("✓ 源数量: 充足 (> 50)")
-        
+            self.logger.info("[OK] 源数量: 充足 (> 50)")
+
         # 总体评估
         if len(quality_issues) == 0:
-            self.logger.info("\n总体评估: 图像质量良好 ✓")
+            self.logger.info("\n总体评估: 图像质量良好 [OK]")
         else:
-            self.logger.info(f"\n总体评估: 发现质量问题 ✗")
+            self.logger.info(f"\n总体评估: 发现质量问题 [WARNING]")
             for issue in quality_issues:
                 self.logger.info(f"  - {issue}")
 
@@ -304,11 +365,25 @@ class FITSQualityAnalyzer:
 class FITSFileMonitor:
     """FITS文件监控器（使用轮询方式）"""
 
-    def __init__(self, monitor_directory):
+    def __init__(self, monitor_directory, enable_recording=True):
         self.monitor_directory = monitor_directory
         self.analyzer = FITSQualityAnalyzer()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.known_files = set()  # 已知的文件集合
+
+        # 初始化数据记录器
+        self.enable_recording = enable_recording
+
+        if self.enable_recording:
+            try:
+                self.recorder = DataRecorder()
+                self.logger.info("数据记录功能已启用")
+            except Exception as e:
+                self.logger.error(f"初始化数据记录器失败: {str(e)}")
+                self.enable_recording = False
+                self.recorder = None
+        else:
+            self.recorder = None
 
         # 初始化时记录所有现有文件
         self.initialize_known_files()
@@ -378,6 +453,14 @@ class FITSFileMonitor:
 
             if quality_metrics:
                 self.logger.info(f"FITS文件分析完成: {file_path}")
+
+                # 记录数据到CSV文件
+                if self.enable_recording and self.recorder:
+                    try:
+                        self.recorder.record_data(file_path, quality_metrics)
+                    except Exception as e:
+                        self.logger.error(f"记录数据时出错: {str(e)}")
+
             else:
                 self.logger.error(f"FITS文件分析失败: {file_path}")
 
@@ -388,6 +471,10 @@ class FITSFileMonitor:
         """开始监控"""
         self.logger.info(f"开始监控目录: {self.monitor_directory}")
         self.logger.info(f"扫描间隔: {scan_interval} 秒")
+
+        if self.enable_recording:
+            self.logger.info("数据记录功能已启用")
+            self.logger.info("提示: 使用 'python plot_viewer.py' 查看图表")
 
         try:
             while True:
@@ -413,8 +500,11 @@ def main():
         os.makedirs(monitor_directory, exist_ok=True)
         logger.info(f"使用测试目录: {monitor_directory}")
 
-    # 创建监控器
-    monitor = FITSFileMonitor(monitor_directory)
+    # 创建监控器（启用数据记录）
+    monitor = FITSFileMonitor(
+        monitor_directory,
+        enable_recording=True  # 启用数据记录
+    )
 
     # 启动监控
     monitor.start_monitoring(scan_interval=5)

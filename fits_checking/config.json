@@ -1,0 +1,41 @@
+{
+    "monitor_settings": {
+        "monitor_directory": "E:/fix_data/debug_fits_output",
+        "scan_interval": 5,
+        "file_timeout": 30,
+        "enable_plotting": true,
+        "enable_recording": true
+    },
+    "test_settings": {
+        "source_directory": "E:/fix_data/debug_fits_input",
+        "copy_delay": 2.5,
+        "show_progress": true
+    },
+    "plotting_settings": {
+        "max_points": 50,
+        "figure_size": [12, 8],
+        "update_interval": 1000,
+        "font_family": "SimHei"
+    },
+    "recording_settings": {
+        "csv_filename": "fits_quality_log.csv",
+        "log_filename": "fits_monitor.log",
+        "backup_logs": true
+    },
+    "quality_thresholds": {
+        "fwhm": {
+            "excellent": 2.0,
+            "good": 3.0,
+            "fair": 5.0
+        },
+        "ellipticity": {
+            "excellent": 0.1,
+            "good": 0.2,
+            "fair": 0.3
+        },
+        "n_sources": {
+            "excellent": 50,
+            "good": 10
+        }
+    }
+}
