@@ -19,6 +19,9 @@ import warnings
 import glob
 import csv
 import json
+import threading
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # 忽略一些常见的警告
 warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -362,88 +365,85 @@ class FITSQualityAnalyzer:
                 self.logger.info(f"  - {issue}")
 
 
-class FITSFileMonitor:
-    """FITS文件监控器（使用轮询方式）"""
+class FITSFileEventHandler(FileSystemEventHandler):
+    """FITS文件事件处理器，使用watchdog监控文件系统事件"""
 
-    def __init__(self, monitor_directory, enable_recording=True):
-        self.monitor_directory = monitor_directory
-        self.analyzer = FITSQualityAnalyzer()
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.known_files = set()  # 已知的文件集合
-
-        # 初始化数据记录器
+    def __init__(self, analyzer, recorder=None, enable_recording=True):
+        super().__init__()
+        self.analyzer = analyzer
+        self.recorder = recorder
         self.enable_recording = enable_recording
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.processing_files = set()  # 正在处理的文件集合
+        self.file_locks = {}  # 文件锁字典
 
-        if self.enable_recording:
-            try:
-                self.recorder = DataRecorder()
-                self.logger.info("数据记录功能已启用")
-            except Exception as e:
-                self.logger.error(f"初始化数据记录器失败: {str(e)}")
-                self.enable_recording = False
-                self.recorder = None
-        else:
-            self.recorder = None
+    def on_created(self, event):
+        """文件创建事件处理"""
+        if not event.is_directory and event.src_path.lower().endswith('.fits'):
+            self.logger.info(f"检测到新的FITS文件: {event.src_path}")
+            # 使用线程处理文件，避免阻塞监控
+            threading.Thread(
+                target=self._process_file_delayed,
+                args=(event.src_path,),
+                daemon=True
+            ).start()
 
-        # 初始化时记录所有现有文件
-        self.initialize_known_files()
+    def on_moved(self, event):
+        """文件移动事件处理"""
+        if not event.is_directory and event.dest_path.lower().endswith('.fits'):
+            self.logger.info(f"检测到移动的FITS文件: {event.dest_path}")
+            # 使用线程处理文件，避免阻塞监控
+            threading.Thread(
+                target=self._process_file_delayed,
+                args=(event.dest_path,),
+                daemon=True
+            ).start()
 
-    def initialize_known_files(self):
-        """初始化已知文件列表"""
+    def _process_file_delayed(self, file_path):
+        """延迟处理文件，确保文件写入完成"""
         try:
-            fits_pattern = os.path.join(self.monitor_directory, "**", "*.fits")
-            existing_files = glob.glob(fits_pattern, recursive=True)
-            self.known_files = set(existing_files)
-            self.logger.info(f"初始化完成，发现 {len(self.known_files)} 个现有FITS文件")
-        except Exception as e:
-            self.logger.error(f"初始化已知文件时出错: {str(e)}")
+            # 避免重复处理同一文件
+            if file_path in self.processing_files:
+                return
 
-    def scan_for_new_files(self):
-        """扫描新的FITS文件"""
-        try:
-            # 获取所有FITS文件
-            fits_pattern = os.path.join(self.monitor_directory, "**", "*.fits")
-            current_files = set(glob.glob(fits_pattern, recursive=True))
+            self.processing_files.add(file_path)
 
-            # 找出新文件
-            new_files = current_files - self.known_files
+            # 等待文件写入完成
+            self._wait_for_file_complete(file_path)
 
-            if new_files:
-                for file_path in new_files:
-                    self.logger.info(f"检测到新的FITS文件: {file_path}")
-
-                    # 等待文件写入完成
-                    self.wait_for_file_complete(file_path)
-
-                    # 处理文件
-                    self.process_fits_file(file_path)
-
-                # 更新已知文件集合
-                self.known_files = current_files
+            # 处理文件
+            self._process_fits_file(file_path)
 
         except Exception as e:
-            self.logger.error(f"扫描文件时出错: {str(e)}")
+            self.logger.error(f"处理文件时出错 {file_path}: {str(e)}")
+        finally:
+            # 清理处理状态
+            self.processing_files.discard(file_path)
 
-    def wait_for_file_complete(self, file_path, timeout=30):
+    def _wait_for_file_complete(self, file_path, timeout=30):
         """等待文件写入完成"""
         start_time = time.time()
         last_size = 0
+        stable_count = 0
 
         while time.time() - start_time < timeout:
             try:
                 current_size = os.path.getsize(file_path)
                 if current_size == last_size and current_size > 0:
-                    # 文件大小稳定，等待额外1秒确保写入完成
-                    time.sleep(1)
-                    break
+                    stable_count += 1
+                    # 文件大小连续3次检查都稳定，认为写入完成
+                    if stable_count >= 3:
+                        break
+                else:
+                    stable_count = 0
                 last_size = current_size
                 time.sleep(0.5)
             except OSError:
-                # 文件可能还在写入中
+                # 文件可能还在写入中或被锁定
                 time.sleep(0.5)
                 continue
 
-    def process_fits_file(self, file_path):
+    def _process_fits_file(self, file_path):
         """处理FITS文件"""
         try:
             self.logger.info(f"开始分析FITS文件: {file_path}")
@@ -460,30 +460,133 @@ class FITSFileMonitor:
                         self.recorder.record_data(file_path, quality_metrics)
                     except Exception as e:
                         self.logger.error(f"记录数据时出错: {str(e)}")
-
             else:
                 self.logger.error(f"FITS文件分析失败: {file_path}")
 
         except Exception as e:
             self.logger.error(f"处理FITS文件时出错 {file_path}: {str(e)}")
 
-    def start_monitoring(self, scan_interval=5):
-        """开始监控"""
+
+class FITSFileMonitor:
+    """FITS文件监控器（使用watchdog事件驱动）"""
+
+    def __init__(self, monitor_directory, enable_recording=True):
+        self.monitor_directory = monitor_directory
+        self.analyzer = FITSQualityAnalyzer()
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.observer = None
+        self.event_handler = None
+
+        # 初始化数据记录器
+        self.enable_recording = enable_recording
+
+        if self.enable_recording:
+            try:
+                self.recorder = DataRecorder()
+                self.logger.info("数据记录功能已启用")
+            except Exception as e:
+                self.logger.error(f"初始化数据记录器失败: {str(e)}")
+                self.enable_recording = False
+                self.recorder = None
+        else:
+            self.recorder = None
+
+        # 创建事件处理器
+        self.event_handler = FITSFileEventHandler(
+            self.analyzer,
+            self.recorder,
+            self.enable_recording
+        )
+
+        # 处理现有文件（可选）
+        self.process_existing_files = False  # 默认不处理现有文件
+
+    def process_existing_files_on_startup(self):
+        """启动时处理现有文件（可选功能）"""
+        if not self.process_existing_files:
+            return
+
+        try:
+            fits_pattern = os.path.join(self.monitor_directory, "**", "*.fits")
+            existing_files = glob.glob(fits_pattern, recursive=True)
+
+            if existing_files:
+                self.logger.info(f"发现 {len(existing_files)} 个现有FITS文件")
+
+                # 检查是否在交互环境中
+                try:
+                    import sys
+                    if sys.stdin.isatty():
+                        choice = input("是否处理现有文件？(y/N): ").strip().lower()
+                    else:
+                        choice = 'n'  # 非交互环境默认跳过
+                        self.logger.info("非交互环境，跳过现有文件处理")
+                except:
+                    choice = 'n'  # 出错时默认跳过
+                    self.logger.info("无法获取用户输入，跳过现有文件处理")
+
+                if choice == 'y':
+                    self.logger.info("开始处理现有文件...")
+                    for file_path in existing_files:
+                        try:
+                            self.event_handler._process_fits_file(file_path)
+                        except Exception as e:
+                            self.logger.error(f"处理现有文件时出错 {file_path}: {str(e)}")
+                    self.logger.info("现有文件处理完成")
+                else:
+                    self.logger.info("跳过现有文件处理")
+            else:
+                self.logger.info("未发现现有FITS文件")
+
+        except Exception as e:
+            self.logger.error(f"处理现有文件时出错: {str(e)}")
+
+    def start_monitoring(self, scan_interval=None):
+        """开始监控（scan_interval参数保留兼容性，但不再使用）"""
         self.logger.info(f"开始监控目录: {self.monitor_directory}")
-        self.logger.info(f"扫描间隔: {scan_interval} 秒")
+        self.logger.info("使用watchdog事件驱动监控（实时响应）")
 
         if self.enable_recording:
             self.logger.info("数据记录功能已启用")
             self.logger.info("提示: 使用 'python plot_viewer.py' 查看图表")
 
+        # 处理现有文件
+        self.process_existing_files_on_startup()
+
+        # 创建观察者
+        self.observer = Observer()
+        self.observer.schedule(
+            self.event_handler,
+            self.monitor_directory,
+            recursive=True
+        )
+
         try:
+            # 启动观察者
+            self.observer.start()
+            self.logger.info("文件监控已启动，等待FITS文件...")
+            self.logger.info("按 Ctrl+C 停止监控")
+
+            # 保持主线程运行
             while True:
-                self.scan_for_new_files()
-                time.sleep(scan_interval)
+                time.sleep(1)
+
         except KeyboardInterrupt:
             self.logger.info("收到停止信号，正在关闭监控...")
         except Exception as e:
             self.logger.error(f"监控过程中出错: {str(e)}")
+        finally:
+            if self.observer:
+                self.observer.stop()
+                self.observer.join()
+                self.logger.info("文件监控已停止")
+
+    def stop_monitoring(self):
+        """停止监控"""
+        if self.observer:
+            self.observer.stop()
+            self.observer.join()
+            self.logger.info("文件监控已停止")
 
 
 def main():
@@ -506,8 +609,8 @@ def main():
         enable_recording=True  # 启用数据记录
     )
 
-    # 启动监控
-    monitor.start_monitoring(scan_interval=5)
+    # 启动监控（不再需要scan_interval参数）
+    monitor.start_monitoring()
 
 
 if __name__ == "__main__":
