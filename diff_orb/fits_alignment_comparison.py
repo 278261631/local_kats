@@ -8,7 +8,12 @@ import os
 import sys
 import numpy as np
 import cv2
+
+# 设置matplotlib后端，确保图表在独立窗口显示
+import matplotlib
+matplotlib.use('TkAgg')  # 强制使用TkAgg后端，避免在PyCharm内嵌显示
 import matplotlib.pyplot as plt
+
 from astropy.io import fits
 from scipy.ndimage import gaussian_filter
 from pathlib import Path

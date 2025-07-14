@@ -11,6 +11,10 @@ from pathlib import Path
 from datetime import datetime
 import glob
 
+# 设置matplotlib后端，确保图表在独立窗口显示
+import matplotlib
+matplotlib.use('TkAgg')  # 强制使用TkAgg后端，避免在PyCharm内嵌显示
+
 # 添加当前目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -103,31 +107,43 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
+  # 使用默认参数（推荐）
+  python run_alignment_comparison.py
+
   # 直接指定两个文件
   python run_alignment_comparison.py file1.fits file2.fits
-  
+
   # 从目录中交互式选择文件
   python run_alignment_comparison.py --directory E:\\fix_data\\align-compare
-  
+
   # 指定输出目录
   python run_alignment_comparison.py file1.fits file2.fits --output results
-  
+
   # 使用完整图像（不使用中央区域优化）
   python run_alignment_comparison.py file1.fits file2.fits --no-central-region
+
+默认参数:
+  --directory "E:\\fix_data\\align-compare"
+  --alignment-method rigid
+  --no-central-region (使用完整图像)
+  --output high_precision_results
         """
     )
     
     # 文件输入选项
     parser.add_argument('fits1', nargs='?', help='参考FITS文件路径')
     parser.add_argument('fits2', nargs='?', help='待比较FITS文件路径')
-    parser.add_argument('--directory', '-d', help='包含FITS文件的目录（交互式选择）')
-    
+    parser.add_argument('--directory', '-d', default=r'E:\fix_data\align-compare',
+                       help='包含FITS文件的目录（交互式选择）')
+
     # 输出选项
-    parser.add_argument('--output', '-o', help='输出目录路径（默认: ./alignment_results）')
+    parser.add_argument('--output', '-o', default='high_precision_results',
+                       help='输出目录路径（默认: high_precision_results）')
     parser.add_argument('--no-visualization', action='store_true', help='不显示可视化结果')
-    
+
     # 处理选项
-    parser.add_argument('--no-central-region', action='store_true', help='不使用中央区域优化（使用完整图像）')
+    parser.add_argument('--no-central-region', action='store_true', default=True,
+                       help='不使用中央区域优化（使用完整图像）')
     parser.add_argument('--region-size', type=int, default=200, help='中央区域大小（默认200像素）')
 
     # 对齐方法选项
