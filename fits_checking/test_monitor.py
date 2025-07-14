@@ -17,6 +17,10 @@ def copy_test_files():
     print(f"目标目录: {dst_dir}")
     print(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("-" * 50)
+    # 删除目录下的.fits 文件
+    for filename in os.listdir(dst_dir):
+        if filename.endswith('.fits'):
+            os.remove(os.path.join(dst_dir, filename))
 
     # 获取所有文件列表
     files = [f for f in os.listdir(src_dir) if os.path.isfile(os.path.join(src_dir, f))]
