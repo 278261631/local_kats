@@ -65,7 +65,8 @@ def run_monitor(config):
     # 创建并启动监控器
     monitor = FITSFileMonitor(
         monitor_dir,
-        enable_recording=enable_recording
+        enable_recording=enable_recording,
+        config=config.config
     )
 
     print(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

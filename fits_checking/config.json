@@ -6,6 +6,11 @@
         "enable_plotting": true,
         "enable_recording": true
     },
+    "analysis_settings": {
+        "use_central_region": true,
+        "central_region_size": 200,
+        "min_image_size": 300
+    },
     "test_settings": {
         "source_directory": "E:/fix_data/debug_fits_input",
         "copy_delay": 2.5,

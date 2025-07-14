@@ -141,7 +141,8 @@ class TestRunner:
             # 创建监控器
             self.monitor = FITSFileMonitor(
                 self.monitor_dir,
-                enable_recording=enable_recording
+                enable_recording=enable_recording,
+                config=self.config.config
             )
 
             # 开始监控
@@ -299,7 +300,8 @@ def run_monitor_only():
         # 创建并启动监控器
         monitor = FITSFileMonitor(
             monitor_dir,
-            enable_recording=enable_recording
+            enable_recording=enable_recording,
+            config=config.config
         )
         
         monitor.start_monitoring(scan_interval=scan_interval)

@@ -100,9 +100,22 @@ class DataRecorder:
 
 class FITSQualityAnalyzer:
     """FITS图像质量分析器"""
-    
-    def __init__(self):
+
+    def __init__(self, config=None):
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.config = config
+
+        # 从配置中读取分析设置
+        if config:
+            analysis_settings = config.get('analysis_settings', {})
+            self.use_central_region = analysis_settings.get('use_central_region', True)
+            self.central_region_size = analysis_settings.get('central_region_size', 200)
+            self.min_image_size = analysis_settings.get('min_image_size', 300)
+        else:
+            # 默认设置
+            self.use_central_region = True
+            self.central_region_size = 200
+            self.min_image_size = 300
     
     def analyze_fits_quality(self, fits_path):
         """
@@ -162,20 +175,83 @@ class FITSQualityAnalyzer:
             if key not in important_keys:
                 self.logger.info(f"{key:10s}: {value}")
     
+    def extract_central_region(self, image_data):
+        """
+        抽取图像中央的指定尺寸区域
+
+        Args:
+            image_data (np.ndarray): 原始图像数据
+
+        Returns:
+            tuple: (抽取的图像数据, 是否成功抽取, 原始图像尺寸)
+        """
+        try:
+            height, width = image_data.shape
+
+            # 检查是否启用中央区域分析
+            if not self.use_central_region:
+                self.logger.info(f"使用整个图像进行分析: {width}×{height} 像素")
+                # 确保整个图像也是C连续的
+                if not image_data.flags['C_CONTIGUOUS']:
+                    image_data = np.ascontiguousarray(image_data)
+                return image_data, False, (width, height)
+
+            # 如果图像尺寸小于最小要求，使用整个图像
+            if height < self.min_image_size or width < self.min_image_size:
+                self.logger.info(f"图像尺寸 ({width}×{height}) 小于最小要求 ({self.min_image_size}×{self.min_image_size})，使用整个图像")
+                if not image_data.flags['C_CONTIGUOUS']:
+                    image_data = np.ascontiguousarray(image_data)
+                return image_data, False, (width, height)
+
+            # 如果图像尺寸小于抽取区域，使用整个图像
+            if height < self.central_region_size or width < self.central_region_size:
+                self.logger.info(f"图像尺寸 ({width}×{height}) 小于抽取区域 ({self.central_region_size}×{self.central_region_size})，使用整个图像")
+                if not image_data.flags['C_CONTIGUOUS']:
+                    image_data = np.ascontiguousarray(image_data)
+                return image_data, False, (width, height)
+
+            # 计算中央区域的起始坐标
+            center_y, center_x = height // 2, width // 2
+            half_size = self.central_region_size // 2
+
+            start_y = center_y - half_size
+            end_y = center_y + half_size
+            start_x = center_x - half_size
+            end_x = center_x + half_size
+
+            # 抽取中央区域并确保内存连续性
+            central_region = image_data[start_y:end_y, start_x:end_x].copy()
+
+            # 确保数组是C连续的（sep库要求）
+            if not central_region.flags['C_CONTIGUOUS']:
+                central_region = np.ascontiguousarray(central_region)
+
+            self.logger.info(f"抽取中央区域: {self.central_region_size}×{self.central_region_size} 像素 (原图: {width}×{height})")
+            self.logger.info(f"抽取位置: [{start_x}:{end_x}, {start_y}:{end_y}]")
+
+            return central_region, True, (width, height)
+
+        except Exception as e:
+            self.logger.error(f"抽取中央区域时出错: {str(e)}")
+            return image_data, False, image_data.shape
+
     def calculate_quality_metrics(self, image_data):
         """
         计算图像质量指标
-        
+
         Args:
             image_data (np.ndarray): 图像数据
-            
+
         Returns:
             dict: 质量指标字典
         """
         try:
+            # 抽取中央区域进行分析（根据配置设置）
+            analysis_data, is_extracted, original_size = self.extract_central_region(image_data)
+
             # 背景估计和源检测
-            bkg = sep.Background(image_data)
-            data_sub = image_data - bkg.back()
+            bkg = sep.Background(analysis_data)
+            data_sub = analysis_data - bkg.back()
             
             # 检测源
             objects = sep.extract(data_sub, thresh=3.0, err=bkg.globalrms)
@@ -188,7 +264,10 @@ class FITSQualityAnalyzer:
                     'ellipticity': np.nan,
                     'lm5sig': np.nan,
                     'background_mean': float(np.mean(bkg.back())),
-                    'background_rms': float(bkg.globalrms)
+                    'background_rms': float(bkg.globalrms),
+                    'analysis_region': 'central_200x200' if is_extracted else 'full_image',
+                    'original_size': f"{original_size[0]}x{original_size[1]}",
+                    'analysis_size': f"{analysis_data.shape[1]}x{analysis_data.shape[0]}"
                 }
             
             # 计算FWHM
@@ -206,7 +285,10 @@ class FITSQualityAnalyzer:
                 'ellipticity': ellipticity,
                 'lm5sig': lm5sig,
                 'background_mean': float(np.mean(bkg.back())),
-                'background_rms': float(bkg.globalrms)
+                'background_rms': float(bkg.globalrms),
+                'analysis_region': 'central_200x200' if is_extracted else 'full_image',
+                'original_size': f"{original_size[0]}x{original_size[1]}",
+                'analysis_size': f"{analysis_data.shape[1]}x{analysis_data.shape[0]}"
             }
             
             # 输出质量评估结果
@@ -306,13 +388,21 @@ class FITSQualityAnalyzer:
         """打印质量评估结果"""
         self.logger.info(f"\n图像质量评估结果:")
         self.logger.info(f"{'='*40}")
+
+        # 显示分析区域信息
+        if 'analysis_region' in metrics:
+            self.logger.info(f"原始图像尺寸:    {metrics['original_size']}")
+            self.logger.info(f"分析区域尺寸:    {metrics['analysis_size']}")
+            self.logger.info(f"分析区域类型:    {metrics['analysis_region']}")
+            self.logger.info(f"{'='*40}")
+
         self.logger.info(f"检测到的源数量: {metrics['n_sources']}")
         self.logger.info(f"FWHM (像素):     {metrics['fwhm']:.2f}")
         self.logger.info(f"椭圆度:          {metrics['ellipticity']:.3f}")
         self.logger.info(f"5σ限制星等:      {metrics['lm5sig']:.2f}")
         self.logger.info(f"背景均值:        {metrics['background_mean']:.2f}")
         self.logger.info(f"背景RMS:         {metrics['background_rms']:.2f}")
-        
+
         # 质量评估
         self.evaluate_image_quality(metrics)
     
@@ -470,9 +560,9 @@ class FITSFileEventHandler(FileSystemEventHandler):
 class FITSFileMonitor:
     """FITS文件监控器（使用watchdog事件驱动）"""
 
-    def __init__(self, monitor_directory, enable_recording=True):
+    def __init__(self, monitor_directory, enable_recording=True, config=None):
         self.monitor_directory = monitor_directory
-        self.analyzer = FITSQualityAnalyzer()
+        self.analyzer = FITSQualityAnalyzer(config)
         self.logger = logging.getLogger(self.__class__.__name__)
         self.observer = None
         self.event_handler = None
