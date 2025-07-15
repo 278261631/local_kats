@@ -684,7 +684,8 @@ class FITSAlignmentComparison:
             self.logger.error(f"可视化结果时出错: {str(e)}")
 
     def save_results(self, output_dir, img1, img2_aligned, diff_img, binary_diff, marked_img,
-                    bright_spots, filename_prefix="comparison"):
+                    bright_spots, filename_prefix="comparison", fits_headers=None, fits_paths=None,
+                    original_img1=None, original_img2_aligned=None):
         """
         保存比较结果到文件
 
@@ -697,6 +698,10 @@ class FITSAlignmentComparison:
             marked_img (np.ndarray): 标记后的图像
             bright_spots (list): 新亮点列表
             filename_prefix (str): 文件名前缀
+            fits_headers (tuple): (header1, header2) FITS文件头信息
+            fits_paths (tuple): (path1, path2) 原始FITS文件路径
+            original_img1 (np.ndarray): 原始参考图像数据（用于FITS保存）
+            original_img2_aligned (np.ndarray): 原始对齐后图像数据（用于FITS保存）
         """
         try:
             # 创建输出目录
@@ -710,6 +715,11 @@ class FITSAlignmentComparison:
             cv2.imwrite(os.path.join(output_dir, f"{filename_prefix}_difference_{timestamp}.png"), diff_img)
             cv2.imwrite(os.path.join(output_dir, f"{filename_prefix}_binary_diff_{timestamp}.png"), binary_diff)
             cv2.imwrite(os.path.join(output_dir, f"{filename_prefix}_marked_{timestamp}.png"), marked_img)
+
+            # 保存FITS文件（如果提供了原始数据和头信息）
+            if fits_headers and fits_paths and original_img1 is not None and original_img2_aligned is not None:
+                self.save_fits_files(output_dir, original_img1, original_img2_aligned,
+                                   fits_headers, fits_paths, timestamp, filename_prefix)
 
             # 保存亮点信息到文本文件
             info_file = os.path.join(output_dir, f"{filename_prefix}_bright_spots_{timestamp}.txt")
@@ -732,6 +742,96 @@ class FITSAlignmentComparison:
 
         except Exception as e:
             self.logger.error(f"保存结果时出错: {str(e)}")
+
+    def save_fits_files(self, output_dir, original_img1, original_img2_aligned,
+                       fits_headers, fits_paths, timestamp, filename_prefix):
+        """
+        保存对齐后的FITS文件
+
+        Args:
+            output_dir (str): 输出目录
+            original_img1 (np.ndarray): 原始参考图像数据
+            original_img2_aligned (np.ndarray): 原始对齐后图像数据
+            fits_headers (tuple): (header1, header2) FITS文件头信息
+            fits_paths (tuple): (path1, path2) 原始FITS文件路径
+            timestamp (str): 时间戳
+            filename_prefix (str): 文件名前缀
+        """
+        try:
+            header1, header2 = fits_headers
+            path1, path2 = fits_paths
+
+            # 获取原始文件名（不含扩展名）
+            base_name1 = os.path.splitext(os.path.basename(path1))[0]
+            base_name2 = os.path.splitext(os.path.basename(path2))[0]
+
+            # 保存参考图像FITS文件
+            ref_fits_path = os.path.join(output_dir, f"{filename_prefix}_reference_{base_name1}_{timestamp}.fits")
+            ref_hdu = fits.PrimaryHDU(data=original_img1.astype(np.float32), header=header1)
+
+            # 添加处理信息到头部
+            ref_hdu.header['HISTORY'] = f'Processed by FITS Alignment Comparison System'
+            ref_hdu.header['HISTORY'] = f'Original file: {os.path.basename(path1)}'
+            ref_hdu.header['HISTORY'] = f'Processing time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+            ref_hdu.header['COMMENT'] = 'Reference image for alignment comparison'
+
+            ref_hdu.writeto(ref_fits_path, overwrite=True)
+            self.logger.info(f"已保存参考图像FITS文件: {ref_fits_path}")
+
+            # 保存对齐后图像FITS文件
+            aligned_fits_path = os.path.join(output_dir, f"{filename_prefix}_aligned_{base_name2}_{timestamp}.fits")
+            aligned_hdu = fits.PrimaryHDU(data=original_img2_aligned.astype(np.float32), header=header2)
+
+            # 添加处理信息到头部
+            aligned_hdu.header['HISTORY'] = f'Processed by FITS Alignment Comparison System'
+            aligned_hdu.header['HISTORY'] = f'Original file: {os.path.basename(path2)}'
+            aligned_hdu.header['HISTORY'] = f'Processing time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+            aligned_hdu.header['HISTORY'] = f'Aligned to reference: {os.path.basename(path1)}'
+            aligned_hdu.header['COMMENT'] = 'Image aligned for comparison analysis'
+            aligned_hdu.header['ALGMTHD'] = (self.alignment_method, 'Alignment method used')
+
+            aligned_hdu.writeto(aligned_fits_path, overwrite=True)
+            self.logger.info(f"已保存对齐后图像FITS文件: {aligned_fits_path}")
+
+        except Exception as e:
+            self.logger.error(f"保存FITS文件时出错: {str(e)}")
+
+    def apply_transformation_to_original(self, original_img, transform_matrix, target_shape):
+        """
+        将变换矩阵应用到原始图像
+
+        Args:
+            original_img (np.ndarray): 原始图像数据
+            transform_matrix (np.ndarray): 变换矩阵
+            target_shape (tuple): 目标图像形状
+
+        Returns:
+            np.ndarray: 变换后的图像
+        """
+        try:
+            # 确保图像是float64类型以保持精度
+            if original_img.dtype != np.float64:
+                original_img = original_img.astype(np.float64)
+
+            # 检查变换矩阵的类型
+            if transform_matrix.shape == (3, 3):
+                # 单应性变换
+                height, width = target_shape
+                transformed_img = cv2.warpPerspective(original_img, transform_matrix, (width, height))
+            elif transform_matrix.shape == (2, 3):
+                # 仿射变换
+                height, width = target_shape
+                transformed_img = cv2.warpAffine(original_img, transform_matrix, (width, height))
+            else:
+                self.logger.error(f"不支持的变换矩阵形状: {transform_matrix.shape}")
+                return original_img
+
+            self.logger.info("已将变换应用到原始图像")
+            return transformed_img
+
+        except Exception as e:
+            self.logger.error(f"应用变换到原始图像时出错: {str(e)}")
+            return original_img
 
     def process_fits_comparison(self, fits_path1, fits_path2, output_dir=None, show_visualization=True):
         """
@@ -759,6 +859,10 @@ class FITSAlignmentComparison:
             if not success1 or not success2:
                 self.logger.error("FITS图像加载失败")
                 return None
+
+            # 保存原始图像数据的副本（用于FITS文件输出）
+            original_img1_data = img1_data.copy()
+            original_img2_data = img2_data.copy()
 
             # 2. 图像预处理
             self.logger.info("步骤2: 图像预处理")
@@ -794,6 +898,13 @@ class FITSAlignmentComparison:
                 img1_processed, img2_processed, match_points
             )
 
+            # 4.1 对原始图像应用相同的变换（用于FITS文件保存）
+            original_img2_aligned = None
+            if alignment_success and homography is not None and output_dir:
+                original_img2_aligned = self.apply_transformation_to_original(
+                    original_img2_data, homography, original_img1_data.shape
+                )
+
             # 5. 差异检测
             self.logger.info("步骤5: 差异检测")
             diff_img, binary_diff, bright_spots = self.detect_differences(img1_processed, img2_aligned)
@@ -824,7 +935,11 @@ class FITSAlignmentComparison:
                 self.logger.info("步骤8: 保存结果")
                 self.save_results(
                     output_dir, img1_processed, img2_aligned, diff_img,
-                    binary_diff, marked_img, bright_spots
+                    binary_diff, marked_img, bright_spots,
+                    fits_headers=(header1, header2),
+                    fits_paths=(fits_path1, fits_path2),
+                    original_img1=original_img1_data,
+                    original_img2_aligned=original_img2_aligned
                 )
 
             # 生成结果摘要

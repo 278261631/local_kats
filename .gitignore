@@ -1,2 +1,4 @@
 /status_message/config.json
 /.idea
+/diff_orb/fits_alignment.log
+*.pyc
