@@ -2,3 +2,4 @@
 /.idea
 /diff_orb/fits_alignment.log
 *.pyc
+/diff_orb/*.log
