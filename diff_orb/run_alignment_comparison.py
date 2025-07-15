@@ -122,11 +122,15 @@ def main():
   # 使用完整图像（不使用中央区域优化）
   python run_alignment_comparison.py file1.fits file2.fits --no-central-region
 
+  # 启用图表显示
+  python run_alignment_comparison.py file1.fits file2.fits --show-visualization
+
 默认参数:
   --directory "E:\\fix_data\\align-compare"
   --alignment-method rigid
   --no-central-region (使用完整图像)
   --output high_precision_results
+  不显示图表，仅保存文件（使用 --show-visualization 启用图表显示）
         """
     )
     
@@ -139,7 +143,7 @@ def main():
     # 输出选项
     parser.add_argument('--output', '-o', default='high_precision_results',
                        help='输出目录路径（默认: high_precision_results）')
-    parser.add_argument('--no-visualization', action='store_true', help='不显示可视化结果')
+    parser.add_argument('--show-visualization', action='store_true', help='显示可视化结果（默认不显示，仅保存文件）')
 
     # 处理选项
     parser.add_argument('--no-central-region', action='store_true', default=True,
@@ -157,7 +161,10 @@ def main():
     parser.add_argument('--fast-threshold', type=int, default=20, help='FAST角点检测阈值（默认20）')
     
     args = parser.parse_args()
-    
+
+    # 确定是否显示可视化（默认不显示，除非明确指定 --show-visualization）
+    show_visualization = args.show_visualization
+
     # 确定输入文件
     if args.directory:
         # 从目录中交互式选择
@@ -203,7 +210,7 @@ def main():
     print(f"输出目录: {args.output}")
     print(f"中央区域: {'禁用' if args.no_central_region else f'{args.region_size}x{args.region_size}像素'}")
     print(f"对齐方法: {args.alignment_method}")
-    print(f"可视化: {'禁用' if args.no_visualization else '启用'}")
+    print(f"可视化: {'启用' if show_visualization else '禁用（默认）'}")
     print("=" * 60)
     
     # 创建比较系统
@@ -224,10 +231,10 @@ def main():
     # 执行比较
     try:
         result = comparator.process_fits_comparison(
-            fits1, 
-            fits2, 
+            fits1,
+            fits2,
             output_dir=args.output,
-            show_visualization=not args.no_visualization
+            show_visualization=show_visualization
         )
         
         if result:
