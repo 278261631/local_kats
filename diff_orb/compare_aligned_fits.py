@@ -84,10 +84,10 @@ class AlignedFITSComparator:
     def normalize_image(self, image):
         """
         标准化图像数据到0-1范围
-        
+
         Args:
             image (numpy.ndarray): 输入图像
-            
+
         Returns:
             numpy.ndarray: 标准化后的图像
         """
@@ -95,35 +95,63 @@ class AlignedFITSComparator:
         p1, p99 = np.percentile(image, [1, 99])
         normalized = np.clip((image - p1) / (p99 - p1), 0, 1)
         return normalized
+
+    def create_overlap_mask(self, ref_image, aligned_image, threshold=1e-6):
+        """
+        创建重叠区域掩码，识别两个图像的有效重叠区域
+
+        Args:
+            ref_image (numpy.ndarray): 参考图像
+            aligned_image (numpy.ndarray): 对齐后的图像
+            threshold (float): 判断有效像素的阈值
+
+        Returns:
+            numpy.ndarray: 重叠区域掩码（1表示重叠，0表示非重叠）
+        """
+        # 创建有效像素掩码
+        ref_valid = np.abs(ref_image) > threshold
+        aligned_valid = np.abs(aligned_image) > threshold
+
+        # 重叠区域是两个图像都有有效像素的区域
+        overlap_mask = (ref_valid & aligned_valid).astype(np.uint8)
+
+        self.logger.info(f"重叠区域像素数: {np.sum(overlap_mask)}, "
+                        f"总像素数: {overlap_mask.size}, "
+                        f"重叠比例: {np.sum(overlap_mask)/overlap_mask.size:.2%}")
+
+        return overlap_mask
     
     def detect_differences(self, img1, img2):
         """
         检测两个图像之间的差异
-        
+
         Args:
             img1 (numpy.ndarray): 参考图像
             img2 (numpy.ndarray): 比较图像
-            
+
         Returns:
-            tuple: (差异图像, 二值化差异图像, 新亮点信息)
+            tuple: (差异图像, 二值化差异图像, 新亮点信息, 重叠区域掩码)
         """
+        # 创建重叠区域掩码
+        overlap_mask = self.create_overlap_mask(img1, img2)
+
         # 标准化图像
         norm_img1 = self.normalize_image(img1)
         norm_img2 = self.normalize_image(img2)
-        
+
         # 应用高斯模糊减少噪声
         blurred_img1 = gaussian_filter(norm_img1, sigma=self.diff_params['gaussian_sigma'])
         blurred_img2 = gaussian_filter(norm_img2, sigma=self.diff_params['gaussian_sigma'])
-        
-        # 计算差异
-        diff_image = np.abs(blurred_img2 - blurred_img1)
-        
+
+        # 计算差异（只在重叠区域）
+        diff_image = np.abs(blurred_img2 - blurred_img1) * overlap_mask
+
         # 二值化差异图像
         binary_diff = (diff_image > self.diff_params['diff_threshold']).astype(np.uint8)
-        
+
         # 查找连通区域（新亮点）
         contours, _ = cv2.findContours(binary_diff, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         bright_spots = []
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -133,15 +161,17 @@ class AlignedFITSComparator:
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
-                    bright_spots.append({
-                        'position': (cx, cy),
-                        'area': area,
-                        'contour': contour
-                    })
-        
+                    # 确保亮点在重叠区域内
+                    if overlap_mask[cy, cx] > 0:
+                        bright_spots.append({
+                            'position': (cx, cy),
+                            'area': area,
+                            'contour': contour
+                        })
+
         self.logger.info(f"检测到 {len(bright_spots)} 个新亮点")
-        
-        return diff_image, binary_diff, bright_spots
+
+        return diff_image, binary_diff, bright_spots, overlap_mask
     
     def save_fits_result(self, data, output_path, header=None):
         """
@@ -286,10 +316,15 @@ class AlignedFITSComparator:
 
         # 执行差异检测
         self.logger.info("执行差异检测...")
-        diff_image, binary_diff, bright_spots = self.detect_differences(ref_data, aligned_data)
+        diff_image, binary_diff, bright_spots, overlap_mask = self.detect_differences(ref_data, aligned_data)
 
         # 创建标记图像
         marked_image = self.create_marked_image(aligned_data, bright_spots)
+
+        # 应用重叠掩码到所有输出图像（确保非重叠区域为黑色）
+        self.logger.info("应用重叠掩码，确保非重叠区域为黑色...")
+        ref_data = ref_data * overlap_mask
+        aligned_data = aligned_data * overlap_mask
 
         # 生成输出文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -312,28 +347,37 @@ class AlignedFITSComparator:
         marked_gray = cv2.cvtColor(marked_image, cv2.COLOR_RGB2GRAY)
         self.save_fits_result(marked_gray.astype(np.float32), marked_fits_path)
 
+        # 保存重叠掩码（FITS）
+        overlap_mask_fits_path = os.path.join(output_directory, f"{base_name}_overlap_mask.fits")
+        self.save_fits_result(overlap_mask.astype(np.float32), overlap_mask_fits_path)
+
         # 保存JPG格式结果
         self.logger.info("保存JPG格式结果...")
 
         # 保存参考图像（JPG）
         ref_jpg_path = os.path.join(output_directory, f"{base_name}_reference.jpg")
         self.save_jpg_result(self.normalize_image(ref_data), ref_jpg_path,
-                           "参考图像", 'gray')
+                           "参考图像（非重叠区域已设为黑色）", 'gray')
 
         # 保存对齐图像（JPG）
         aligned_jpg_path = os.path.join(output_directory, f"{base_name}_aligned.jpg")
         self.save_jpg_result(self.normalize_image(aligned_data), aligned_jpg_path,
-                           "对齐图像", 'gray')
+                           "对齐图像（非重叠区域已设为黑色）", 'gray')
 
         # 保存差异图像（JPG）
         diff_jpg_path = os.path.join(output_directory, f"{base_name}_difference.jpg")
         self.save_jpg_result(diff_image, diff_jpg_path,
-                           "差异图像", 'hot')
+                           "差异图像（仅重叠区域）", 'hot')
 
         # 保存二值化差异图像（JPG）
         binary_jpg_path = os.path.join(output_directory, f"{base_name}_binary_diff.jpg")
         self.save_jpg_result(binary_diff, binary_jpg_path,
-                           "二值化差异图像", 'gray')
+                           "二值化差异图像（仅重叠区域）", 'gray')
+
+        # 保存重叠掩码（JPG）
+        overlap_mask_jpg_path = os.path.join(output_directory, f"{base_name}_overlap_mask.jpg")
+        self.save_jpg_result(overlap_mask, overlap_mask_jpg_path,
+                           "重叠区域掩码（白色=重叠，黑色=非重叠）", 'gray')
 
         # 保存标记图像（JPG）
         marked_jpg_path = os.path.join(output_directory, f"{base_name}_marked.jpg")
@@ -375,14 +419,16 @@ class AlignedFITSComparator:
                 'fits': {
                     'difference': diff_fits_path,
                     'binary_diff': binary_fits_path,
-                    'marked': marked_fits_path
+                    'marked': marked_fits_path,
+                    'overlap_mask': overlap_mask_fits_path
                 },
                 'jpg': {
                     'reference': ref_jpg_path,
                     'aligned': aligned_jpg_path,
                     'difference': diff_jpg_path,
                     'binary_diff': binary_jpg_path,
-                    'marked': marked_jpg_path
+                    'marked': marked_jpg_path,
+                    'overlap_mask': overlap_mask_jpg_path
                 },
                 'text': spots_txt_path
             }
