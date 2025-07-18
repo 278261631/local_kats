@@ -149,12 +149,12 @@ class FitsWebDownloaderGUI:
         dir_frame = ttk.Frame(download_frame)
         dir_frame.pack(fill=tk.X, pady=(0, 5))
         
-        ttk.Label(dir_frame, text="下载目录:").pack(side=tk.LEFT)
+        ttk.Label(dir_frame, text="下载根目录:").pack(side=tk.LEFT)
         self.download_dir_var = tk.StringVar()
         self.download_dir_entry = ttk.Entry(dir_frame, textvariable=self.download_dir_var, width=60)
         self.download_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
         
-        ttk.Button(dir_frame, text="浏览", command=self._select_download_dir).pack(side=tk.RIGHT)
+        ttk.Button(dir_frame, text="选择根目录", command=self._select_download_dir).pack(side=tk.RIGHT)
         
         # 下载参数
         params_frame = ttk.Frame(download_frame)
@@ -327,17 +327,18 @@ class FitsWebDownloaderGUI:
             self.file_tree.item(item, text=new_text)
             
     def _select_download_dir(self):
-        """选择下载目录"""
+        """选择下载根目录"""
         # 获取当前目录作为初始目录
         current_dir = self.download_dir_var.get()
         initial_dir = current_dir if current_dir and os.path.exists(current_dir) else os.path.expanduser("~")
 
-        directory = filedialog.askdirectory(title="选择下载目录", initialdir=initial_dir)
+        directory = filedialog.askdirectory(title="选择下载根目录", initialdir=initial_dir)
         if directory:
             self.download_dir_var.set(directory)
             # 保存到配置
             self.config_manager.update_last_selected(download_directory=directory)
-            self._log(f"下载目录已设置: {directory}")
+            self._log(f"下载根目录已设置: {directory}")
+            self._log(f"文件将保存到: {directory}/望远镜名/日期/天区/")
             
     def _get_selected_files(self):
         """获取选中的文件"""
@@ -356,13 +357,26 @@ class FitsWebDownloaderGUI:
             messagebox.showwarning("警告", "请选择要下载的文件")
             return
 
-        download_dir = self.download_dir_var.get().strip()
-        if not download_dir:
-            messagebox.showwarning("警告", "请选择下载目录")
+        base_download_dir = self.download_dir_var.get().strip()
+        if not base_download_dir:
+            messagebox.showwarning("警告", "请选择下载根目录")
             return
 
+        # 获取当前选择的参数来构建子目录
+        selections = self.url_builder.get_current_selections()
+        tel_name = selections.get('telescope_name', 'Unknown')
+        date = selections.get('date', 'Unknown')
+        k_number = selections.get('k_number', 'Unknown')
+
+        # 构建实际下载目录：根目录/tel_name/YYYYMMDD/K0??
+        actual_download_dir = os.path.join(base_download_dir, tel_name, date, k_number)
+
         # 创建下载目录
-        os.makedirs(download_dir, exist_ok=True)
+        os.makedirs(actual_download_dir, exist_ok=True)
+
+        self._log(f"下载根目录: {base_download_dir}")
+        self._log(f"实际下载目录: {actual_download_dir}")
+        self._log(f"目录结构: {tel_name}/{date}/{k_number}")
 
         # 禁用下载按钮
         self.download_button.config(state="disabled")
@@ -380,7 +394,7 @@ class FitsWebDownloaderGUI:
         self.progress_bar.config(maximum=len(selected_files))
 
         # 在新线程中执行下载
-        thread = threading.Thread(target=self._download_thread, args=(selected_files, download_dir))
+        thread = threading.Thread(target=self._download_thread, args=(selected_files, actual_download_dir))
         thread.daemon = True
         thread.start()
 
@@ -449,39 +463,83 @@ class FitsWebDownloaderGUI:
 
     def _select_from_download_dir(self):
         """从下载目录选择FITS文件"""
-        download_dir = self.download_dir_var.get().strip()
-        if not download_dir or not os.path.exists(download_dir):
+        base_download_dir = self.download_dir_var.get().strip()
+        if not base_download_dir or not os.path.exists(base_download_dir):
             # 如果没有设置下载目录，提示用户设置
-            if messagebox.askyesno("设置下载目录", "还没有设置下载目录，是否现在设置？"):
+            if messagebox.askyesno("设置下载根目录", "还没有设置下载根目录，是否现在设置？"):
                 self._select_download_dir()
-                download_dir = self.download_dir_var.get().strip()
-                if not download_dir:
+                base_download_dir = self.download_dir_var.get().strip()
+                if not base_download_dir:
                     return
             else:
                 return
 
-        # 查找FITS文件
-        fits_files = []
-        for ext in ['*.fits', '*.fit', '*.fts']:
-            fits_files.extend(Path(download_dir).glob(ext))
+        # 获取当前选择的参数来构建搜索路径
+        selections = self.url_builder.get_current_selections()
+        tel_name = selections.get('telescope_name', '')
+        date = selections.get('date', '')
+        k_number = selections.get('k_number', '')
 
-        if not fits_files:
-            # 如果下载目录中没有FITS文件，询问是否从其他位置选择
-            if messagebox.askyesno("没有找到文件", "下载目录中没有找到FITS文件，是否从其他位置选择？"):
+        # 构建可能的搜索路径
+        search_paths = []
+
+        # 1. 优先搜索当前选择对应的目录
+        if tel_name and date and k_number:
+            current_path = os.path.join(base_download_dir, tel_name, date, k_number)
+            if os.path.exists(current_path):
+                search_paths.append(("当前选择", current_path))
+
+        # 2. 搜索同一望远镜的其他日期/天区
+        if tel_name:
+            tel_path = os.path.join(base_download_dir, tel_name)
+            if os.path.exists(tel_path):
+                for date_dir in os.listdir(tel_path):
+                    date_path = os.path.join(tel_path, date_dir)
+                    if os.path.isdir(date_path):
+                        for k_dir in os.listdir(date_path):
+                            k_path = os.path.join(date_path, k_dir)
+                            if os.path.isdir(k_path):
+                                search_paths.append((f"{tel_name}/{date_dir}/{k_dir}", k_path))
+
+        # 3. 搜索所有望远镜目录
+        if os.path.exists(base_download_dir):
+            for tel_dir in os.listdir(base_download_dir):
+                tel_path = os.path.join(base_download_dir, tel_dir)
+                if os.path.isdir(tel_path) and tel_dir != tel_name:  # 避免重复
+                    for date_dir in os.listdir(tel_path):
+                        date_path = os.path.join(tel_path, date_dir)
+                        if os.path.isdir(date_path):
+                            for k_dir in os.listdir(date_path):
+                                k_path = os.path.join(date_path, k_dir)
+                                if os.path.isdir(k_path):
+                                    search_paths.append((f"{tel_dir}/{date_dir}/{k_dir}", k_path))
+
+        # 查找FITS文件
+        all_fits_files = []
+        for path_desc, search_path in search_paths:
+            for ext in ['*.fits', '*.fit', '*.fts']:
+                fits_files = list(Path(search_path).glob(ext))
+                for fits_file in fits_files:
+                    all_fits_files.append((path_desc, fits_file))
+
+        if not all_fits_files:
+            # 如果没有找到FITS文件，询问是否从其他位置选择
+            if messagebox.askyesno("没有找到文件",
+                                 f"在下载根目录 {base_download_dir} 中没有找到FITS文件，\n是否从其他位置选择？"):
                 self._select_fits_file()
             return
 
         # 按修改时间排序，最新的在前面
-        fits_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        all_fits_files.sort(key=lambda x: x[1].stat().st_mtime, reverse=True)
 
         # 创建文件选择对话框
-        file_names = [f.name for f in fits_files]
-        selected = self._show_file_selection_dialog(file_names, "选择FITS文件 (按修改时间排序)")
+        file_info = [(f"{path_desc}: {fits_file.name}", str(fits_file)) for path_desc, fits_file in all_fits_files]
+        selected = self._show_fits_file_selection_dialog(file_info, "选择FITS文件 (按修改时间排序)")
 
         if selected:
-            selected_path = os.path.join(download_dir, selected)
-            if self.fits_viewer.load_fits_file(selected_path):
-                self._log(f"已加载FITS文件: {selected}")
+            if self.fits_viewer.load_fits_file(selected):
+                self._log(f"已加载FITS文件: {os.path.basename(selected)}")
+                self._log(f"文件路径: {selected}")
             else:
                 self._log(f"加载FITS文件失败: {selected}")
 
@@ -520,6 +578,78 @@ class FitsWebDownloaderGUI:
 
         # 双击选择
         listbox.bind('<Double-Button-1>', lambda e: on_ok())
+
+        dialog.wait_window()
+        return selected_file[0]
+
+    def _show_fits_file_selection_dialog(self, file_info_list, title="选择FITS文件"):
+        """显示FITS文件选择对话框，支持显示路径信息"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("700x500")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # 文件列表框架
+        list_frame = ttk.Frame(dialog)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 创建Treeview显示文件信息
+        columns = ("file", "path")
+        tree = ttk.Treeview(list_frame, columns=columns, show="tree headings", height=15)
+
+        # 设置列标题
+        tree.heading("#0", text="")
+        tree.heading("file", text="文件信息")
+        tree.heading("path", text="完整路径")
+
+        # 设置列宽
+        tree.column("#0", width=30)
+        tree.column("file", width=350)
+        tree.column("path", width=300)
+
+        # 添加滚动条
+        tree_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=tree_scroll.set)
+
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 填充文件信息
+        for i, (file_desc, file_path) in enumerate(file_info_list):
+            tree.insert("", "end", text=str(i+1), values=(file_desc, file_path))
+
+        # 按钮框架
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        selected_file = [None]
+
+        def on_ok():
+            selection = tree.selection()
+            if selection:
+                item = selection[0]
+                values = tree.item(item, "values")
+                selected_file[0] = values[1]  # 返回完整路径
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        def on_double_click(event):
+            on_ok()
+
+        ttk.Button(button_frame, text="确定", command=on_ok).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(button_frame, text="取消", command=on_cancel).pack(side=tk.RIGHT)
+
+        # 绑定双击事件
+        tree.bind('<Double-Button-1>', on_double_click)
+
+        # 居中显示
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
 
         dialog.wait_window()
         return selected_file[0]
