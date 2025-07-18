@@ -19,6 +19,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from web_scanner import WebFitsScanner, DirectoryScanner
 from fits_viewer import FitsImageViewer
 from data_collect.data_02_download import FitsDownloader
+from config_manager import ConfigManager
+from url_builder import URLBuilderFrame
 
 
 class FitsWebDownloaderGUI:
@@ -28,24 +30,27 @@ class FitsWebDownloaderGUI:
         self.root = tk.Tk()
         self.root.title("FITS文件网页下载器")
         self.root.geometry("1200x800")
-        
+
         # 设置日志
         self._setup_logging()
-        
+
+        # 初始化配置管理器
+        self.config_manager = ConfigManager()
+
         # 初始化组件
         self.scanner = WebFitsScanner()
         self.directory_scanner = DirectoryScanner()
         self.downloader = None
-        
+
         # 数据存储
         self.fits_files_list = []  # [(filename, url, size)]
         self.download_directory = ""
-        
+
         # 创建界面
         self._create_widgets()
-        
-        # 设置默认URL
-        self.url_entry.insert(0, "https://download.china-vo.org/psp/KATS/GY5-DATA/20250701/K096/")
+
+        # 加载配置
+        self._load_config()
         
     def _setup_logging(self):
         """设置日志"""
@@ -84,16 +89,19 @@ class FitsWebDownloaderGUI:
         
     def _create_scan_widgets(self):
         """创建扫描和下载界面"""
-        # URL输入区域
-        url_frame = ttk.LabelFrame(self.scan_frame, text="网页URL", padding=10)
-        url_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(url_frame, text="URL:").pack(side=tk.LEFT)
-        self.url_entry = ttk.Entry(url_frame, width=80)
-        self.url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
-        
-        self.scan_button = ttk.Button(url_frame, text="扫描", command=self._start_scan)
-        self.scan_button.pack(side=tk.RIGHT)
+        # URL构建器区域
+        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change)
+
+        # 扫描控制区域
+        scan_control_frame = ttk.Frame(self.scan_frame)
+        scan_control_frame.pack(fill=tk.X, pady=(0, 10))
+
+        self.scan_button = ttk.Button(scan_control_frame, text="扫描FITS文件", command=self._start_scan)
+        self.scan_button.pack(side=tk.LEFT)
+
+        # 状态标签
+        self.scan_status_label = ttk.Label(scan_control_frame, text="就绪")
+        self.scan_status_label.pack(side=tk.LEFT, padx=(20, 0))
         
         # 文件列表区域
         list_frame = ttk.LabelFrame(self.scan_frame, text="FITS文件列表", padding=10)
@@ -151,15 +159,15 @@ class FitsWebDownloaderGUI:
         # 下载参数
         params_frame = ttk.Frame(download_frame)
         params_frame.pack(fill=tk.X, pady=(0, 5))
-        
+
         ttk.Label(params_frame, text="并发数:").pack(side=tk.LEFT)
-        self.max_workers_var = tk.IntVar(value=4)
-        ttk.Spinbox(params_frame, from_=1, to=10, textvariable=self.max_workers_var, width=5).pack(side=tk.LEFT, padx=(5, 15))
-        
+        self.max_workers_var = tk.IntVar(value=1)
+        ttk.Spinbox(params_frame, from_=1, to=3, textvariable=self.max_workers_var, width=5).pack(side=tk.LEFT, padx=(5, 15))
+
         ttk.Label(params_frame, text="重试次数:").pack(side=tk.LEFT)
         self.retry_times_var = tk.IntVar(value=3)
         ttk.Spinbox(params_frame, from_=1, to=10, textvariable=self.retry_times_var, width=5).pack(side=tk.LEFT, padx=(5, 15))
-        
+
         ttk.Label(params_frame, text="超时(秒):").pack(side=tk.LEFT)
         self.timeout_var = tk.IntVar(value=30)
         ttk.Spinbox(params_frame, from_=10, to=120, textvariable=self.timeout_var, width=5).pack(side=tk.LEFT, padx=(5, 0))
@@ -183,10 +191,10 @@ class FitsWebDownloaderGUI:
         # 文件选择区域
         file_frame = ttk.LabelFrame(self.viewer_frame, text="文件选择", padding=10)
         file_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Button(file_frame, text="选择FITS文件", command=self._select_fits_file).pack(side=tk.LEFT)
-        ttk.Button(file_frame, text="从下载目录选择", command=self._select_from_download_dir).pack(side=tk.LEFT, padx=(10, 0))
-        
+
+        ttk.Button(file_frame, text="从下载目录选择", command=self._select_from_download_dir).pack(side=tk.LEFT)
+        ttk.Button(file_frame, text="选择其他FITS文件", command=self._select_fits_file).pack(side=tk.LEFT, padx=(10, 0))
+
         # 创建FITS查看器
         self.fits_viewer = FitsImageViewer(self.viewer_frame)
         
@@ -202,22 +210,56 @@ class FitsWebDownloaderGUI:
         
         ttk.Button(log_control_frame, text="清除日志", command=self._clear_log).pack(side=tk.LEFT)
         ttk.Button(log_control_frame, text="保存日志", command=self._save_log).pack(side=tk.LEFT, padx=(10, 0))
+
+    def _load_config(self):
+        """加载配置"""
+        try:
+            # 加载下载设置
+            download_settings = self.config_manager.get_download_settings()
+            self.max_workers_var.set(download_settings.get("max_workers", 1))
+            self.retry_times_var.set(download_settings.get("retry_times", 3))
+            self.timeout_var.set(download_settings.get("timeout", 30))
+
+            # 加载下载目录
+            last_selected = self.config_manager.get_last_selected()
+            download_dir = last_selected.get("download_directory", "")
+            if download_dir:
+                self.download_dir_var.set(download_dir)
+
+            self._log("配置加载完成")
+
+        except Exception as e:
+            self._log(f"加载配置失败: {str(e)}")
+
+    def _on_url_change(self, url):
+        """URL变化事件处理"""
+        self._log(f"URL已更新: {url}")
+        # 可以在这里添加其他URL变化时的处理逻辑
         
     def _start_scan(self):
         """开始扫描"""
-        url = self.url_entry.get().strip()
-        if not url:
-            messagebox.showwarning("警告", "请输入要扫描的URL")
+        # 获取当前构建的URL
+        url = self.url_builder.get_current_url()
+
+        # 验证URL
+        if not url or url.startswith("请选择") or url.startswith("日期格式"):
+            messagebox.showwarning("警告", "请先构建有效的URL")
             return
-        
+
+        # 验证选择
+        valid, error_msg = self.url_builder.validate_current_selections()
+        if not valid:
+            messagebox.showerror("验证失败", error_msg)
+            return
+
         # 禁用扫描按钮
         self.scan_button.config(state="disabled")
-        self.status_label.config(text="正在扫描...")
-        
+        self.scan_status_label.config(text="正在扫描...")
+
         # 清空文件列表
         for item in self.file_tree.get_children():
             self.file_tree.delete(item)
-        
+
         # 在新线程中执行扫描
         thread = threading.Thread(target=self._scan_thread, args=(url,))
         thread.daemon = True
@@ -248,7 +290,7 @@ class FitsWebDownloaderGUI:
         finally:
             # 重新启用扫描按钮
             self.root.after(0, lambda: self.scan_button.config(state="normal"))
-            self.root.after(0, lambda: self.status_label.config(text="就绪"))
+            self.root.after(0, lambda: self.scan_status_label.config(text="就绪"))
             
     def _update_file_list(self):
         """更新文件列表显示"""
@@ -286,9 +328,16 @@ class FitsWebDownloaderGUI:
             
     def _select_download_dir(self):
         """选择下载目录"""
-        directory = filedialog.askdirectory(title="选择下载目录")
+        # 获取当前目录作为初始目录
+        current_dir = self.download_dir_var.get()
+        initial_dir = current_dir if current_dir and os.path.exists(current_dir) else os.path.expanduser("~")
+
+        directory = filedialog.askdirectory(title="选择下载目录", initialdir=initial_dir)
         if directory:
             self.download_dir_var.set(directory)
+            # 保存到配置
+            self.config_manager.update_last_selected(download_directory=directory)
+            self._log(f"下载目录已设置: {directory}")
             
     def _get_selected_files(self):
         """获取选中的文件"""
@@ -318,6 +367,13 @@ class FitsWebDownloaderGUI:
         # 禁用下载按钮
         self.download_button.config(state="disabled")
         self.status_label.config(text="正在下载...")
+
+        # 保存下载设置到配置
+        self.config_manager.update_download_settings(
+            max_workers=self.max_workers_var.get(),
+            retry_times=self.retry_times_var.get(),
+            timeout=self.timeout_var.get()
+        )
 
         # 重置进度条
         self.progress_var.set(0)
@@ -395,8 +451,14 @@ class FitsWebDownloaderGUI:
         """从下载目录选择FITS文件"""
         download_dir = self.download_dir_var.get().strip()
         if not download_dir or not os.path.exists(download_dir):
-            messagebox.showwarning("警告", "请先设置有效的下载目录")
-            return
+            # 如果没有设置下载目录，提示用户设置
+            if messagebox.askyesno("设置下载目录", "还没有设置下载目录，是否现在设置？"):
+                self._select_download_dir()
+                download_dir = self.download_dir_var.get().strip()
+                if not download_dir:
+                    return
+            else:
+                return
 
         # 查找FITS文件
         fits_files = []
@@ -404,22 +466,30 @@ class FitsWebDownloaderGUI:
             fits_files.extend(Path(download_dir).glob(ext))
 
         if not fits_files:
-            messagebox.showinfo("信息", "下载目录中没有找到FITS文件")
+            # 如果下载目录中没有FITS文件，询问是否从其他位置选择
+            if messagebox.askyesno("没有找到文件", "下载目录中没有找到FITS文件，是否从其他位置选择？"):
+                self._select_fits_file()
             return
+
+        # 按修改时间排序，最新的在前面
+        fits_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
 
         # 创建文件选择对话框
         file_names = [f.name for f in fits_files]
-        selected = self._show_file_selection_dialog(file_names)
+        selected = self._show_file_selection_dialog(file_names, "选择FITS文件 (按修改时间排序)")
 
         if selected:
             selected_path = os.path.join(download_dir, selected)
-            self.fits_viewer.load_fits_file(selected_path)
+            if self.fits_viewer.load_fits_file(selected_path):
+                self._log(f"已加载FITS文件: {selected}")
+            else:
+                self._log(f"加载FITS文件失败: {selected}")
 
-    def _show_file_selection_dialog(self, file_names):
+    def _show_file_selection_dialog(self, file_names, title="选择FITS文件"):
         """显示文件选择对话框"""
         dialog = tk.Toplevel(self.root)
-        dialog.title("选择FITS文件")
-        dialog.geometry("400x300")
+        dialog.title(title)
+        dialog.geometry("500x400")
         dialog.transient(self.root)
         dialog.grab_set()
 
@@ -492,7 +562,31 @@ class FitsWebDownloaderGUI:
 
     def run(self):
         """运行GUI应用程序"""
+        # 绑定关闭事件
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
         self.root.mainloop()
+
+    def _on_closing(self):
+        """应用程序关闭事件"""
+        try:
+            # 保存当前配置
+            self.config_manager.update_download_settings(
+                max_workers=self.max_workers_var.get(),
+                retry_times=self.retry_times_var.get(),
+                timeout=self.timeout_var.get()
+            )
+
+            # 保存下载目录
+            download_dir = self.download_dir_var.get().strip()
+            if download_dir:
+                self.config_manager.update_last_selected(download_directory=download_dir)
+
+            self._log("配置已保存")
+
+        except Exception as e:
+            self._log(f"保存配置失败: {str(e)}")
+        finally:
+            self.root.destroy()
 
 
 def main():

@@ -35,9 +35,15 @@ def test_imports():
         # 测试本地模块
         from web_scanner import WebFitsScanner, DirectoryScanner
         print("✓ web_scanner")
-        
+
         from fits_viewer import FitsImageViewer
         print("✓ fits_viewer")
+
+        from config_manager import ConfigManager
+        print("✓ config_manager")
+
+        from url_builder import URLBuilderFrame
+        print("✓ url_builder")
         
         # 测试数据收集模块
         sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -96,26 +102,92 @@ def test_fits_viewer():
         print(f"✗ FITS查看器测试失败: {e}")
         return False
 
+def test_config_manager():
+    """测试配置管理器"""
+    print("\n测试配置管理器...")
+
+    try:
+        from config_manager import ConfigManager
+
+        config = ConfigManager("test_config.json")
+        print("✓ ConfigManager 创建成功")
+
+        # 测试基本功能
+        tel_names = config.get_telescope_names()
+        print(f"✓ 望远镜列表: {len(tel_names)} 个")
+
+        k_numbers = config.get_k_numbers()
+        print(f"✓ K序号列表: {len(k_numbers)} 个")
+
+        # 测试URL构建
+        url = config.build_url("GY5", "20250701", "K096")
+        print(f"✓ URL构建测试: {url}")
+
+        # 清理测试文件
+        import os
+        if os.path.exists("test_config.json"):
+            os.remove("test_config.json")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ 配置管理器测试失败: {e}")
+        return False
+
+def test_url_builder():
+    """测试URL构建器"""
+    print("\n测试URL构建器...")
+
+    try:
+        from config_manager import ConfigManager
+        from url_builder import URLBuilderFrame
+
+        # 创建临时窗口
+        root = tk.Tk()
+        root.withdraw()
+
+        config = ConfigManager("test_config.json")
+        frame = tk.Frame(root)
+        url_builder = URLBuilderFrame(frame, config)
+        print("✓ URLBuilderFrame 创建成功")
+
+        # 测试URL获取
+        url = url_builder.get_current_url()
+        print(f"✓ 当前URL: {url}")
+
+        root.destroy()
+
+        # 清理测试文件
+        import os
+        if os.path.exists("test_config.json"):
+            os.remove("test_config.json")
+
+        return True
+
+    except Exception as e:
+        print(f"✗ URL构建器测试失败: {e}")
+        return False
+
 def test_gui_creation():
     """测试GUI创建"""
     print("\n测试GUI创建...")
-    
+
     try:
         from fits_web_downloader import FitsWebDownloaderGUI
-        
+
         # 创建GUI但不显示
         root = tk.Tk()
         root.withdraw()
-        
+
         # 模拟GUI创建过程
         app = FitsWebDownloaderGUI()
         print("✓ FitsWebDownloaderGUI 创建成功")
-        
+
         # 立即销毁以避免显示
         app.root.destroy()
-        
+
         return True
-        
+
     except Exception as e:
         print(f"✗ GUI创建测试失败: {e}")
         return False
@@ -130,6 +202,8 @@ def main():
         ("导入测试", test_imports),
         ("网页扫描器测试", test_web_scanner),
         ("FITS查看器测试", test_fits_viewer),
+        ("配置管理器测试", test_config_manager),
+        ("URL构建器测试", test_url_builder),
         ("GUI创建测试", test_gui_creation)
     ]
     
