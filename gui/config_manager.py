@@ -26,7 +26,8 @@ class ConfigManager:
                 "telescope_name": "GY5",
                 "date": datetime.now().strftime("%Y%m%d"),
                 "k_number": "K096",
-                "download_directory": ""
+                "download_directory": "",
+                "template_directory": ""
             },
             "download_settings": {
                 "max_workers": 1,

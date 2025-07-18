@@ -148,13 +148,24 @@ class FitsWebDownloaderGUI:
         # 下载目录选择
         dir_frame = ttk.Frame(download_frame)
         dir_frame.pack(fill=tk.X, pady=(0, 5))
-        
+
         ttk.Label(dir_frame, text="下载根目录:").pack(side=tk.LEFT)
         self.download_dir_var = tk.StringVar()
-        self.download_dir_entry = ttk.Entry(dir_frame, textvariable=self.download_dir_var, width=60)
+        self.download_dir_entry = ttk.Entry(dir_frame, textvariable=self.download_dir_var, width=50)
         self.download_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
-        
+
         ttk.Button(dir_frame, text="选择根目录", command=self._select_download_dir).pack(side=tk.RIGHT)
+
+        # 模板文件目录选择
+        template_frame = ttk.Frame(download_frame)
+        template_frame.pack(fill=tk.X, pady=(5, 5))
+
+        ttk.Label(template_frame, text="模板文件目录:").pack(side=tk.LEFT)
+        self.template_dir_var = tk.StringVar()
+        self.template_dir_entry = ttk.Entry(template_frame, textvariable=self.template_dir_var, width=50)
+        self.template_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+
+        ttk.Button(template_frame, text="选择模板目录", command=self._select_template_dir).pack(side=tk.RIGHT)
         
         # 下载参数
         params_frame = ttk.Frame(download_frame)
@@ -199,6 +210,7 @@ class FitsWebDownloaderGUI:
         self.fits_viewer = FitsImageViewer(
             self.viewer_frame,
             get_download_dir_callback=self._get_download_dir,
+            get_template_dir_callback=self._get_template_dir,
             get_url_selections_callback=self._get_url_selections
         )
         
@@ -224,11 +236,15 @@ class FitsWebDownloaderGUI:
             self.retry_times_var.set(download_settings.get("retry_times", 3))
             self.timeout_var.set(download_settings.get("timeout", 30))
 
-            # 加载下载目录
+            # 加载下载目录和模板目录
             last_selected = self.config_manager.get_last_selected()
             download_dir = last_selected.get("download_directory", "")
             if download_dir:
                 self.download_dir_var.set(download_dir)
+
+            template_dir = last_selected.get("template_directory", "")
+            if template_dir:
+                self.template_dir_var.set(template_dir)
 
             self._log("配置加载完成")
 
@@ -343,6 +359,22 @@ class FitsWebDownloaderGUI:
             self.config_manager.update_last_selected(download_directory=directory)
             self._log(f"下载根目录已设置: {directory}")
             self._log(f"文件将保存到: {directory}/望远镜名/日期/天区/")
+
+    def _select_template_dir(self):
+        """选择模板文件目录"""
+        # 获取当前目录作为初始目录
+        current_dir = self.template_dir_var.get()
+        initial_dir = current_dir if current_dir and os.path.exists(current_dir) else os.path.expanduser("~")
+
+        directory = filedialog.askdirectory(title="选择模板文件目录", initialdir=initial_dir)
+        if directory:
+            self.template_dir_var.set(directory)
+            # 保存到配置
+            self.config_manager.update_last_selected(template_directory=directory)
+            self._log(f"模板文件目录已设置: {directory}")
+            # 刷新FITS查看器的目录树
+            if hasattr(self, 'fits_viewer'):
+                self.fits_viewer._refresh_directory_tree()
             
     def _get_selected_files(self):
         """获取选中的文件"""
@@ -704,6 +736,10 @@ class FitsWebDownloaderGUI:
         """获取下载根目录的回调函数"""
         return self.download_dir_var.get().strip()
 
+    def _get_template_dir(self):
+        """获取模板文件目录的回调函数"""
+        return self.template_dir_var.get().strip()
+
     def _get_url_selections(self):
         """获取URL选择参数的回调函数"""
         return self.url_builder.get_current_selections()
@@ -718,10 +754,16 @@ class FitsWebDownloaderGUI:
                 timeout=self.timeout_var.get()
             )
 
-            # 保存下载目录
+            # 保存下载目录和模板目录
             download_dir = self.download_dir_var.get().strip()
-            if download_dir:
-                self.config_manager.update_last_selected(download_directory=download_dir)
+            template_dir = self.template_dir_var.get().strip()
+            if download_dir or template_dir:
+                update_data = {}
+                if download_dir:
+                    update_data['download_directory'] = download_dir
+                if template_dir:
+                    update_data['template_directory'] = template_dir
+                self.config_manager.update_last_selected(**update_data)
 
             self._log("配置已保存")
 

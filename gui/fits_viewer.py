@@ -24,14 +24,17 @@ class FitsImageViewer:
     """FITS图像查看器"""
 
     def __init__(self, parent_frame, get_download_dir_callback: Optional[Callable] = None,
+                 get_template_dir_callback: Optional[Callable] = None,
                  get_url_selections_callback: Optional[Callable] = None):
         self.parent_frame = parent_frame
         self.current_fits_data = None
         self.current_header = None
         self.current_file_path = None
+        self.selected_file_path = None  # 当前选中但未显示的文件
 
         # 回调函数
         self.get_download_dir_callback = get_download_dir_callback
+        self.get_template_dir_callback = get_template_dir_callback
         self.get_url_selections_callback = get_url_selections_callback
 
         # 设置日志
@@ -51,13 +54,18 @@ class FitsImageViewer:
         toolbar_frame.pack(fill=tk.X, pady=(0, 5))
 
         # 文件信息标签
-        self.file_info_label = ttk.Label(toolbar_frame, text="未加载文件")
+        self.file_info_label = ttk.Label(toolbar_frame, text="未选择文件")
         self.file_info_label.pack(side=tk.LEFT)
+
+        # 显示图像按钮
+        self.display_button = ttk.Button(toolbar_frame, text="显示图像",
+                                       command=self._display_selected_image, state="disabled")
+        self.display_button.pack(side=tk.LEFT, padx=(10, 0))
 
         # 打开目录按钮
         self.open_dir_button = ttk.Button(toolbar_frame, text="打开下载目录",
                                         command=self._open_download_directory)
-        self.open_dir_button.pack(side=tk.LEFT, padx=(10, 0))
+        self.open_dir_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # 图像统计信息标签
         self.stats_label = ttk.Label(toolbar_frame, text="")
@@ -156,24 +164,37 @@ class FitsImageViewer:
             for item in self.directory_tree.get_children():
                 self.directory_tree.delete(item)
 
-            # 获取下载根目录
-            if not self.get_download_dir_callback:
-                self.directory_tree.insert("", "end", text="未设置下载目录", tags=("no_dir",))
-                return
+            # 添加下载目录
+            download_dir = None
+            if self.get_download_dir_callback:
+                download_dir = self.get_download_dir_callback()
+                if download_dir and os.path.exists(download_dir):
+                    download_node = self.directory_tree.insert("", "end", text="📁 下载目录",
+                                                             values=(download_dir,), tags=("root_dir",))
+                    self._build_directory_tree(download_dir, download_node)
+                else:
+                    self.directory_tree.insert("", "end", text="❌ 下载目录未设置或不存在", tags=("no_dir",))
 
-            base_dir = self.get_download_dir_callback()
-            if not base_dir or not os.path.exists(base_dir):
-                self.directory_tree.insert("", "end", text="下载目录不存在", tags=("no_dir",))
-                return
+            # 添加模板目录
+            template_dir = None
+            if self.get_template_dir_callback:
+                template_dir = self.get_template_dir_callback()
+                if template_dir and os.path.exists(template_dir):
+                    template_node = self.directory_tree.insert("", "end", text="📋 模板目录",
+                                                             values=(template_dir,), tags=("root_dir",))
+                    self._build_template_directory_tree(template_dir, template_node)
+                else:
+                    self.directory_tree.insert("", "end", text="❌ 模板目录未设置或不存在", tags=("no_dir",))
 
-            # 构建目录树
-            self._build_directory_tree(base_dir)
+            # 如果都没有设置
+            if not download_dir and not template_dir:
+                self.directory_tree.insert("", "end", text="❌ 请设置下载目录或模板目录", tags=("no_dir",))
 
         except Exception as e:
             self.logger.error(f"刷新目录树失败: {str(e)}")
             self.directory_tree.insert("", "end", text=f"错误: {str(e)}", tags=("error",))
 
-    def _build_directory_tree(self, base_dir):
+    def _build_directory_tree(self, base_dir, parent_node=""):
         """构建目录树结构"""
         try:
             # 遍历望远镜目录
@@ -183,7 +204,7 @@ class FitsImageViewer:
                     continue
 
                 # 添加望远镜节点
-                tel_node = self.directory_tree.insert("", "end", text=f"📡 {tel_name}",
+                tel_node = self.directory_tree.insert(parent_node, "end", text=f"📡 {tel_name}",
                                                     values=(tel_path,), tags=("telescope",))
 
                 # 遍历日期目录
@@ -228,6 +249,54 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"构建目录树失败: {str(e)}")
+
+    def _build_template_directory_tree(self, template_dir, parent_node):
+        """构建模板目录树结构"""
+        try:
+            # 直接遍历模板目录中的所有文件和子目录
+            for item_name in sorted(os.listdir(template_dir)):
+                item_path = os.path.join(template_dir, item_name)
+
+                if os.path.isdir(item_path):
+                    # 子目录
+                    dir_node = self.directory_tree.insert(parent_node, "end", text=f"📁 {item_name}",
+                                                        values=(item_path,), tags=("template_dir",))
+                    # 递归添加子目录内容
+                    self._build_template_subdirectory(item_path, dir_node)
+                elif item_name.lower().endswith(('.fits', '.fit', '.fts')):
+                    # FITS文件
+                    file_size = os.path.getsize(item_path)
+                    size_str = self._format_file_size(file_size)
+                    file_text = f"📄 {item_name} ({size_str})"
+                    self.directory_tree.insert(parent_node, "end", text=file_text,
+                                             values=(item_path,), tags=("fits_file",))
+
+        except Exception as e:
+            self.logger.error(f"构建模板目录树失败: {str(e)}")
+            self.directory_tree.insert(parent_node, "end", text=f"❌ 错误: {str(e)}", tags=("error",))
+
+    def _build_template_subdirectory(self, directory, parent_node):
+        """递归构建模板子目录"""
+        try:
+            for item_name in sorted(os.listdir(directory)):
+                item_path = os.path.join(directory, item_name)
+
+                if os.path.isdir(item_path):
+                    # 子目录
+                    dir_node = self.directory_tree.insert(parent_node, "end", text=f"📁 {item_name}",
+                                                        values=(item_path,), tags=("template_dir",))
+                    # 递归添加
+                    self._build_template_subdirectory(item_path, dir_node)
+                elif item_name.lower().endswith(('.fits', '.fit', '.fts')):
+                    # FITS文件
+                    file_size = os.path.getsize(item_path)
+                    size_str = self._format_file_size(file_size)
+                    file_text = f"📄 {item_name} ({size_str})"
+                    self.directory_tree.insert(parent_node, "end", text=file_text,
+                                             values=(item_path,), tags=("fits_file",))
+
+        except Exception as e:
+            self.logger.error(f"构建模板子目录失败: {str(e)}")
 
     def _add_fits_files_to_tree(self, parent_node, directory):
         """添加FITS文件到树节点"""
@@ -422,6 +491,9 @@ class FitsImageViewer:
         """目录树选择事件"""
         selection = self.directory_tree.selection()
         if not selection:
+            self.selected_file_path = None
+            self.display_button.config(state="disabled")
+            self.file_info_label.config(text="未选择文件")
             return
 
         item = selection[0]
@@ -431,7 +503,16 @@ class FitsImageViewer:
         if values and "fits_file" in tags:
             # 选中的是FITS文件
             file_path = values[0]
-            self.load_fits_file(file_path)
+            self.selected_file_path = file_path
+            self.display_button.config(state="normal")
+            filename = os.path.basename(file_path)
+            self.file_info_label.config(text=f"已选择: {filename}")
+            self.logger.info(f"已选择FITS文件: {filename}")
+        else:
+            # 选中的不是FITS文件
+            self.selected_file_path = None
+            self.display_button.config(state="disabled")
+            self.file_info_label.config(text="未选择FITS文件")
 
     def _on_tree_double_click(self, event):
         """目录树双击事件"""
@@ -443,10 +524,36 @@ class FitsImageViewer:
         values = self.directory_tree.item(item, "values")
         tags = self.directory_tree.item(item, "tags")
 
-        if values and any(tag in tags for tag in ["telescope", "date", "region"]):
+        if values and any(tag in tags for tag in ["telescope", "date", "region", "template_dir", "root_dir"]):
             # 双击目录节点，打开文件管理器
             directory = values[0]
             self._open_directory_in_explorer(directory)
+
+    def _display_selected_image(self):
+        """显示选中的图像"""
+        if not self.selected_file_path:
+            messagebox.showwarning("警告", "请先选择一个FITS文件")
+            return
+
+        try:
+            self.display_button.config(state="disabled", text="加载中...")
+            self.parent_frame.update()  # 更新界面显示
+
+            # 加载FITS文件
+            success = self.load_fits_file(self.selected_file_path)
+
+            if success:
+                filename = os.path.basename(self.selected_file_path)
+                self.file_info_label.config(text=f"已显示: {filename}")
+                self.logger.info(f"已显示FITS文件: {filename}")
+            else:
+                self.file_info_label.config(text="加载失败")
+
+        except Exception as e:
+            self.logger.error(f"显示图像失败: {str(e)}")
+            messagebox.showerror("错误", f"显示图像失败: {str(e)}")
+        finally:
+            self.display_button.config(state="normal", text="显示图像")
 
     def _expand_all(self):
         """展开所有节点"""
@@ -527,12 +634,14 @@ class FitsImageViewer:
         self.current_fits_data = None
         self.current_header = None
         self.current_file_path = None
+        self.selected_file_path = None
 
         self.figure.clear()
         self.canvas.draw()
 
-        self.file_info_label.config(text="未加载文件")
+        self.file_info_label.config(text="未选择文件")
         self.stats_label.config(text="")
+        self.display_button.config(state="disabled")
     
     def get_header_info(self) -> Optional[str]:
         """获取FITS头信息"""
