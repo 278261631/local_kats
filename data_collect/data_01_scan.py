@@ -50,18 +50,18 @@ def calc_days_list(yyyymmdd_str, day_count_param):
 
 def wget_scan(item_yyyy, item_ymd, base_data_path):
     file_url_list_all_days = []
-    # url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY1-DATA')
-    # file_url_list_all_days.extend(url_list_by_day)
-    # url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY2-DATA')
-    # file_url_list_all_days.extend(url_list_by_day)
-    # url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY3-DATA')
-    # file_url_list_all_days.extend(url_list_by_day)
-    # url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY4-DATA')
-    # file_url_list_all_days.extend(url_list_by_day)
+    url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY1-DATA', file_limit=3)
+    file_url_list_all_days.extend(url_list_by_day)
+    url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY2-DATA', file_limit=3)
+    file_url_list_all_days.extend(url_list_by_day)
+    url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY3-DATA', file_limit=3)
+    file_url_list_all_days.extend(url_list_by_day)
+    url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY4-DATA', file_limit=3)
+    file_url_list_all_days.extend(url_list_by_day)
     url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY5-DATA', file_limit=3)
     file_url_list_all_days.extend(url_list_by_day)
-    # url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY6-DATA')
-    # file_url_list_all_days.extend(url_list_by_day)
+    url_list_by_day = scan_by_day_path(item_yyyy, item_ymd, recent_data, sys_name_root='GY6-DATA', file_limit=3)
+    file_url_list_all_days.extend(url_list_by_day)
 
     date_time_pattern = re.compile(r"UTC(\d{8})_(\d{6})_")
     gy_pattern = re.compile(r"GY(\d)")
