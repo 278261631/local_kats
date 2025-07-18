@@ -195,8 +195,12 @@ class FitsWebDownloaderGUI:
         ttk.Button(file_frame, text="从下载目录选择", command=self._select_from_download_dir).pack(side=tk.LEFT)
         ttk.Button(file_frame, text="选择其他FITS文件", command=self._select_fits_file).pack(side=tk.LEFT, padx=(10, 0))
 
-        # 创建FITS查看器
-        self.fits_viewer = FitsImageViewer(self.viewer_frame)
+        # 创建FITS查看器，传递回调函数
+        self.fits_viewer = FitsImageViewer(
+            self.viewer_frame,
+            get_download_dir_callback=self._get_download_dir,
+            get_url_selections_callback=self._get_url_selections
+        )
         
     def _create_log_widgets(self):
         """创建日志界面"""
@@ -695,6 +699,14 @@ class FitsWebDownloaderGUI:
         # 绑定关闭事件
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
         self.root.mainloop()
+
+    def _get_download_dir(self):
+        """获取下载根目录的回调函数"""
+        return self.download_dir_var.get().strip()
+
+    def _get_url_selections(self):
+        """获取URL选择参数的回调函数"""
+        return self.url_builder.get_current_selections()
 
     def _on_closing(self):
         """应用程序关闭事件"""
