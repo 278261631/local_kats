@@ -3,3 +3,4 @@
 /diff_orb/fits_alignment.log
 *.pyc
 /diff_orb/*.log
+/gui/gui_config.json
