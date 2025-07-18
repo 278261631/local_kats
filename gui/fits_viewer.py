@@ -18,6 +18,7 @@ from astropy.stats import sigma_clipped_stats
 import logging
 from pathlib import Path
 from typing import Optional, Tuple, Callable
+from diff_orb_integration import DiffOrbIntegration
 
 
 class FitsImageViewer:
@@ -40,6 +41,9 @@ class FitsImageViewer:
         # 设置日志
         self.logger = logging.getLogger(__name__)
 
+        # 初始化diff_orb集成
+        self.diff_orb = DiffOrbIntegration()
+
         # 创建界面
         self._create_widgets()
         
@@ -61,6 +65,11 @@ class FitsImageViewer:
         self.display_button = ttk.Button(toolbar_frame, text="显示图像",
                                        command=self._display_selected_image, state="disabled")
         self.display_button.pack(side=tk.LEFT, padx=(10, 0))
+
+        # diff操作按钮
+        self.diff_button = ttk.Button(toolbar_frame, text="执行Diff",
+                                    command=self._execute_diff, state="disabled")
+        self.diff_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # 打开目录按钮
         self.open_dir_button = ttk.Button(toolbar_frame, text="打开下载目录",
@@ -493,6 +502,7 @@ class FitsImageViewer:
         if not selection:
             self.selected_file_path = None
             self.display_button.config(state="disabled")
+            self.diff_button.config(state="disabled")
             self.file_info_label.config(text="未选择文件")
             return
 
@@ -504,14 +514,46 @@ class FitsImageViewer:
             # 选中的是FITS文件
             file_path = values[0]
             self.selected_file_path = file_path
-            self.display_button.config(state="normal")
             filename = os.path.basename(file_path)
-            self.file_info_label.config(text=f"已选择: {filename}")
+
+            # 启用显示按钮
+            self.display_button.config(state="normal")
+
+            # 检查是否是下载目录中的文件（只有下载目录的文件才能执行diff）
+            is_download_file = self._is_from_download_directory(file_path)
+            can_diff = False
+
+            if is_download_file and self.get_template_dir_callback:
+                template_dir = self.get_template_dir_callback()
+                if template_dir:
+                    # 检查是否可以执行diff操作
+                    can_process, status = self.diff_orb.can_process_file(file_path, template_dir)
+                    can_diff = can_process
+
+                    if can_diff:
+                        self.logger.info(f"文件可以执行diff操作: {filename}")
+                    else:
+                        self.logger.info(f"文件不能执行diff操作: {status}")
+
+            # 设置diff按钮状态
+            self.diff_button.config(state="normal" if can_diff else "disabled")
+
+            # 更新状态标签
+            status_text = f"已选择: {filename}"
+            if is_download_file:
+                status_text += " (下载文件)"
+                if can_diff:
+                    status_text += " [可执行Diff]"
+            else:
+                status_text += " (模板文件)"
+
+            self.file_info_label.config(text=status_text)
             self.logger.info(f"已选择FITS文件: {filename}")
         else:
             # 选中的不是FITS文件
             self.selected_file_path = None
             self.display_button.config(state="disabled")
+            self.diff_button.config(state="disabled")
             self.file_info_label.config(text="未选择FITS文件")
 
     def _on_tree_double_click(self, event):
@@ -642,6 +684,101 @@ class FitsImageViewer:
         self.file_info_label.config(text="未选择文件")
         self.stats_label.config(text="")
         self.display_button.config(state="disabled")
+        self.diff_button.config(state="disabled")
+
+    def _is_from_download_directory(self, file_path: str) -> bool:
+        """
+        判断文件是否来自下载目录
+
+        Args:
+            file_path (str): 文件路径
+
+        Returns:
+            bool: 是否来自下载目录
+        """
+        if not self.get_download_dir_callback:
+            return False
+
+        download_dir = self.get_download_dir_callback()
+        if not download_dir or not os.path.exists(download_dir):
+            return False
+
+        # 检查文件路径是否以下载目录开头
+        try:
+            file_path = os.path.abspath(file_path)
+            download_dir = os.path.abspath(download_dir)
+
+            return file_path.startswith(download_dir)
+        except:
+            return False
+
+    def _execute_diff(self):
+        """执行diff操作"""
+        if not self.selected_file_path:
+            messagebox.showwarning("警告", "请先选择一个FITS文件")
+            return
+
+        if not self.get_template_dir_callback:
+            messagebox.showwarning("警告", "无法获取模板目录")
+            return
+
+        template_dir = self.get_template_dir_callback()
+        if not template_dir or not os.path.exists(template_dir):
+            messagebox.showwarning("警告", "模板目录不存在，请先设置模板目录")
+            return
+
+        # 检查是否是下载目录中的文件
+        if not self._is_from_download_directory(self.selected_file_path):
+            messagebox.showwarning("警告", "只能对下载目录中的文件执行diff操作")
+            return
+
+        try:
+            # 禁用按钮
+            self.diff_button.config(state="disabled", text="处理中...")
+            self.parent_frame.update()  # 更新界面显示
+
+            # 查找对应的模板文件
+            template_file = self.diff_orb.find_template_file(self.selected_file_path, template_dir)
+
+            if not template_file:
+                messagebox.showwarning("警告", "未找到匹配的模板文件")
+                self.diff_button.config(state="normal", text="执行Diff")
+                return
+
+            # 获取输出目录（使用下载文件所在目录）
+            output_dir = os.path.dirname(self.selected_file_path)
+
+            # 执行diff操作
+            result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir)
+
+            if result and result.get('success'):
+                # 显示结果摘要
+                summary = self.diff_orb.get_diff_summary(result)
+                messagebox.showinfo("Diff操作完成", summary)
+
+                # 询问是否查看结果
+                if messagebox.askyesno("查看结果", "是否查看差异图像？"):
+                    # 尝试加载差异图像
+                    difference_fits = result.get('output_files', {}).get('difference_fits')
+                    if difference_fits and os.path.exists(difference_fits):
+                        self.load_fits_file(difference_fits)
+                    else:
+                        marked_fits = result.get('output_files', {}).get('marked_fits')
+                        if marked_fits and os.path.exists(marked_fits):
+                            self.load_fits_file(marked_fits)
+
+                # 询问是否打开输出目录
+                if messagebox.askyesno("打开目录", "是否打开结果文件所在目录？"):
+                    self._open_directory_in_explorer(output_dir)
+            else:
+                messagebox.showerror("错误", "Diff操作失败")
+
+        except Exception as e:
+            self.logger.error(f"执行diff操作时出错: {str(e)}")
+            messagebox.showerror("错误", f"执行diff操作时出错: {str(e)}")
+        finally:
+            # 恢复按钮状态
+            self.diff_button.config(state="normal", text="执行Diff")
     
     def get_header_info(self) -> Optional[str]:
         """获取FITS头信息"""
