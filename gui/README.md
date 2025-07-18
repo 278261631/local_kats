@@ -11,6 +11,7 @@ gui/
 ├── fits_viewer.py           # FITS图像查看器
 ├── config_manager.py        # 配置文件管理器
 ├── url_builder.py           # URL构建器组件
+├── calendar_widget.py       # 日历选择器组件
 ├── requirements.txt         # 依赖包列表
 ├── gui_config.json.template # 配置文件模板
 ├── README.md               # 使用说明（本文件）
@@ -25,7 +26,7 @@ gui/
 ### 1. 智能URL构建
 - 支持KATS数据URL自动构建：`https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{YYYYMMDD}/{K0??}/`
 - 望远镜选择：GY1, GY2, GY3, GY4, GY5, GY6
-- 日期选择：支持最近30天的日期快速选择
+- **日历式日期选择**：直观的日历界面，支持月份导航和快速选择
 - 天区选择：K001 - K099
 - 配置文件自动保存上次选择的参数
 
@@ -87,7 +88,7 @@ python run_gui.py
 
 1. 在"扫描和下载"标签页的URL构建器中：
    - 选择望远镜：GY1-GY6（默认GY5）
-   - 选择日期：可从下拉列表选择或点击"今天"按钮
+   - 选择日期：点击📅按钮打开日历选择器，或点击"今天"按钮
    - 选择天区：K001-K099（默认K096）
 2. URL会自动构建并显示
 3. 点击"扫描FITS文件"按钮

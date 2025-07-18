@@ -44,6 +44,9 @@ def test_imports():
 
         from url_builder import URLBuilderFrame
         print("✓ url_builder")
+
+        from calendar_widget import CalendarWidget, CalendarDialog
+        print("✓ calendar_widget")
         
         # 测试数据收集模块
         sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -134,6 +137,38 @@ def test_config_manager():
         print(f"✗ 配置管理器测试失败: {e}")
         return False
 
+def test_calendar_widget():
+    """测试日历组件"""
+    print("\n测试日历组件...")
+
+    try:
+        from calendar_widget import CalendarWidget, CalendarDialog
+
+        # 创建临时窗口
+        root = tk.Tk()
+        root.withdraw()
+
+        # 测试日历组件
+        frame = tk.Frame(root)
+        calendar_widget = CalendarWidget(frame, "20250718")
+        print("✓ CalendarWidget 创建成功")
+
+        # 测试日期获取
+        selected_date = calendar_widget.get_selected_date()
+        print(f"✓ 选中日期: {selected_date}")
+
+        # 测试日期设置
+        calendar_widget.set_date("20250701")
+        new_date = calendar_widget.get_selected_date()
+        print(f"✓ 设置日期: {new_date}")
+
+        root.destroy()
+        return True
+
+    except Exception as e:
+        print(f"✗ 日历组件测试失败: {e}")
+        return False
+
 def test_url_builder():
     """测试URL构建器"""
     print("\n测试URL构建器...")
@@ -203,6 +238,7 @@ def main():
         ("网页扫描器测试", test_web_scanner),
         ("FITS查看器测试", test_fits_viewer),
         ("配置管理器测试", test_config_manager),
+        ("日历组件测试", test_calendar_widget),
         ("URL构建器测试", test_url_builder),
         ("GUI创建测试", test_gui_creation)
     ]

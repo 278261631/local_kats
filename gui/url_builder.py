@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import logging
 from typing import Callable, Optional
 from config_manager import ConfigManager
+from calendar_widget import CalendarDialog
 
 
 class URLBuilderFrame:
@@ -62,14 +63,21 @@ class URLBuilderFrame:
         
         # 日期选择
         ttk.Label(row1, text="日期:").pack(side=tk.LEFT, padx=(0, 5))
-        self.date_combo = ttk.Combobox(
-            row1,
-            textvariable=self.date_var,
-            values=self._get_recent_dates(),
-            width=12
-        )
-        self.date_combo.pack(side=tk.LEFT, padx=(0, 15))
-        
+
+        # 日期显示和选择框架
+        date_frame = ttk.Frame(row1)
+        date_frame.pack(side=tk.LEFT, padx=(0, 15))
+
+        # 日期显示标签
+        self.date_display_label = ttk.Label(date_frame, textvariable=self.date_var,
+                                          relief='sunken', width=12, anchor='center')
+        self.date_display_label.pack(side=tk.LEFT)
+
+        # 日历按钮
+        self.calendar_button = ttk.Button(date_frame, text="📅", width=3,
+                                        command=self._show_calendar)
+        self.calendar_button.pack(side=tk.LEFT, padx=(2, 0))
+
         # 今天按钮
         ttk.Button(row1, text="今天", command=self._set_today, width=6).pack(side=tk.LEFT, padx=(0, 15))
         
@@ -100,16 +108,7 @@ class URLBuilderFrame:
         # 构建按钮
         ttk.Button(row2, text="构建URL", command=self._update_url, width=8).pack(side=tk.RIGHT)
     
-    def _get_recent_dates(self, days: int = 30) -> list:
-        """获取最近几天的日期列表"""
-        dates = []
-        base_date = datetime.now()
-        
-        for i in range(days):
-            date = base_date - timedelta(days=i)
-            dates.append(date.strftime('%Y%m%d'))
-        
-        return dates
+
     
     def _load_last_selections(self):
         """加载上次的选择"""
@@ -177,6 +176,29 @@ class URLBuilderFrame:
         """设置为今天的日期"""
         today = datetime.now().strftime('%Y%m%d')
         self.date_var.set(today)
+
+    def _show_calendar(self):
+        """显示日历选择对话框"""
+        try:
+            current_date = self.date_var.get()
+
+            # 获取根窗口
+            root = self.parent_frame
+            while root.master:
+                root = root.master
+
+            dialog = CalendarDialog(root, "选择日期", current_date)
+            selected_date = dialog.show()
+
+            if selected_date:
+                self.date_var.set(selected_date)
+                self.logger.info(f"通过日历选择日期: {selected_date}")
+                # 手动触发更新，确保URL更新
+                self._update_url()
+
+        except Exception as e:
+            self.logger.error(f"显示日历对话框失败: {str(e)}")
+            messagebox.showerror("错误", f"显示日历失败: {str(e)}")
     
     def _copy_url(self):
         """复制URL到剪贴板"""
@@ -243,9 +265,7 @@ class URLBuilderFrame:
         
         return True, ""
     
-    def refresh_date_list(self):
-        """刷新日期列表"""
-        self.date_combo['values'] = self._get_recent_dates()
+
 
 
 class URLBuilderDialog:
