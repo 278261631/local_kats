@@ -26,16 +26,19 @@ class FitsImageViewer:
 
     def __init__(self, parent_frame, get_download_dir_callback: Optional[Callable] = None,
                  get_template_dir_callback: Optional[Callable] = None,
+                 get_diff_output_dir_callback: Optional[Callable] = None,
                  get_url_selections_callback: Optional[Callable] = None):
         self.parent_frame = parent_frame
         self.current_fits_data = None
         self.current_header = None
         self.current_file_path = None
         self.selected_file_path = None  # 当前选中但未显示的文件
+        self.first_refresh_done = False  # 标记是否已进行首次刷新
 
         # 回调函数
         self.get_download_dir_callback = get_download_dir_callback
         self.get_template_dir_callback = get_template_dir_callback
+        self.get_diff_output_dir_callback = get_diff_output_dir_callback
         self.get_url_selections_callback = get_url_selections_callback
 
         # 设置日志
@@ -46,6 +49,9 @@ class FitsImageViewer:
 
         # 创建界面
         self._create_widgets()
+
+        # 延迟执行首次刷新（确保界面完全创建后）
+        self.parent_frame.after(100, self._first_time_refresh)
         
     def _create_widgets(self):
         """创建界面组件"""
@@ -122,8 +128,7 @@ class FitsImageViewer:
         self.directory_tree.bind('<<TreeviewSelect>>', self._on_tree_select)
         self.directory_tree.bind('<Double-1>', self._on_tree_double_click)
 
-        # 初始化目录树
-        self._refresh_directory_tree()
+        # 不在这里初始化目录树，等待首次刷新
 
     def _create_image_display(self, parent):
         """创建右侧图像显示区域"""
@@ -165,6 +170,13 @@ class FitsImageViewer:
         # 保存按钮
         save_btn = ttk.Button(control_frame, text="保存图像", command=self._save_image)
         save_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+    def _first_time_refresh(self):
+        """首次打开时自动刷新目录树"""
+        if not self.first_refresh_done:
+            self.first_refresh_done = True
+            self.logger.info("首次打开图像查看器，自动刷新目录树")
+            self._refresh_directory_tree()
 
     def _refresh_directory_tree(self):
         """刷新目录树"""
@@ -745,8 +757,8 @@ class FitsImageViewer:
                 self.diff_button.config(state="normal", text="执行Diff")
                 return
 
-            # 获取输出目录（使用下载文件所在目录）
-            output_dir = os.path.dirname(self.selected_file_path)
+            # 获取输出目录
+            output_dir = self._get_diff_output_directory()
 
             # 执行diff操作
             result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir)
@@ -756,70 +768,72 @@ class FitsImageViewer:
                 summary = self.diff_orb.get_diff_summary(result)
                 messagebox.showinfo("Diff操作完成", summary)
 
-                # 询问是否查看结果
-                if messagebox.askyesno("查看结果", "是否查看差异图像？"):
-                    # 尝试加载差异图像
-                    output_files = result.get('output_files', {})
-                    self.logger.info(f"可用的输出文件: {list(output_files.keys())}")
+                # 自动查看差异图像（不询问）
+                # 尝试加载差异图像
+                output_files = result.get('output_files', {})
+                self.logger.info(f"可用的输出文件: {list(output_files.keys())}")
 
-                    # 按优先级尝试加载文件
-                    files_to_try = [
-                        ('difference_fits', '差异FITS文件'),
-                        ('marked_fits', '标记FITS文件'),
-                        ('aligned_fits', '对齐FITS文件'),
-                        ('reference_fits', '参考FITS文件')
-                    ]
+                # 按优先级尝试加载文件
+                files_to_try = [
+                    ('difference_fits', '差异FITS文件'),
+                    ('marked_fits', '标记FITS文件'),
+                    ('aligned_fits', '对齐FITS文件'),
+                    ('reference_fits', '参考FITS文件')
+                ]
 
-                    # 如果没有difference_fits，尝试显示差异图像的PNG版本
-                    if 'difference_fits' not in output_files:
-                        # 查找差异相关的PNG文件
-                        output_dir = result.get('output_directory')
-                        if output_dir and os.path.exists(output_dir):
-                            diff_pngs = list(Path(output_dir).glob("*difference*.png"))
-                            if diff_pngs:
-                                # 显示差异PNG文件的信息
-                                png_file = str(diff_pngs[0])
-                                messagebox.showinfo("差异图像",
-                                    f"生成了差异图像文件:\n{os.path.basename(png_file)}\n\n"
-                                    f"注意：diff_orb生成的是PNG格式的差异图像，\n"
-                                    f"将显示对齐后的FITS文件供参考。")
-                                self.logger.info(f"找到差异PNG文件: {os.path.basename(png_file)}")
+                # 如果没有difference_fits，尝试显示差异图像的PNG版本
+                if 'difference_fits' not in output_files:
+                    # 查找差异相关的PNG文件
+                    output_dir = result.get('output_directory')
+                    if output_dir and os.path.exists(output_dir):
+                        diff_pngs = list(Path(output_dir).glob("*difference*.png"))
+                        if diff_pngs:
+                            # 显示差异PNG文件的信息
+                            png_file = str(diff_pngs[0])
+                            messagebox.showinfo("差异图像",
+                                f"生成了差异图像文件:\n{os.path.basename(png_file)}\n\n"
+                                f"注意：diff_orb生成的是PNG格式的差异图像，\n"
+                                f"将显示对齐后的FITS文件供参考。")
+                            self.logger.info(f"找到差异PNG文件: {os.path.basename(png_file)}")
 
-                                # 尝试打开PNG文件所在目录
-                                try:
-                                    self._open_directory_in_explorer(output_dir)
-                                except:
-                                    pass
+                            # 尝试打开PNG文件所在目录
+                            try:
+                                self._open_directory_in_explorer(output_dir)
+                            except:
+                                pass
 
-                    loaded = False
-                    for file_key, file_desc in files_to_try:
-                        file_path = output_files.get(file_key)
-                        if file_path and os.path.exists(file_path):
-                            self.logger.info(f"加载{file_desc}: {os.path.basename(file_path)}")
-                            if self.load_fits_file(file_path):
+                loaded = False
+                for file_key, file_desc in files_to_try:
+                    file_path = output_files.get(file_key)
+                    if file_path and os.path.exists(file_path):
+                        self.logger.info(f"加载{file_desc}: {os.path.basename(file_path)}")
+                        if self.load_fits_file(file_path):
+                            loaded = True
+                            break
+                        else:
+                            self.logger.warning(f"加载{file_desc}失败")
+
+                if not loaded:
+                    # 如果都没有成功加载，尝试直接扫描输出目录
+                    output_dir = result.get('output_directory')
+                    if output_dir and os.path.exists(output_dir):
+                        fits_files = list(Path(output_dir).glob("*.fits"))
+                        if fits_files:
+                            # 加载第一个找到的FITS文件
+                            first_fits = str(fits_files[0])
+                            self.logger.info(f"尝试加载目录中的FITS文件: {os.path.basename(first_fits)}")
+                            if self.load_fits_file(first_fits):
                                 loaded = True
-                                break
-                            else:
-                                self.logger.warning(f"加载{file_desc}失败")
 
                     if not loaded:
-                        # 如果都没有成功加载，尝试直接扫描输出目录
-                        output_dir = result.get('output_directory')
-                        if output_dir and os.path.exists(output_dir):
-                            fits_files = list(Path(output_dir).glob("*.fits"))
-                            if fits_files:
-                                # 加载第一个找到的FITS文件
-                                first_fits = str(fits_files[0])
-                                self.logger.info(f"尝试加载目录中的FITS文件: {os.path.basename(first_fits)}")
-                                if self.load_fits_file(first_fits):
-                                    loaded = True
+                        messagebox.showwarning("警告", "没有找到可以显示的结果文件")
 
-                        if not loaded:
-                            messagebox.showwarning("警告", "没有找到可以显示的结果文件")
-
-                # 询问是否打开输出目录
-                if messagebox.askyesno("打开目录", "是否打开结果文件所在目录？"):
+                # 自动打开输出目录（不询问）
+                try:
                     self._open_directory_in_explorer(output_dir)
+                    self.logger.info(f"已自动打开结果目录: {output_dir}")
+                except Exception as e:
+                    self.logger.warning(f"打开结果目录失败: {str(e)}")
             else:
                 messagebox.showerror("错误", "Diff操作失败")
 
@@ -829,6 +843,45 @@ class FitsImageViewer:
         finally:
             # 恢复按钮状态
             self.diff_button.config(state="normal", text="执行Diff")
+
+    def _get_diff_output_directory(self) -> str:
+        """获取diff操作的输出目录"""
+        from datetime import datetime
+
+        # 获取配置的根目录
+        base_output_dir = ""
+        if self.get_diff_output_dir_callback:
+            base_output_dir = self.get_diff_output_dir_callback()
+
+        # 如果没有配置，使用下载文件所在目录
+        if not base_output_dir or not os.path.exists(base_output_dir):
+            if self.selected_file_path:
+                base_output_dir = os.path.dirname(self.selected_file_path)
+            else:
+                base_output_dir = os.path.expanduser("~/diff_results")
+
+        # 生成当前日期相关的目录
+        current_date = datetime.now().strftime("%Y%m%d")
+
+        # 从选中文件名生成子目录名
+        if self.selected_file_path:
+            filename = os.path.basename(self.selected_file_path)
+            name_without_ext = os.path.splitext(filename)[0]
+            # 生成时间戳确保唯一性
+            timestamp = datetime.now().strftime("%H%M%S")
+            subdir_name = f"{name_without_ext}_{timestamp}"
+        else:
+            timestamp = datetime.now().strftime("%H%M%S")
+            subdir_name = f"diff_result_{timestamp}"
+
+        # 构建完整输出目录：根目录/YYYYMMDD/文件名_时间戳/
+        output_dir = os.path.join(base_output_dir, current_date, subdir_name)
+
+        # 创建目录
+        os.makedirs(output_dir, exist_ok=True)
+
+        self.logger.info(f"diff输出目录: {output_dir}")
+        return output_dir
     
     def get_header_info(self) -> Optional[str]:
         """获取FITS头信息"""

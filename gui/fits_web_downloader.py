@@ -166,6 +166,17 @@ class FitsWebDownloaderGUI:
         self.template_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
 
         ttk.Button(template_frame, text="选择模板目录", command=self._select_template_dir).pack(side=tk.RIGHT)
+
+        # diff输出目录选择
+        diff_output_frame = ttk.Frame(download_frame)
+        diff_output_frame.pack(fill=tk.X, pady=(5, 5))
+
+        ttk.Label(diff_output_frame, text="Diff输出根目录:").pack(side=tk.LEFT)
+        self.diff_output_dir_var = tk.StringVar()
+        self.diff_output_dir_entry = ttk.Entry(diff_output_frame, textvariable=self.diff_output_dir_var, width=50)
+        self.diff_output_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+
+        ttk.Button(diff_output_frame, text="选择输出目录", command=self._select_diff_output_dir).pack(side=tk.RIGHT)
         
         # 下载参数
         params_frame = ttk.Frame(download_frame)
@@ -211,6 +222,7 @@ class FitsWebDownloaderGUI:
             self.viewer_frame,
             get_download_dir_callback=self._get_download_dir,
             get_template_dir_callback=self._get_template_dir,
+            get_diff_output_dir_callback=self._get_diff_output_dir,
             get_url_selections_callback=self._get_url_selections
         )
         
@@ -245,6 +257,10 @@ class FitsWebDownloaderGUI:
             template_dir = last_selected.get("template_directory", "")
             if template_dir:
                 self.template_dir_var.set(template_dir)
+
+            diff_output_dir = last_selected.get("diff_output_directory", "")
+            if diff_output_dir:
+                self.diff_output_dir_var.set(diff_output_dir)
 
             self._log("配置加载完成")
 
@@ -375,6 +391,20 @@ class FitsWebDownloaderGUI:
             # 刷新FITS查看器的目录树
             if hasattr(self, 'fits_viewer'):
                 self.fits_viewer._refresh_directory_tree()
+
+    def _select_diff_output_dir(self):
+        """选择diff输出根目录"""
+        # 获取当前目录作为初始目录
+        current_dir = self.diff_output_dir_var.get()
+        initial_dir = current_dir if current_dir and os.path.exists(current_dir) else os.path.expanduser("~")
+
+        directory = filedialog.askdirectory(title="选择diff输出根目录", initialdir=initial_dir)
+        if directory:
+            self.diff_output_dir_var.set(directory)
+            # 保存到配置
+            self.config_manager.update_last_selected(diff_output_directory=directory)
+            self._log(f"diff输出根目录已设置: {directory}")
+            self._log(f"diff结果将保存到: {directory}/YYYYMMDD/文件名相关目录/")
             
     def _get_selected_files(self):
         """获取选中的文件"""
@@ -740,6 +770,10 @@ class FitsWebDownloaderGUI:
         """获取模板文件目录的回调函数"""
         return self.template_dir_var.get().strip()
 
+    def _get_diff_output_dir(self):
+        """获取diff输出根目录的回调函数"""
+        return self.diff_output_dir_var.get().strip()
+
     def _get_url_selections(self):
         """获取URL选择参数的回调函数"""
         return self.url_builder.get_current_selections()
@@ -754,15 +788,18 @@ class FitsWebDownloaderGUI:
                 timeout=self.timeout_var.get()
             )
 
-            # 保存下载目录和模板目录
+            # 保存下载目录、模板目录和diff输出目录
             download_dir = self.download_dir_var.get().strip()
             template_dir = self.template_dir_var.get().strip()
-            if download_dir or template_dir:
+            diff_output_dir = self.diff_output_dir_var.get().strip()
+            if download_dir or template_dir or diff_output_dir:
                 update_data = {}
                 if download_dir:
                     update_data['download_directory'] = download_dir
                 if template_dir:
                     update_data['template_directory'] = template_dir
+                if diff_output_dir:
+                    update_data['diff_output_directory'] = diff_output_dir
                 self.config_manager.update_last_selected(**update_data)
 
             self._log("配置已保存")

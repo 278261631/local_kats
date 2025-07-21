@@ -27,7 +27,8 @@ class ConfigManager:
                 "date": datetime.now().strftime("%Y%m%d"),
                 "k_number": "K096",
                 "download_directory": "",
-                "template_directory": ""
+                "template_directory": "",
+                "diff_output_directory": ""
             },
             "download_settings": {
                 "max_workers": 1,
