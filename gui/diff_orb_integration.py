@@ -20,9 +20,11 @@ if os.path.exists(diff_orb_dir):
 
 try:
     from fits_alignment_comparison import FITSAlignmentComparison
+    from compare_aligned_fits import AlignedFITSComparator
 except ImportError as e:
     logging.error(f"无法导入diff_orb模块: {e}")
     FITSAlignmentComparison = None
+    AlignedFITSComparator = None
 
 from filename_parser import FITSFilenameParser
 
@@ -35,17 +37,20 @@ class DiffOrbIntegration:
         self.filename_parser = FITSFilenameParser()
         
         # 检查diff_orb是否可用
-        self.diff_orb_available = FITSAlignmentComparison is not None
-        
+        self.diff_orb_available = FITSAlignmentComparison is not None and AlignedFITSComparator is not None
+
         if not self.diff_orb_available:
             self.logger.error("diff_orb模块不可用，请检查安装")
-        
+
         # 创建diff_orb比较器
         if self.diff_orb_available:
-            self.comparator = FITSAlignmentComparison(
+            # 用于图像对齐的比较器
+            self.alignment_comparator = FITSAlignmentComparison(
                 use_central_region=False,  # 不使用中央区域，处理完整图像
                 alignment_method='rigid'   # 刚体变换，适合天文图像
             )
+            # 用于已对齐文件比较的比较器
+            self.aligned_comparator = AlignedFITSComparator()
     
     def is_available(self) -> bool:
         """检查diff_orb是否可用"""
@@ -161,14 +166,25 @@ class DiffOrbIntegration:
             self.logger.info(f"  参考文件 (模板): {os.path.basename(template_file)}")
             self.logger.info(f"  待比较文件 (下载): {os.path.basename(download_file)}")
             self.logger.info(f"  输出目录: {output_dir}")
-            
-            # 执行diff_orb比较
-            # 注意：模板文件作为参考文件（第一个参数），下载文件作为待比较文件（第二个参数）
-            result = self.comparator.process_fits_comparison(
+
+            # 步骤1: 先进行图像对齐
+            self.logger.info("步骤1: 执行图像对齐...")
+            alignment_result = self.alignment_comparator.process_fits_comparison(
                 template_file,      # 参考文件（模板）
                 download_file,      # 待比较文件（下载）
                 output_dir=output_dir,
                 show_visualization=False  # 在GUI中不显示matplotlib窗口
+            )
+
+            if not alignment_result or not alignment_result.get('alignment_success'):
+                self.logger.error("图像对齐失败")
+                return None
+
+            # 步骤2: 使用已对齐文件进行差异比较
+            self.logger.info("步骤2: 执行已对齐文件差异比较...")
+            result = self.aligned_comparator.process_aligned_fits_comparison(
+                output_dir,  # 输入目录（包含对齐后的文件）
+                output_dir   # 输出目录（同一目录）
             )
             
             if result:
@@ -199,33 +215,66 @@ class DiffOrbIntegration:
     def _collect_output_files(self, output_dir: str) -> Dict[str, str]:
         """收集输出目录中的文件"""
         output_files = {}
-        
+
         try:
-            for file_path in Path(output_dir).glob("*"):
+            self.logger.info(f"扫描输出目录: {output_dir}")
+            all_files = list(Path(output_dir).glob("*"))
+            self.logger.info(f"找到 {len(all_files)} 个文件")
+
+            for file_path in all_files:
                 if file_path.is_file():
-                    filename = file_path.name
-                    
-                    # 分类文件
-                    if 'difference' in filename and filename.endswith('.fits'):
+                    filename = file_path.name.lower()  # 转换为小写进行匹配
+                    original_filename = file_path.name
+
+                    self.logger.debug(f"检查文件: {original_filename}")
+
+                    # 分类文件 - 使用更宽松的匹配模式
+                    if ('difference' in filename or 'diff' in filename) and filename.endswith('.fits'):
                         output_files['difference_fits'] = str(file_path)
-                    elif 'difference' in filename and filename.endswith('.jpg'):
-                        output_files['difference_jpg'] = str(file_path)
+                        self.logger.info(f"找到差异FITS文件: {original_filename}")
+                    elif ('difference' in filename or 'diff' in filename) and (filename.endswith('.jpg') or filename.endswith('.jpeg') or filename.endswith('.png')):
+                        if filename.endswith('.png'):
+                            output_files['difference_png'] = str(file_path)
+                            self.logger.info(f"找到差异PNG文件: {original_filename}")
+                        else:
+                            output_files['difference_jpg'] = str(file_path)
+                            self.logger.info(f"找到差异JPG文件: {original_filename}")
                     elif 'marked' in filename and filename.endswith('.fits'):
                         output_files['marked_fits'] = str(file_path)
-                    elif 'marked' in filename and filename.endswith('.jpg'):
-                        output_files['marked_jpg'] = str(file_path)
+                        self.logger.info(f"找到标记FITS文件: {original_filename}")
+                    elif 'marked' in filename and (filename.endswith('.jpg') or filename.endswith('.jpeg') or filename.endswith('.png')):
+                        if filename.endswith('.png'):
+                            output_files['marked_png'] = str(file_path)
+                            self.logger.info(f"找到标记PNG文件: {original_filename}")
+                        else:
+                            output_files['marked_jpg'] = str(file_path)
+                            self.logger.info(f"找到标记JPG文件: {original_filename}")
                     elif 'reference' in filename and filename.endswith('.fits'):
                         output_files['reference_fits'] = str(file_path)
+                        self.logger.info(f"找到参考FITS文件: {original_filename}")
                     elif 'aligned' in filename and filename.endswith('.fits'):
                         output_files['aligned_fits'] = str(file_path)
-                    elif 'bright_spots' in filename and filename.endswith('.txt'):
+                        self.logger.info(f"找到对齐FITS文件: {original_filename}")
+                    elif ('bright_spots' in filename or 'report' in filename) and filename.endswith('.txt'):
                         output_files['report_txt'] = str(file_path)
-            
-            self.logger.info(f"收集到 {len(output_files)} 个输出文件")
-            
+                        self.logger.info(f"找到报告文件: {original_filename}")
+                    elif filename.endswith('.fits'):
+                        # 如果是FITS文件但不匹配上述模式，记录下来
+                        self.logger.info(f"未分类的FITS文件: {original_filename}")
+                        # 如果还没有找到差异文件，将第一个未分类的FITS文件作为候选
+                        if 'difference_fits' not in output_files:
+                            output_files['candidate_fits'] = str(file_path)
+
+            self.logger.info(f"收集到 {len(output_files)} 个输出文件: {list(output_files.keys())}")
+
+            # 如果没有找到difference_fits但有candidate_fits，使用候选文件
+            if 'difference_fits' not in output_files and 'candidate_fits' in output_files:
+                output_files['difference_fits'] = output_files.pop('candidate_fits')
+                self.logger.info(f"使用候选文件作为差异文件: {os.path.basename(output_files['difference_fits'])}")
+
         except Exception as e:
             self.logger.error(f"收集输出文件时出错: {str(e)}")
-        
+
         return output_files
     
     def get_diff_summary(self, result: Dict) -> str:
@@ -245,14 +294,40 @@ class DiffOrbIntegration:
             f"diff操作完成",
             f"对齐状态: {'成功' if result.get('alignment_success') else '失败'}",
             f"检测到新亮点: {result.get('new_bright_spots', 0)} 个",
-            f"参考文件: {os.path.basename(result.get('reference_file', ''))}", 
+            f"参考文件: {os.path.basename(result.get('reference_file', ''))}",
             f"比较文件: {os.path.basename(result.get('compared_file', ''))}"
         ]
-        
+
         output_files = result.get('output_files', {})
         if output_files:
             summary_lines.append(f"生成文件: {len(output_files)} 个")
-        
+
+            # 详细列出生成的文件类型
+            file_types = []
+            if 'difference_fits' in output_files:
+                file_types.append("差异FITS")
+            elif 'difference_png' in output_files:
+                file_types.append("差异PNG")
+            elif 'difference_jpg' in output_files:
+                file_types.append("差异JPG")
+
+            if 'marked_fits' in output_files:
+                file_types.append("标记FITS")
+            elif 'marked_png' in output_files:
+                file_types.append("标记PNG")
+
+            if 'aligned_fits' in output_files:
+                file_types.append("对齐FITS")
+
+            if 'reference_fits' in output_files:
+                file_types.append("参考FITS")
+
+            if 'report_txt' in output_files:
+                file_types.append("检测报告")
+
+            if file_types:
+                summary_lines.append(f"文件类型: {', '.join(file_types)}")
+
         return "\n".join(summary_lines)
 
 

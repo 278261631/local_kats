@@ -759,13 +759,63 @@ class FitsImageViewer:
                 # 询问是否查看结果
                 if messagebox.askyesno("查看结果", "是否查看差异图像？"):
                     # 尝试加载差异图像
-                    difference_fits = result.get('output_files', {}).get('difference_fits')
-                    if difference_fits and os.path.exists(difference_fits):
-                        self.load_fits_file(difference_fits)
-                    else:
-                        marked_fits = result.get('output_files', {}).get('marked_fits')
-                        if marked_fits and os.path.exists(marked_fits):
-                            self.load_fits_file(marked_fits)
+                    output_files = result.get('output_files', {})
+                    self.logger.info(f"可用的输出文件: {list(output_files.keys())}")
+
+                    # 按优先级尝试加载文件
+                    files_to_try = [
+                        ('difference_fits', '差异FITS文件'),
+                        ('marked_fits', '标记FITS文件'),
+                        ('aligned_fits', '对齐FITS文件'),
+                        ('reference_fits', '参考FITS文件')
+                    ]
+
+                    # 如果没有difference_fits，尝试显示差异图像的PNG版本
+                    if 'difference_fits' not in output_files:
+                        # 查找差异相关的PNG文件
+                        output_dir = result.get('output_directory')
+                        if output_dir and os.path.exists(output_dir):
+                            diff_pngs = list(Path(output_dir).glob("*difference*.png"))
+                            if diff_pngs:
+                                # 显示差异PNG文件的信息
+                                png_file = str(diff_pngs[0])
+                                messagebox.showinfo("差异图像",
+                                    f"生成了差异图像文件:\n{os.path.basename(png_file)}\n\n"
+                                    f"注意：diff_orb生成的是PNG格式的差异图像，\n"
+                                    f"将显示对齐后的FITS文件供参考。")
+                                self.logger.info(f"找到差异PNG文件: {os.path.basename(png_file)}")
+
+                                # 尝试打开PNG文件所在目录
+                                try:
+                                    self._open_directory_in_explorer(output_dir)
+                                except:
+                                    pass
+
+                    loaded = False
+                    for file_key, file_desc in files_to_try:
+                        file_path = output_files.get(file_key)
+                        if file_path and os.path.exists(file_path):
+                            self.logger.info(f"加载{file_desc}: {os.path.basename(file_path)}")
+                            if self.load_fits_file(file_path):
+                                loaded = True
+                                break
+                            else:
+                                self.logger.warning(f"加载{file_desc}失败")
+
+                    if not loaded:
+                        # 如果都没有成功加载，尝试直接扫描输出目录
+                        output_dir = result.get('output_directory')
+                        if output_dir and os.path.exists(output_dir):
+                            fits_files = list(Path(output_dir).glob("*.fits"))
+                            if fits_files:
+                                # 加载第一个找到的FITS文件
+                                first_fits = str(fits_files[0])
+                                self.logger.info(f"尝试加载目录中的FITS文件: {os.path.basename(first_fits)}")
+                                if self.load_fits_file(first_fits):
+                                    loaded = True
+
+                        if not loaded:
+                            messagebox.showwarning("警告", "没有找到可以显示的结果文件")
 
                 # 询问是否打开输出目录
                 if messagebox.askyesno("打开目录", "是否打开结果文件所在目录？"):
