@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-David Hogg TheThresher 命令行接口
+LSST DESC Difference-Image-Inspection 命令行接口
 用于处理 /fits_dia/test_data 目录下的差异图像文件
 
 Usage:
-    python run_thresher.py --input aligned_comparison_20250715_175203_difference.fits
-    python run_thresher.py --auto  # 自动处理test_data目录
+    python run_lsst_dia.py --input aligned_comparison_20250715_175203_difference.fits
+    python run_lsst_dia.py --auto  # 自动处理test_data目录
 """
 
 import os
@@ -17,7 +17,7 @@ from pathlib import Path
 # 添加当前目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from thresher import DavidHoggThresher
+from lsst_dia import LSSTDifferenceImageInspection
 
 
 def find_difference_fits_files(directory):
@@ -45,21 +45,21 @@ def find_difference_fits_files(directory):
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description='David Hogg TheThresher - 统计建模图像处理工具',
+        description='LSST DESC Difference-Image-Inspection - 多尺度差异图像分析工具',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
   # 处理指定的差异图像文件
-  python run_thresher.py --input aligned_comparison_20250715_175203_difference.fits
+  python run_lsst_dia.py --input aligned_comparison_20250715_175203_difference.fits
   
   # 自动处理test_data目录中的差异图像
-  python run_thresher.py --auto
+  python run_lsst_dia.py --auto
   
   # 指定输出目录和参数
-  python run_thresher.py --input diff.fits --output results --threshold 2.5 --bayesian
+  python run_lsst_dia.py --input diff.fits --output results --threshold 4.0
   
-  # 使用简单统计模型
-  python run_thresher.py --auto --no-bayesian --threshold 3.0
+  # 禁用质量评估以加快处理速度
+  python run_lsst_dia.py --auto --no-quality --threshold 3.0
         """
     )
     
@@ -70,18 +70,11 @@ def main():
     
     # 其他参数
     parser.add_argument('--output', type=str, help='输出目录路径')
-    parser.add_argument('--threshold', type=float, default=3.0, help='统计显著性阈值（默认3.0）')
-    parser.add_argument('--bayesian', action='store_true', help='使用贝叶斯推理（默认启用）')
-    parser.add_argument('--no-bayesian', action='store_true', help='禁用贝叶斯推理，使用简单模型')
+    parser.add_argument('--threshold', type=float, default=5.0, help='检测阈值（默认5.0）')
+    parser.add_argument('--no-quality', action='store_true', help='禁用质量评估')
     parser.add_argument('--verbose', action='store_true', help='详细输出')
     
     args = parser.parse_args()
-    
-    # 处理互斥参数
-    if args.bayesian and args.no_bayesian:
-        parser.error("--bayesian 和 --no-bayesian 不能同时使用")
-        
-    use_bayesian = not args.no_bayesian  # 默认使用贝叶斯推理
     
     # 确定输入文件
     input_fits = None
@@ -125,60 +118,70 @@ def main():
     else:
         output_dir = os.path.dirname(input_fits)
         
-    # 创建TheThresher处理器
-    thresher = DavidHoggThresher(
-        significance_threshold=args.threshold,
-        use_bayesian_inference=use_bayesian
+    # 创建LSST DIA处理器
+    lsst_dia = LSSTDifferenceImageInspection(
+        detection_threshold=args.threshold,
+        quality_assessment=not args.no_quality
     )
     
-    # 执行TheThresher处理
-    print(f"\n开始TheThresher处理...")
+    # 执行LSST DIA处理
+    print(f"\n开始LSST DESC差异图像检查...")
     print(f"输入文件: {input_fits}")
     print(f"输出目录: {output_dir}")
-    print(f"显著性阈值: {args.threshold}")
-    print(f"贝叶斯推理: {'启用' if use_bayesian else '禁用'}")
+    print(f"检测阈值: {args.threshold}")
+    print(f"质量评估: {'启用' if not args.no_quality else '禁用'}")
     
-    result = thresher.process_difference_image(input_fits, output_dir)
+    result = lsst_dia.process_difference_image(input_fits, output_dir)
     
     if result and result['success']:
-        print(f"\n✓ TheThresher处理成功完成!")
-        print(f"检测到显著源: {result['sources_detected']} 个")
+        print(f"\n✓ LSST DIA处理成功完成!")
+        print(f"检测到源: {result['sources_detected']} 个")
         
-        if result['sources']:
-            print(f"\n最显著的5个源:")
-            for i, source in enumerate(result['sources'][:5]):
+        # 显示质量评估结果
+        quality_metrics = result['quality_metrics']
+        print(f"图像质量评分: {quality_metrics.get('overall_quality', 0):.1f}/100")
+        
+        # 显示统计验证结果
+        validation_results = result['validation_results']
+        print(f"统计验证: {'通过' if validation_results.get('validation_passed', False) else '失败'}")
+        
+        if validation_results.get('warnings'):
+            print(f"验证警告: {len(validation_results['warnings'])} 个")
+        
+        # 显示分类统计
+        class_dist = validation_results.get('class_distribution', {})
+        if class_dist:
+            print(f"\n源分类统计:")
+            for class_name, count in sorted(class_dist.items(), key=lambda x: x[1], reverse=True):
+                percentage = count / result['sources_detected'] * 100 if result['sources_detected'] > 0 else 0
+                print(f"  {class_name:12s}: {count:4d} ({percentage:5.1f}%)")
+        
+        # 显示最可靠的源
+        reliable_sources = [s for s in result['sources'] if s.get('reliability', 0) > 70]
+        if reliable_sources:
+            print(f"\n高可靠性源 (前5个):")
+            for i, source in enumerate(reliable_sources[:5]):
+                class_info = source.get('classification', {})
                 print(f"  {i+1}: 位置=({source['x']:.1f}, {source['y']:.1f}), "
-                      f"最大显著性={source['max_significance']:.2f}, "
-                      f"面积={source['area']} 像素")
+                      f"SNR={source.get('snr', 0):.1f}, "
+                      f"类型={class_info.get('class', 'unknown')}, "
+                      f"可靠性={source.get('reliability', 0):.1f}")
         
         print(f"\n输出文件:")
-        print(f"  处理图像: {os.path.basename(result['processed_fits'])}")
-        print(f"  显著性图像: {os.path.basename(result['significance_fits'])}")
         print(f"  标记FITS文件: {os.path.basename(result['marked_fits'])}")
         print(f"  源目录: {os.path.basename(result['catalog_file'])}")
+        print(f"  质量报告: {os.path.basename(result['quality_report'])}")
         print(f"  可视化: {os.path.basename(result['visualization'])}")
         
-        # 显示统计信息
-        bg_stats = result['background_stats']
-        model_params = result['model_params']
+        # 显示处理摘要
+        print(f"\n处理摘要:")
+        print(f"  多尺度检测: {len(set(s['scale'] for s in result['sources']))} 个尺度")
+        print(f"  聚类数量: {len(set(s.get('cluster_id', -1) for s in result['sources'] if s.get('cluster_id', -1) >= 0))}")
+        print(f"  源密度: {validation_results.get('source_density', 0):.1f} 个/百万像素")
         
-        print(f"\n背景统计:")
-        print(f"  均值: {bg_stats['mean']:.6f}")
-        print(f"  标准差: {bg_stats['std']:.6f}")
-        print(f"  背景水平: {bg_stats['background_level']:.6f}")
-        
-        print(f"\n模型参数:")
-        print(f"  模型类型: {model_params['type']}")
-        if model_params['type'] == 'bayesian':
-            print(f"  伽马形状: {model_params['gamma_shape']:.3f}")
-            print(f"  伽马尺度: {model_params['gamma_scale']:.3f}")
-            print(f"  泊松率: {model_params['poisson_rate']:.3f}")
-        else:
-            print(f"  阈值: {model_params['threshold']:.6f}")
-            
         return 0
     else:
-        print(f"\n✗ TheThresher处理失败")
+        print(f"\n✗ LSST DIA处理失败")
         return 1
 
 

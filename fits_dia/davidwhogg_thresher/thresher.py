@@ -532,6 +532,128 @@ class DavidHoggThresher:
         except Exception as e:
             self.logger.error(f"创建可视化失败 {output_path}: {str(e)}")
 
+    def create_marked_fits(self, image_data, sources, output_path):
+        """
+        创建带有圆圈标记的FITS文件，圆圈大小根据AREA决定
+
+        Args:
+            image_data (np.ndarray): 原始图像数据
+            sources (list): 检测到的源列表
+            output_path (str): 输出路径
+        """
+        try:
+            # 创建标记图像的副本
+            marked_data = image_data.copy()
+
+            # 获取图像尺寸
+            height, width = image_data.shape
+
+            if not sources:
+                self.logger.warning("没有源需要标记")
+                return
+
+            # 计算AREA范围用于标准化圆圈大小
+            areas = [s['area'] for s in sources]
+            min_area = min(areas)
+            max_area = max(areas)
+
+            # 定义圆圈大小范围
+            min_radius = 3   # 最小圆圈半径
+            max_radius = 20  # 最大圆圈半径
+
+            self.logger.info(f"标记 {len(sources)} 个源，面积范围: {min_area} - {max_area} 像素")
+
+            # 为每个源绘制圆圈
+            for i, source in enumerate(sources):
+                x = int(round(source['x']))
+                y = int(round(source['y']))
+                area = source['area']
+                max_significance = source['max_significance']
+
+                # 根据AREA计算圆圈半径
+                if max_area > min_area:
+                    # 标准化面积到0-1范围
+                    normalized_area = (area - min_area) / (max_area - min_area)
+                else:
+                    normalized_area = 0.5
+
+                # 计算圆圈半径
+                radius = int(min_radius + normalized_area * (max_radius - min_radius))
+
+                # 根据显著性确定圆圈值
+                # 正显著性用高值，负显著性用低值
+                if max_significance > 0:
+                    circle_value = np.max(image_data) * 1.2  # 比最大值高20%
+                else:
+                    circle_value = np.min(image_data) * 1.2  # 比最小值低20%
+
+                # 绘制圆圈
+                self._draw_circle(marked_data, x, y, radius, circle_value)
+
+                # 在圆圈中心附近添加源ID标记
+                if 0 <= x < width and 0 <= y < height:
+                    # 在圆圈中心放置一个小点作为标记
+                    marked_data[y, x] = circle_value * 0.8
+
+            self.logger.info(f"完成源标记，圆圈半径范围: {min_radius} - {max_radius} 像素")
+
+            # 保存标记后的FITS文件
+            header = fits.Header()
+            header['HISTORY'] = f'Marked by DavidHoggThresher on {datetime.now().isoformat()}'
+            header['THRESHER'] = 'DavidHoggThresher'
+            header['THRVERS'] = '1.0'
+            header['MARKED'] = 'TRUE'
+            header['NSOURCES'] = len(sources)
+            header['MINAREA'] = min_area
+            header['MAXAREA'] = max_area
+            header['MINRAD'] = min_radius
+            header['MAXRAD'] = max_radius
+            header['COMMENT'] = 'Circle size proportional to source AREA'
+
+            hdu = fits.PrimaryHDU(data=marked_data.astype(np.float32), header=header)
+            hdu.writeto(output_path, overwrite=True)
+
+            self.logger.info(f"标记FITS文件已保存: {output_path}")
+
+        except Exception as e:
+            self.logger.error(f"创建标记FITS文件失败 {output_path}: {str(e)}")
+
+    def _draw_circle(self, image, center_x, center_y, radius, value):
+        """
+        在图像上绘制圆圈（优化版本）
+
+        Args:
+            image (np.ndarray): 图像数组
+            center_x (int): 圆心X坐标
+            center_y (int): 圆心Y坐标
+            radius (int): 圆圈半径
+            value (float): 圆圈像素值
+        """
+        height, width = image.shape
+
+        # 边界检查
+        if center_x < 0 or center_x >= width or center_y < 0 or center_y >= height:
+            return
+
+        # 只在圆圈周围的局部区域工作，提高效率
+        margin = radius + 2
+        x_min = max(0, center_x - margin)
+        x_max = min(width, center_x + margin + 1)
+        y_min = max(0, center_y - margin)
+        y_max = min(height, center_y + margin + 1)
+
+        # 创建局部坐标网格
+        y_local, x_local = np.ogrid[y_min:y_max, x_min:x_max]
+
+        # 计算到圆心的距离
+        distances = np.sqrt((x_local - center_x)**2 + (y_local - center_y)**2)
+
+        # 创建圆圈掩码（圆环，厚度为1像素）
+        circle_mask = (distances >= radius - 0.5) & (distances <= radius + 0.5)
+
+        # 应用圆圈到局部区域
+        image[y_min:y_max, x_min:x_max][circle_mask] = value
+
     def process_difference_image(self, fits_path, output_dir=None):
         """
         处理差异图像的完整流程
@@ -608,6 +730,10 @@ class DavidHoggThresher:
             catalog_path = os.path.join(output_dir, f"{base_name}_sources.txt")
             self.save_source_catalog(sources, catalog_path)
 
+            # 创建带标记的FITS文件
+            marked_fits_path = os.path.join(output_dir, f"{base_name}_marked.fits")
+            self.create_marked_fits(image_data, sources, marked_fits_path)
+
             # 创建可视化
             viz_path = os.path.join(output_dir, f"{base_name}_visualization.png")
             self.create_visualization(image_data, processed_image, significance_map,
@@ -622,6 +748,7 @@ class DavidHoggThresher:
                 'input_fits': fits_path,
                 'processed_fits': processed_fits_path,
                 'significance_fits': significance_fits_path,
+                'marked_fits': marked_fits_path,
                 'catalog_file': catalog_path,
                 'visualization': viz_path,
                 'background_stats': background_stats,

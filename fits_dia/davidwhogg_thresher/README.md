@@ -90,10 +90,18 @@ thresher_params = {
 ```
 davidhogg_thresher_YYYYMMDD_HHMMSS_processed.fits     # 处理后图像
 davidhogg_thresher_YYYYMMDD_HHMMSS_significance.fits  # 显著性图像
+davidhogg_thresher_YYYYMMDD_HHMMSS_marked.fits        # 带圆圈标记的FITS文件
 davidhogg_thresher_YYYYMMDD_HHMMSS_sources.txt        # 源目录
 davidhogg_thresher_YYYYMMDD_HHMMSS_visualization.png  # 可视化结果
 davidhogg_thresher.log                                 # 处理日志
 ```
+
+### 标记FITS文件特性 ⭐ **新功能**
+- **圆圈大小** - 根据源面积(AREA)动态调整（3-20像素半径）
+- **圆圈亮度** - 正显著性源使用高亮圆圈，负显著性源使用暗色圆圈
+- **精确映射** - 面积范围线性映射到圆圈半径范围
+- **FITS头信息** - 包含标记参数和源统计信息
+- **天文软件兼容** - 可在DS9、FITS Liberator等软件中查看
 
 ### 源目录格式
 ```

@@ -95,8 +95,17 @@ def process_existing_difference():
         print(f"\n输出文件:")
         print(f"  处理图像: {os.path.basename(result['processed_fits'])}")
         print(f"  显著性图像: {os.path.basename(result['significance_fits'])}")
+        print(f"  标记FITS文件: {os.path.basename(result['marked_fits'])}")
         print(f"  源目录: {os.path.basename(result['catalog_file'])}")
         print(f"  可视化: {os.path.basename(result['visualization'])}")
+
+        # 显示标记FITS文件的信息
+        print(f"\n标记FITS文件特性:")
+        print(f"  圆圈大小根据源面积(AREA)调整")
+        print(f"  最小圆圈半径: 3 像素")
+        print(f"  最大圆圈半径: 20 像素")
+        print(f"  正显著性源: 高亮圆圈")
+        print(f"  负显著性源: 暗色圆圈")
         
         # TheThresher特性说明
         print(f"\nTheThresher方法特性:")
