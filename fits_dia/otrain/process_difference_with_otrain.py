@@ -397,20 +397,19 @@ class OTrainProcessor:
                 size = result['size']
                 classification = result['classification']
 
-                # 根据像素数计算圆圈半径
-                # 使用平方根关系，确保圆圈大小合理
-                radius = max(3, int(np.sqrt(size / np.pi) * 1.5))
+                # 根据像素数计算圆圈半径 - 增大圆圈直径
+                # 使用更大的倍数，确保圆圈更明显
+                radius = max(8, int(np.sqrt(size / np.pi) * 3.0))  # 从1.5增加到3.0，最小半径从3增加到8
 
-                # 根据分类结果设置标记强度
+                # 根据分类结果设置标记强度和样式
                 if classification == 'real':
-                    # 真实瞬变天体使用更强的标记
-                    mark_intensity = np.max(image_data) * 0.8
+                    # 真实瞬变天体使用更强的标记，绘制实心圆圈
+                    mark_intensity = np.max(image_data) * 1.2  # 增强亮度
+                    self._draw_circle(marked_image, int(center_x), int(center_y), radius, mark_intensity, style='solid')
                 else:
-                    # 虚假检测使用较弱的标记
-                    mark_intensity = np.max(image_data) * 0.4
-
-                # 绘制圆圈
-                self._draw_circle(marked_image, int(center_x), int(center_y), radius, mark_intensity)
+                    # 虚假检测使用较弱的标记，绘制虚线圆圈
+                    mark_intensity = np.max(image_data) * 0.6  # 适中亮度
+                    self._draw_circle(marked_image, int(center_x), int(center_y), radius, mark_intensity, style='dashed')
 
             # 创建新的FITS头信息
             new_header = header.copy()
@@ -434,9 +433,9 @@ class OTrainProcessor:
         except Exception as e:
             logger.error(f"创建带标记FITS文件时出错: {str(e)}")
 
-    def _draw_circle(self, image, center_x, center_y, radius, intensity):
+    def _draw_circle(self, image, center_x, center_y, radius, intensity, style='solid'):
         """
-        在图像上绘制圆圈
+        在图像上绘制圆圈（优化版本，只在局部区域工作）
 
         Args:
             image (np.ndarray): 图像数据
@@ -444,26 +443,58 @@ class OTrainProcessor:
             center_y (int): 圆心Y坐标
             radius (int): 圆圈半径
             intensity (float): 标记强度
+            style (str): 圆圈样式，'solid'为实线，'dashed'为虚线
         """
         try:
             height, width = image.shape
 
-            # 创建圆圈掩码
-            y, x = np.ogrid[:height, :width]
+            # 边界检查
+            if center_x < 0 or center_x >= width or center_y < 0 or center_y >= height:
+                return
+
+            # 只在圆圈周围的局部区域工作，提高效率
+            margin = radius + 3
+            x_min = max(0, center_x - margin)
+            x_max = min(width, center_x + margin + 1)
+            y_min = max(0, center_y - margin)
+            y_max = min(height, center_y + margin + 1)
+
+            # 创建局部坐标网格
+            y_local, x_local = np.ogrid[y_min:y_max, x_min:x_max]
 
             # 计算到圆心的距离
-            distance = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+            distance = np.sqrt((x_local - center_x)**2 + (y_local - center_y)**2)
 
-            # 创建圆圈边界（环形）
-            # 内圆半径稍小，外圆半径稍大，形成圆环
-            inner_radius = max(1, radius - 1)
-            outer_radius = radius + 1
+            if style == 'solid':
+                # 实心圆圈（用于real分类）- 更细的线条
+                inner_radius = max(1, radius - 0.5)  # 减小线条粗细
+                outer_radius = radius + 0.5
+                circle_mask = (distance >= inner_radius) & (distance <= outer_radius)
 
-            # 圆环掩码
-            circle_mask = (distance >= inner_radius) & (distance <= outer_radius)
+                # 应用圆圈到局部区域
+                image[y_min:y_max, x_min:x_max][circle_mask] = intensity
 
-            # 应用标记
-            image[circle_mask] = intensity
+                # 在圆心添加一个小点作为中心标记
+                center_mask = distance <= 1.5
+                image[y_min:y_max, x_min:x_max][center_mask] = intensity * 0.8
+
+            elif style == 'dashed':
+                # 虚线圆圈（用于bogus分类）- 更细的线条
+                inner_radius = max(1, radius - 0.5)  # 减小线条粗细
+                outer_radius = radius + 0.5
+                circle_mask = (distance >= inner_radius) & (distance <= outer_radius)
+
+                # 创建虚线效果：只在特定角度范围内绘制
+                angle = np.arctan2(y_local - center_y, x_local - center_x)
+                # 将角度转换为0-2π范围
+                angle = (angle + 2 * np.pi) % (2 * np.pi)
+
+                # 创建虚线模式：每π/4弧度绘制，每π/4弧度空白
+                dash_pattern = ((angle % (np.pi/2)) < (np.pi/4))
+
+                # 应用虚线圆圈到局部区域
+                dashed_mask = circle_mask & dash_pattern
+                image[y_min:y_max, x_min:x_max][dashed_mask] = intensity
 
         except Exception as e:
             logger.error(f"绘制圆圈时出错: {str(e)}")
