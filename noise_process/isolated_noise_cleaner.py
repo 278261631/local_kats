@@ -40,10 +40,10 @@ class IsolatedNoiseCleaner:
         # 默认参数
         self.clean_params = {
             # 噪点检测参数
-            'zscore_threshold': 4.0,        # Z-score阈值
-            'isolation_radius': 3,          # 孤立性检测半径
-            'min_neighbors': 2,             # 最小邻居数量
-            'morphology_kernel_size': 3,    # 形态学核大小
+            'zscore_threshold': 3.0,        # Z-score阈值
+            'isolation_radius': 1,          # 孤立性检测半径
+            'min_neighbors': 1,             # 最小邻居数量
+            'morphology_kernel_size': 1,    # 形态学核大小
             
             # 清理参数
             'cleaning_method': 'median',    # 清理方法: median, gaussian, mean
