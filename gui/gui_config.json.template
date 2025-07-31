@@ -36,5 +36,9 @@
     "default_colormap": "gray",
     "auto_select_from_download_dir": true
   },
-  "url_template": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/"
+  "url_template_type": "standard",
+  "url_templates": {
+    "standard": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/",
+    "with_year": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{year_of_date}/{date}/{k_number}/"
+  }
 }

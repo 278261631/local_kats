@@ -41,7 +41,11 @@ class ConfigManager:
                 "default_colormap": "gray",
                 "auto_select_from_download_dir": True
             },
-            "url_template": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/"
+            "url_template_type": "standard",  # "standard" 或 "with_year"
+            "url_templates": {
+                "standard": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/",
+                "with_year": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{year_of_date}/{date}/{k_number}/"
+            }
         }
         
         # 加载配置
@@ -140,34 +144,82 @@ class ConfigManager:
                 self.config["display_settings"][key] = value
         self.save_config()
     
+    def get_url_template_type(self) -> str:
+        """获取URL模板类型"""
+        return self.config.get("url_template_type", "standard")
+
     def get_url_template(self) -> str:
-        """获取URL模板"""
-        return self.config["url_template"]
+        """获取当前URL模板"""
+        template_type = self.get_url_template_type()
+        templates = self.config.get("url_templates", {})
+
+        # 如果配置中没有新的模板格式，使用旧的配置兼容性
+        if not templates:
+            return self.config.get("url_template",
+                "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/")
+
+        return templates.get(template_type, templates.get("standard",
+            "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/"))
+
+    def get_url_templates(self) -> Dict[str, str]:
+        """获取所有URL模板"""
+        return self.config.get("url_templates", {
+            "standard": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/",
+            "with_year": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{year_of_date}/{date}/{k_number}/"
+        })
+
+    def update_url_template_type(self, template_type: str):
+        """更新URL模板类型"""
+        if template_type in ["standard", "with_year"]:
+            self.config["url_template_type"] = template_type
+            self.save_config()
+        else:
+            raise ValueError(f"无效的URL模板类型: {template_type}")
+
+    def get_url_template_options(self) -> Dict[str, str]:
+        """获取URL模板选项的显示名称"""
+        return {
+            "standard": "标准格式 (/{date}/)",
+            "with_year": "包含年份 (/{year}/{date}/)"
+        }
     
     def build_url(self, tel_name: str = None, date: str = None, k_number: str = None) -> str:
         """
         构建URL
-        
+
         Args:
             tel_name (str): 望远镜名称，如果为None则使用上次选择的值
             date (str): 日期，如果为None则使用上次选择的值
             k_number (str): K序号，如果为None则使用上次选择的值
-            
+
         Returns:
             str: 构建的URL
         """
         last_selected = self.get_last_selected()
-        
+
         tel_name = tel_name or last_selected["telescope_name"]
         date = date or last_selected["date"]
         k_number = k_number or last_selected["k_number"]
-        
+
         url_template = self.get_url_template()
-        return url_template.format(
-            tel_name=tel_name,
-            date=date,
-            k_number=k_number
-        )
+
+        # 准备格式化参数
+        format_params = {
+            'tel_name': tel_name,
+            'date': date,
+            'k_number': k_number
+        }
+
+        # 如果模板需要年份，添加年份参数
+        if '{year_of_date}' in url_template:
+            try:
+                # 从日期字符串中提取年份 (YYYYMMDD -> YYYY)
+                year_of_date = date[:4] if len(date) >= 4 else datetime.now().strftime('%Y')
+                format_params['year_of_date'] = year_of_date
+            except Exception:
+                format_params['year_of_date'] = datetime.now().strftime('%Y')
+
+        return url_template.format(**format_params)
     
     def validate_date(self, date_str: str) -> bool:
         """

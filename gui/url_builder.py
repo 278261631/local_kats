@@ -28,6 +28,7 @@ class URLBuilderFrame:
         self.date_var = tk.StringVar()
         self.k_number_var = tk.StringVar()
         self.url_var = tk.StringVar()
+        self.url_template_var = tk.StringVar()
         
         # 创建界面
         self._create_widgets()
@@ -92,42 +93,91 @@ class URLBuilderFrame:
         )
         self.k_number_combo.pack(side=tk.LEFT)
         
-        # 第二行：URL显示和控制
+        # 第二行：URL模板选择
         row2 = ttk.Frame(main_frame)
         row2.pack(fill=tk.X, pady=(5, 0))
-        
-        ttk.Label(row2, text="URL:").pack(side=tk.LEFT, padx=(0, 5))
-        
+
+        ttk.Label(row2, text="URL格式:").pack(side=tk.LEFT, padx=(0, 5))
+
+        # URL模板选择下拉框
+        template_options = self.config_manager.get_url_template_options()
+        self.template_combo = ttk.Combobox(
+            row2,
+            textvariable=self.url_template_var,
+            values=list(template_options.values()),
+            state="readonly",
+            width=25
+        )
+        self.template_combo.pack(side=tk.LEFT, padx=(0, 15))
+
+        # 第三行：URL显示和控制
+        row3 = ttk.Frame(main_frame)
+        row3.pack(fill=tk.X, pady=(5, 0))
+
+        ttk.Label(row3, text="URL:").pack(side=tk.LEFT, padx=(0, 5))
+
         # URL显示框
-        self.url_entry = ttk.Entry(row2, textvariable=self.url_var, state="readonly")
+        self.url_entry = ttk.Entry(row3, textvariable=self.url_var, state="readonly")
         self.url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        
+
         # 复制按钮
-        ttk.Button(row2, text="复制", command=self._copy_url, width=6).pack(side=tk.LEFT, padx=(0, 5))
-        
+        ttk.Button(row3, text="复制", command=self._copy_url, width=6).pack(side=tk.LEFT, padx=(0, 5))
+
         # 构建按钮
-        ttk.Button(row2, text="构建URL", command=self._update_url, width=8).pack(side=tk.RIGHT)
+        ttk.Button(row3, text="构建URL", command=self._update_url, width=8).pack(side=tk.RIGHT)
     
 
     
     def _load_last_selections(self):
         """加载上次的选择"""
         last_selected = self.config_manager.get_last_selected()
-        
+
         self.telescope_var.set(last_selected.get("telescope_name", "GY5"))
         self.date_var.set(last_selected.get("date", datetime.now().strftime('%Y%m%d')))
         self.k_number_var.set(last_selected.get("k_number", "K096"))
+
+        # 加载URL模板类型
+        current_template_type = self.config_manager.get_url_template_type()
+        template_options = self.config_manager.get_url_template_options()
+        template_display_name = template_options.get(current_template_type, template_options["standard"])
+        self.url_template_var.set(template_display_name)
     
     def _bind_events(self):
         """绑定事件"""
         self.telescope_var.trace('w', self._on_selection_change)
         self.date_var.trace('w', self._on_selection_change)
         self.k_number_var.trace('w', self._on_selection_change)
+        self.url_template_var.trace('w', self._on_template_change)
     
     def _on_selection_change(self, *args):
         """选择变化事件处理"""
         self._update_url()
         self._save_selections()
+
+    def _on_template_change(self, *args):
+        """URL模板变化事件处理"""
+        try:
+            # 根据显示名称找到对应的模板类型
+            template_options = self.config_manager.get_url_template_options()
+            selected_display_name = self.url_template_var.get()
+
+            # 找到对应的模板类型
+            template_type = None
+            for type_key, display_name in template_options.items():
+                if display_name == selected_display_name:
+                    template_type = type_key
+                    break
+
+            if template_type:
+                # 更新配置中的模板类型
+                self.config_manager.update_url_template_type(template_type)
+                self.logger.info(f"URL模板类型已更改为: {template_type}")
+
+                # 更新URL
+                self._update_url()
+
+        except Exception as e:
+            self.logger.error(f"更改URL模板类型失败: {str(e)}")
     
     def _update_url(self):
         """更新URL"""
