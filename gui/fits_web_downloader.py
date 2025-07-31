@@ -483,7 +483,7 @@ class FitsWebDownloaderGUI:
             self._download_with_progress(urls, download_dir)
 
             self._log("下载完成！")
-            self.root.after(0, lambda: messagebox.showinfo("成功", "文件下载完成！"))
+            # 不显示弹出提示框，只在日志中记录
 
         except Exception as e:
             error_msg = f"下载失败: {str(e)}"
@@ -492,27 +492,67 @@ class FitsWebDownloaderGUI:
         finally:
             # 重新启用下载按钮
             self.root.after(0, lambda: self.download_button.config(state="normal"))
-            self.root.after(0, lambda: self.status_label.config(text="就绪"))
+            self.root.after(0, lambda: self.status_label.config(text="下载完成"))
 
     def _download_with_progress(self, urls, download_dir):
         """带进度显示的下载"""
         completed = 0
+        total_files = len(urls)
 
         for i, url in enumerate(urls):
             try:
-                result = self.downloader.download_single_file(url, download_dir)
+                # 创建进度回调函数
+                def progress_callback(downloaded_bytes, total_bytes, filename):
+                    # 计算当前文件的进度
+                    if total_bytes:
+                        file_progress = (downloaded_bytes / total_bytes) * 100
+                        # 计算总体进度：已完成文件 + 当前文件进度
+                        overall_progress = (i + downloaded_bytes / total_bytes) / total_files * 100
+                    else:
+                        file_progress = 0
+                        overall_progress = i / total_files * 100
+
+                    # 更新界面（在主线程中执行）
+                    self.root.after(0, lambda: self._update_download_progress(
+                        overall_progress, i + 1, total_files, filename, file_progress, downloaded_bytes, total_bytes
+                    ))
+
+                result = self.downloader.download_single_file(url, download_dir, progress_callback)
                 completed += 1
 
-                # 更新进度条
-                progress = (i + 1) / len(urls) * 100
-                self.root.after(0, lambda p=progress: self.progress_var.set(p))
-                self.root.after(0, lambda c=completed, t=len(urls):
+                # 文件下载完成后的最终更新
+                final_progress = (i + 1) / total_files * 100
+                self.root.after(0, lambda p=final_progress: self.progress_var.set(p))
+                self.root.after(0, lambda c=completed, t=total_files:
                                self.status_label.config(text=f"已完成: {c}/{t}"))
 
-                self._log(f"[{i+1}/{len(urls)}] {result}")
+                self._log(f"[{i+1}/{total_files}] {result}")
 
             except Exception as e:
                 self._log(f"下载失败 {url}: {str(e)}")
+
+    def _update_download_progress(self, overall_progress, current_file, total_files, filename, file_progress, downloaded_bytes, total_bytes):
+        """更新下载进度显示"""
+        # 更新进度条
+        self.progress_var.set(overall_progress)
+
+        # 格式化文件大小
+        def format_bytes(bytes_val):
+            if bytes_val is None:
+                return "未知"
+            for unit in ['B', 'KB', 'MB', 'GB']:
+                if bytes_val < 1024.0:
+                    return f"{bytes_val:.1f}{unit}"
+                bytes_val /= 1024.0
+            return f"{bytes_val:.1f}TB"
+
+        # 更新状态标签
+        if total_bytes:
+            status_text = f"[{current_file}/{total_files}] {filename} - {file_progress:.1f}% ({format_bytes(downloaded_bytes)}/{format_bytes(total_bytes)})"
+        else:
+            status_text = f"[{current_file}/{total_files}] {filename} - {format_bytes(downloaded_bytes)}"
+
+        self.status_label.config(text=status_text)
 
     def _select_fits_file(self):
         """选择FITS文件进行查看"""
