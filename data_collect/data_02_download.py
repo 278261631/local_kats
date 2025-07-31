@@ -41,11 +41,17 @@ class FitsDownloader:
         """从URL中提取文件名"""
         return os.path.basename(url.split('?')[0])
     
-    def download_single_file(self, url, download_dir):
-        """下载单个文件"""
+    def download_single_file(self, url, download_dir, progress_callback=None):
+        """下载单个文件
+
+        Args:
+            url (str): 文件URL
+            download_dir (str): 下载目录
+            progress_callback (callable): 进度回调函数，接收参数 (downloaded_bytes, total_bytes, filename)
+        """
         filename = self.get_filename_from_url(url)
         file_path = os.path.join(download_dir, filename)
-        
+
         # 检查文件是否已存在
         if os.path.exists(file_path):
             file_size = os.path.getsize(file_path)
@@ -53,23 +59,34 @@ class FitsDownloader:
                 with self.stats_lock:
                     self.download_stats['skipped'] += 1
                 return f"跳过已存在文件: {filename}"
-        
+
         # 尝试下载文件
         for attempt in range(self.retry_times):
             try:
                 # 创建请求对象，设置User-Agent
                 req = urllib.request.Request(url)
                 req.add_header('User-Agent', 'MyCustomUserAgent')
-                
+
                 # 下载文件
                 with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                    # 获取文件总大小
+                    total_size = response.headers.get('Content-Length')
+                    total_size = int(total_size) if total_size else None
+
+                    downloaded_bytes = 0
+
                     with open(file_path, 'wb') as f:
                         while True:
                             chunk = response.read(8192)
                             if not chunk:
                                 break
                             f.write(chunk)
-                
+                            downloaded_bytes += len(chunk)
+
+                            # 调用进度回调
+                            if progress_callback:
+                                progress_callback(downloaded_bytes, total_size, filename)
+
                 # 验证下载的文件大小
                 if os.path.getsize(file_path) > 0:
                     with self.stats_lock:
@@ -77,7 +94,7 @@ class FitsDownloader:
                     return f"下载成功: {filename}"
                 else:
                     raise Exception("下载的文件大小为0")
-                    
+
             except Exception as e:
                 if attempt < self.retry_times - 1:
                     print(f"下载失败，重试 {attempt + 1}/{self.retry_times}: {filename} - {str(e)}")
