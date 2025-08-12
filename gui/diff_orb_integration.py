@@ -28,6 +28,17 @@ except ImportError as e:
 
 from filename_parser import FITSFilenameParser
 
+# 导入噪点处理模块
+try:
+    # 添加simple_noise目录到路径
+    simple_noise_dir = os.path.join(os.path.dirname(current_dir), 'simple_noise')
+    if os.path.exists(simple_noise_dir):
+        sys.path.insert(0, simple_noise_dir)
+    from simple_pixel_detector import process_fits_simple
+except ImportError as e:
+    logging.warning(f"无法导入噪点处理模块: {e}")
+    process_fits_simple = None
+
 
 class DiffOrbIntegration:
     """diff_orb集成类"""
@@ -167,11 +178,16 @@ class DiffOrbIntegration:
             self.logger.info(f"  待比较文件 (下载): {os.path.basename(download_file)}")
             self.logger.info(f"  输出目录: {output_dir}")
 
+            # 步骤0: 噪点处理
+            processed_download_file, processed_template_file = self._preprocess_noise_removal(
+                download_file, template_file, output_dir
+            )
+
             # 步骤1: 先进行图像对齐
             self.logger.info("步骤1: 执行图像对齐...")
             alignment_result = self.alignment_comparator.process_fits_comparison(
-                template_file,      # 参考文件（模板）
-                download_file,      # 待比较文件（下载）
+                processed_template_file,      # 参考文件（处理后的模板）
+                processed_download_file,      # 待比较文件（处理后的下载文件）
                 output_dir=output_dir,
                 show_visualization=False  # 在GUI中不显示matplotlib窗口
             )
@@ -329,6 +345,92 @@ class DiffOrbIntegration:
                 summary_lines.append(f"文件类型: {', '.join(file_types)}")
 
         return "\n".join(summary_lines)
+
+    def _preprocess_noise_removal(self, download_file: str, template_file: str, output_dir: str) -> Tuple[str, str]:
+        """
+        在diff操作之前对输入文件进行噪点处理
+
+        Args:
+            download_file (str): 下载文件路径
+            template_file (str): 模板文件路径
+            output_dir (str): 输出目录
+
+        Returns:
+            Tuple[str, str]: (处理后的下载文件路径, 处理后的模板文件路径)
+        """
+        if process_fits_simple is None:
+            self.logger.warning("噪点处理模块不可用，跳过噪点处理步骤")
+            return download_file, template_file
+
+        self.logger.info("步骤0: 执行噪点处理...")
+
+        processed_download_file = download_file
+        processed_template_file = template_file
+
+        try:
+            # 处理下载文件（观测文件）
+            self.logger.info(f"处理观测文件: {os.path.basename(download_file)}")
+            download_result = process_fits_simple(
+                download_file,
+                method='outlier',
+                threshold=4.0
+            )
+
+            if download_result and len(download_result) >= 3:
+                repaired_data, noise_data, noise_mask = download_result
+
+                # 保存处理后的观测文件
+                download_basename = os.path.splitext(os.path.basename(download_file))[0]
+                processed_download_file = os.path.join(output_dir, f"{download_basename}_noise_cleaned.fits")
+
+                # 读取原始文件的header
+                from astropy.io import fits
+                with fits.open(download_file) as hdul:
+                    header = hdul[0].header.copy()
+
+                # 保存处理后的数据
+                fits.writeto(processed_download_file, repaired_data, header=header, overwrite=True)
+                self.logger.info(f"观测文件噪点处理完成，保存到: {os.path.basename(processed_download_file)}")
+            else:
+                self.logger.warning("观测文件噪点处理失败，使用原始文件")
+
+        except Exception as e:
+            self.logger.error(f"处理观测文件时出错: {str(e)}")
+            self.logger.warning("使用原始观测文件")
+
+        try:
+            # 处理模板文件
+            self.logger.info(f"处理模板文件: {os.path.basename(template_file)}")
+            template_result = process_fits_simple(
+                template_file,
+                method='outlier',
+                threshold=4.0
+            )
+
+            if template_result and len(template_result) >= 3:
+                repaired_data, noise_data, noise_mask = template_result
+
+                # 保存处理后的模板文件
+                template_basename = os.path.splitext(os.path.basename(template_file))[0]
+                processed_template_file = os.path.join(output_dir, f"{template_basename}_noise_cleaned.fits")
+
+                # 读取原始文件的header
+                from astropy.io import fits
+                with fits.open(template_file) as hdul:
+                    header = hdul[0].header.copy()
+
+                # 保存处理后的数据
+                fits.writeto(processed_template_file, repaired_data, header=header, overwrite=True)
+                self.logger.info(f"模板文件噪点处理完成，保存到: {os.path.basename(processed_template_file)}")
+            else:
+                self.logger.warning("模板文件噪点处理失败，使用原始文件")
+
+        except Exception as e:
+            self.logger.error(f"处理模板文件时出错: {str(e)}")
+            self.logger.warning("使用原始模板文件")
+
+        self.logger.info("噪点处理步骤完成")
+        return processed_download_file, processed_template_file
 
 
 # 测试代码
