@@ -45,6 +45,8 @@ class FitsWebDownloaderGUI:
         # 数据存储
         self.fits_files_list = []  # [(filename, url, size)]
         self.download_directory = ""
+        self.region_buttons = []  # 存储天区按钮引用
+        self.region_button_states = {}  # 存储天区按钮的选中状态
 
         # 创建界面
         self._create_widgets()
@@ -145,7 +147,8 @@ class FitsWebDownloaderGUI:
         region_select_frame = ttk.Frame(select_frame)
         region_select_frame.pack(fill=tk.X)
 
-        # 创建3行3列的天区按钮
+        # 创建3行3列的天区按钮（默认禁用）
+        self.region_buttons = []
         for row in range(3):
             row_frame = ttk.Frame(region_select_frame)
             row_frame.pack(fill=tk.X, pady=(2, 0))
@@ -153,8 +156,10 @@ class FitsWebDownloaderGUI:
             for col in range(3):
                 region_index = row * 3 + col + 1  # 1-9
                 region_name = f"天区-{region_index}"
-                ttk.Button(row_frame, text=region_name, width=8,
-                          command=lambda idx=region_index: self._select_by_region(idx)).pack(side=tk.LEFT, padx=(0, 2))
+                btn = ttk.Button(row_frame, text=region_name, width=12, state="disabled",
+                               command=lambda idx=region_index: self._select_by_region(idx))
+                btn.pack(side=tk.LEFT, padx=(0, 2))
+                self.region_buttons.append(btn)
         
         # 下载控制区域
         download_frame = ttk.LabelFrame(self.scan_frame, text="下载设置", padding=10)
@@ -311,6 +316,9 @@ class FitsWebDownloaderGUI:
         for item in self.file_tree.get_children():
             self.file_tree.delete(item)
 
+        # 重置天区按钮状态
+        self._reset_region_buttons()
+
         # 在新线程中执行扫描
         thread = threading.Thread(target=self._scan_thread, args=(url,))
         thread.daemon = True
@@ -349,6 +357,66 @@ class FitsWebDownloaderGUI:
             size_str = self.scanner.format_file_size(size)
             item = self.file_tree.insert("", "end", text="☐", values=(filename, size_str, url))
 
+        # 更新天区按钮
+        self._update_region_buttons()
+
+    def _update_region_buttons(self):
+        """根据扫描结果更新天区按钮"""
+        # 提取文件名中的K编号
+        k_numbers = set()
+        for filename, url, size in self.fits_files_list:
+            # 从文件名中提取K编号，例如：K025-1, K036-2 等
+            import re
+            match = re.search(r'K(\d{3})-(\d)', filename)
+            if match:
+                k_base = match.group(1)  # 例如：025
+                region_idx = int(match.group(2))  # 例如：1
+                k_numbers.add((region_idx, f"K{k_base}-{region_idx}"))
+
+        # 更新按钮状态和文字
+        for i, btn in enumerate(self.region_buttons):
+            region_index = i + 1  # 1-9
+            # 查找对应的K编号
+            k_text = None
+            for idx, k_name in k_numbers:
+                if idx == region_index:
+                    k_text = k_name
+                    break
+
+            if k_text:
+                # 更新按钮文字和状态
+                btn.config(text=k_text, state="normal")
+                # 初始化按钮选中状态
+                if k_text not in self.region_button_states:
+                    self.region_button_states[k_text] = False
+                # 更新按钮外观
+                self._update_button_appearance(btn, k_text)
+            else:
+                btn.config(text=f"天区-{region_index}", state="disabled")
+                # 清除禁用按钮的状态
+                old_text = btn.cget("text")
+                if old_text in self.region_button_states:
+                    del self.region_button_states[old_text]
+
+    def _reset_region_buttons(self):
+        """重置天区按钮状态"""
+        # 清空选中状态
+        self.region_button_states.clear()
+
+        for i, btn in enumerate(self.region_buttons):
+            region_index = i + 1
+            btn.config(text=f"天区-{region_index}", state="disabled")
+
+    def _update_button_appearance(self, btn, k_text):
+        """更新按钮外观以显示选中状态"""
+        is_selected = self.region_button_states.get(k_text, False)
+        if is_selected:
+            # 选中状态：添加复选标记
+            btn.config(text=f"☑ {k_text}")
+        else:
+            # 未选中状态：显示空复选框
+            btn.config(text=f"☐ {k_text}")
+
     def _on_tree_click(self, event):
         """处理树形控件点击事件"""
         region = self.file_tree.identify_region(event.x, event.y)
@@ -378,24 +446,54 @@ class FitsWebDownloaderGUI:
             self.file_tree.item(item, text=new_text)
 
     def _select_by_region(self, region_index):
-        """按天区索引选择文件"""
-        region_pattern = f"天区-{region_index}"
+        """按天区索引选择文件（复选框样式）"""
+        # 获取对应按钮
+        btn = self.region_buttons[region_index - 1]
+
+        # 如果按钮被禁用，不执行选择
+        if btn.cget("state") == "disabled":
+            return
+
+        # 从按钮文字中提取K编号（去掉复选框符号）
+        btn_text = btn.cget("text")
+        if btn_text.startswith("☑ "):
+            k_text = btn_text[2:]  # 去掉"☑ "
+        elif btn_text.startswith("☐ "):
+            k_text = btn_text[2:]  # 去掉"☐ "
+        else:
+            k_text = btn_text  # 兼容没有复选框符号的情况
+
+        # 切换按钮选中状态
+        current_state = self.region_button_states.get(k_text, False)
+        new_state = not current_state
+        self.region_button_states[k_text] = new_state
+
+        # 更新按钮外观
+        self._update_button_appearance(btn, k_text)
+
+        # 根据新状态选择或取消选择对应文件
         selected_count = 0
+        deselected_count = 0
 
-        # 先取消所有选择
-        self._deselect_all()
-
-        # 选择包含指定天区索引的文件
         for item in self.file_tree.get_children():
             values = self.file_tree.item(item, "values")
             filename = values[0]  # 文件名在第一列
 
-            if region_pattern in filename:
-                self.file_tree.item(item, text="☑")
-                selected_count += 1
+            if k_text in filename:
+                if new_state:
+                    # 选中状态：选择文件
+                    self.file_tree.item(item, text="☑")
+                    selected_count += 1
+                else:
+                    # 未选中状态：取消选择文件
+                    self.file_tree.item(item, text="☐")
+                    deselected_count += 1
 
         # 记录日志
-        self._log(f"已选择包含 '{region_pattern}' 的文件，共 {selected_count} 个")
+        if new_state:
+            self._log(f"已选择包含 '{k_text}' 的文件，共 {selected_count} 个")
+        else:
+            self._log(f"已取消选择包含 '{k_text}' 的文件，共 {deselected_count} 个")
             
     def _select_download_dir(self):
         """选择下载根目录"""
