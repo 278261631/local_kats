@@ -521,8 +521,12 @@ class FitsWebDownloaderGUI:
         self._log(f"选中天区 {k_text} 的文件cp命令:")
 
         for filename in selected_files:
+            # URL解码文件名，去除%20等编码字符
+            import urllib.parse
+            decoded_filename = urllib.parse.unquote(filename)
+
             # 构建原始文件路径
-            original_file_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/{filename}'
+            original_file_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/{decoded_filename}'
 
             # 构建服务调试路径
             serv_debug_path = f'/data/{system_name}/20251332/{sky_region_prefix}/'
@@ -530,7 +534,8 @@ class FitsWebDownloaderGUI:
             # 生成cp命令
             cp_command = f'cp "{original_file_path}" {serv_debug_path}'
 
-            self._log(cp_command)
+            # 使用不带时间前缀的日志输出cp命令
+            self._log_plain(cp_command)
 
         self._log("=" * 50)
 
@@ -942,6 +947,16 @@ class FitsWebDownloaderGUI:
 
         # 同时输出到控制台
         print(log_message.strip())
+
+    def _log_plain(self, message):
+        """添加不带时间前缀的日志消息"""
+        log_message = f"{message}\n"
+
+        # 在主线程中更新日志显示
+        self.root.after(0, lambda: self._append_log(log_message))
+
+        # 同时输出到控制台
+        print(message)
 
     def _append_log(self, message):
         """在日志文本框中添加消息"""
