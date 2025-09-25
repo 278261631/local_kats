@@ -8,9 +8,94 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
 import logging
-from typing import Callable, Optional
+import requests
+import re
+from urllib.parse import urljoin
+from bs4 import BeautifulSoup
+from typing import Callable, Optional, List
 from config_manager import ConfigManager
 from calendar_widget import CalendarDialog
+
+
+class RegionScanner:
+    """天区扫描器 - 从URL中获取可用的天区列表"""
+
+    def __init__(self, timeout=10):
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        self.logger = logging.getLogger(__name__)
+
+    def scan_available_regions(self, base_url: str) -> List[str]:
+        """
+        扫描指定URL下可用的天区列表
+
+        Args:
+            base_url (str): 基础URL，不包含天区信息
+
+        Returns:
+            List[str]: 可用的天区列表，如 ['K001', 'K002', ...]
+        """
+        try:
+            self.logger.info(f"开始扫描天区: {base_url}")
+
+            # 发送HTTP请求
+            response = self.session.get(base_url, timeout=self.timeout)
+            response.raise_for_status()
+
+            # 解析HTML内容
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            regions = []
+
+            # 查找所有链接
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+
+                # 检查是否是天区目录（K开头的目录）
+                if self._is_region_directory(href):
+                    region_name = self._extract_region_name(href)
+                    if region_name and region_name not in regions:
+                        regions.append(region_name)
+                        self.logger.debug(f"找到天区: {region_name}")
+
+            # 排序天区列表
+            regions.sort()
+
+            self.logger.info(f"扫描完成，找到 {len(regions)} 个天区")
+            return regions
+
+        except requests.RequestException as e:
+            self.logger.error(f"网络请求失败: {str(e)}")
+            raise
+        except Exception as e:
+            self.logger.error(f"扫描过程出错: {str(e)}")
+            raise
+
+    def _is_region_directory(self, href: str) -> bool:
+        """检查链接是否是天区目录"""
+        # 移除查询参数和片段
+        clean_href = href.split('?')[0].split('#')[0]
+
+        # 提取目录名
+        dir_name = clean_href.strip('/').split('/')[-1]
+
+        # 检查是否符合天区命名规则（K开头，后跟数字）
+        pattern = r'^K\d{3}$'
+        return bool(re.match(pattern, dir_name, re.IGNORECASE))
+
+    def _extract_region_name(self, href: str) -> str:
+        """从href中提取天区名称"""
+        # 移除查询参数和片段
+        clean_href = href.split('?')[0].split('#')[0]
+
+        # 提取目录名
+        dir_name = clean_href.strip('/').split('/')[-1]
+
+        # 返回大写的天区名称
+        return dir_name.upper()
 
 
 class URLBuilderFrame:
@@ -20,27 +105,38 @@ class URLBuilderFrame:
         self.parent_frame = parent_frame
         self.config_manager = config_manager
         self.on_url_change = on_url_change  # URL变化时的回调函数
-        
+
         self.logger = logging.getLogger(__name__)
-        
+
+        # 创建天区扫描器
+        self.region_scanner = RegionScanner()
+
         # 创建界面变量
         self.telescope_var = tk.StringVar()
         self.date_var = tk.StringVar()
         self.k_number_var = tk.StringVar()
         self.url_var = tk.StringVar()
         self.url_template_var = tk.StringVar()
-        
+
+        # 天区相关变量
+        self.available_regions = []
+        self.is_scanning_regions = False
+        self.last_scanned_url = ""  # 记录上次扫描的URL，避免重复扫描
+
         # 创建界面
         self._create_widgets()
-        
+
         # 加载上次的选择
         self._load_last_selections()
-        
+
         # 绑定变化事件
         self._bind_events()
-        
+
         # 初始构建URL
         self._update_url()
+
+        # 初始化后触发一次自动扫描
+        self.parent_frame.after(1000, self._auto_scan_regions)
     
     def _create_widgets(self):
         """创建界面组件"""
@@ -81,17 +177,36 @@ class URLBuilderFrame:
 
         # 今天按钮
         ttk.Button(row1, text="今天", command=self._set_today, width=6).pack(side=tk.LEFT, padx=(0, 15))
-        
+
         # K序号选择
         ttk.Label(row1, text="天区:").pack(side=tk.LEFT, padx=(0, 5))
+
+        # 天区选择框架
+        region_frame = ttk.Frame(row1)
+        region_frame.pack(side=tk.LEFT, padx=(0, 5))
+
         self.k_number_combo = ttk.Combobox(
-            row1,
+            region_frame,
             textvariable=self.k_number_var,
             values=self.config_manager.get_k_numbers(),
             state="readonly",
             width=8
         )
         self.k_number_combo.pack(side=tk.LEFT)
+
+        # 扫描天区按钮
+        self.scan_regions_button = ttk.Button(
+            region_frame,
+            text="🔍",
+            width=3,
+            command=self._manual_scan_regions,
+            state="disabled"  # 初始状态禁用，需要先选择望远镜和日期
+        )
+        self.scan_regions_button.pack(side=tk.LEFT, padx=(2, 0))
+
+        # 天区状态标签
+        self.region_status_label = ttk.Label(row1, text="", foreground="gray")
+        self.region_status_label.pack(side=tk.LEFT, padx=(5, 0))
         
         # 第二行：URL模板选择
         row2 = ttk.Frame(main_frame)
@@ -144,11 +259,23 @@ class URLBuilderFrame:
     
     def _bind_events(self):
         """绑定事件"""
-        self.telescope_var.trace('w', self._on_selection_change)
-        self.date_var.trace('w', self._on_selection_change)
+        self.telescope_var.trace('w', self._on_telescope_or_date_change)
+        self.date_var.trace('w', self._on_telescope_or_date_change)
         self.k_number_var.trace('w', self._on_selection_change)
         self.url_template_var.trace('w', self._on_template_change)
     
+    def _on_telescope_or_date_change(self, *args):
+        """望远镜或日期变化事件处理"""
+        # 检查是否可以启用天区扫描按钮
+        self._update_scan_button_state()
+
+        # 自动触发天区扫描
+        self._auto_scan_regions()
+
+        # 更新URL和保存选择
+        self._update_url()
+        self._save_selections()
+
     def _on_selection_change(self, *args):
         """选择变化事件处理"""
         self._update_url()
@@ -249,7 +376,146 @@ class URLBuilderFrame:
         except Exception as e:
             self.logger.error(f"显示日历对话框失败: {str(e)}")
             messagebox.showerror("错误", f"显示日历失败: {str(e)}")
-    
+
+    def _update_scan_button_state(self):
+        """更新天区扫描按钮状态"""
+        tel_name = self.telescope_var.get()
+        date = self.date_var.get()
+
+        # 只有当望远镜和日期都选择了才启用扫描按钮
+        if tel_name and date and self.config_manager.validate_date(date) and not self.is_scanning_regions:
+            self.scan_regions_button.config(state="normal")
+        else:
+            self.scan_regions_button.config(state="disabled")
+
+    def _auto_scan_regions(self):
+        """自动扫描天区（在日期或望远镜变化时触发）"""
+        tel_name = self.telescope_var.get()
+        date = self.date_var.get()
+
+        # 只有当望远镜和日期都有效时才自动扫描
+        if tel_name and date and self.config_manager.validate_date(date) and not self.is_scanning_regions:
+            # 延迟一点时间执行，避免用户快速切换时频繁扫描
+            self.parent_frame.after(500, self._scan_regions)
+
+    def _manual_scan_regions(self):
+        """手动扫描天区（点击按钮触发）"""
+        self._manual_scan = True
+        # 清除上次扫描的URL，强制重新扫描
+        self.last_scanned_url = ""
+        self._scan_regions()
+
+    def _scan_regions(self):
+        """扫描可用的天区"""
+        if self.is_scanning_regions:
+            return
+
+        tel_name = self.telescope_var.get()
+        date = self.date_var.get()
+
+        if not tel_name or not date:
+            # 自动扫描时不显示警告，只有手动点击时才显示
+            if hasattr(self, '_manual_scan') and self._manual_scan:
+                messagebox.showwarning("警告", "请先选择望远镜和日期")
+            return
+
+        if not self.config_manager.validate_date(date):
+            # 自动扫描时不显示警告，只有手动点击时才显示
+            if hasattr(self, '_manual_scan') and self._manual_scan:
+                messagebox.showwarning("警告", "日期格式无效")
+            return
+
+        # 构建不包含天区的基础URL
+        base_url = self._build_base_url(tel_name, date)
+
+        # 检查是否与上次扫描的URL相同，避免重复扫描
+        if base_url == self.last_scanned_url:
+            return
+
+        # 在后台线程中扫描天区
+        import threading
+
+        def scan_thread():
+            try:
+                self.is_scanning_regions = True
+                self.parent_frame.after(0, lambda: self.region_status_label.config(text="扫描中...", foreground="blue"))
+                self.parent_frame.after(0, lambda: self.scan_regions_button.config(state="disabled"))
+
+                # 扫描天区
+                regions = self.region_scanner.scan_available_regions(base_url)
+
+                # 记录扫描的URL
+                self.last_scanned_url = base_url
+
+                # 更新界面
+                self.parent_frame.after(0, lambda: self._update_region_list(regions))
+
+            except Exception as e:
+                error_msg = f"扫描天区失败: {str(e)}"
+                self.logger.error(error_msg)
+                # 只有手动扫描时才显示错误对话框
+                if hasattr(self, '_manual_scan') and self._manual_scan:
+                    self.parent_frame.after(0, lambda: messagebox.showerror("错误", error_msg))
+                self.parent_frame.after(0, lambda: self.region_status_label.config(text="扫描失败", foreground="red"))
+            finally:
+                self.is_scanning_regions = False
+                self.parent_frame.after(0, self._update_scan_button_state)
+                # 重置手动扫描标志
+                if hasattr(self, '_manual_scan'):
+                    self._manual_scan = False
+
+        thread = threading.Thread(target=scan_thread, daemon=True)
+        thread.start()
+
+    def _build_base_url(self, tel_name: str, date: str) -> str:
+        """构建不包含天区的基础URL"""
+        url_template = self.config_manager.get_url_template()
+
+        # 准备格式化参数（不包含k_number）
+        format_params = {
+            'tel_name': tel_name,
+            'date': date,
+            'k_number': ''  # 临时占位符
+        }
+
+        # 如果模板需要年份，添加年份参数
+        if '{year_of_date}' in url_template:
+            try:
+                year_of_date = date[:4] if len(date) >= 4 else datetime.now().strftime('%Y')
+                format_params['year_of_date'] = year_of_date
+            except Exception:
+                format_params['year_of_date'] = datetime.now().strftime('%Y')
+
+        # 构建URL并移除k_number部分
+        full_url = url_template.format(**format_params)
+        # 移除末尾的空字符串部分（k_number占位符）
+        base_url = full_url.rstrip('/')
+
+        return base_url
+
+    def _update_region_list(self, regions: List[str]):
+        """更新天区列表"""
+        self.available_regions = regions
+
+        if regions:
+            # 更新下拉框选项
+            self.k_number_combo['values'] = regions
+
+            # 如果当前选择的天区不在新列表中，清空选择
+            current_selection = self.k_number_var.get()
+            if current_selection not in regions:
+                self.k_number_var.set('')
+
+            # 更新状态标签
+            self.region_status_label.config(
+                text=f"找到 {len(regions)} 个天区",
+                foreground="green"
+            )
+
+            self.logger.info(f"更新天区列表: {regions}")
+        else:
+            self.region_status_label.config(text="未找到天区", foreground="orange")
+
     def _copy_url(self):
         """复制URL到剪贴板"""
         try:
