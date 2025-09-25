@@ -132,10 +132,29 @@ class FitsWebDownloaderGUI:
         # 选择控制按钮
         select_frame = ttk.Frame(list_frame)
         select_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        ttk.Button(select_frame, text="全选", command=self._select_all).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(select_frame, text="全不选", command=self._deselect_all).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(select_frame, text="反选", command=self._invert_selection).pack(side=tk.LEFT)
+
+        # 第一行：基本选择按钮
+        basic_select_frame = ttk.Frame(select_frame)
+        basic_select_frame.pack(fill=tk.X, pady=(0, 2))
+
+        ttk.Button(basic_select_frame, text="全选", command=self._select_all).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(basic_select_frame, text="全不选", command=self._deselect_all).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(basic_select_frame, text="反选", command=self._invert_selection).pack(side=tk.LEFT, padx=(0, 10))
+
+        # 天区索引选择按钮 - 3x3网格布局
+        region_select_frame = ttk.Frame(select_frame)
+        region_select_frame.pack(fill=tk.X)
+
+        # 创建3行3列的天区按钮
+        for row in range(3):
+            row_frame = ttk.Frame(region_select_frame)
+            row_frame.pack(fill=tk.X, pady=(2, 0))
+
+            for col in range(3):
+                region_index = row * 3 + col + 1  # 1-9
+                region_name = f"天区-{region_index}"
+                ttk.Button(row_frame, text=region_name, width=8,
+                          command=lambda idx=region_index: self._select_by_region(idx)).pack(side=tk.LEFT, padx=(0, 2))
         
         # 下载控制区域
         download_frame = ttk.LabelFrame(self.scan_frame, text="下载设置", padding=10)
@@ -357,6 +376,26 @@ class FitsWebDownloaderGUI:
             current_text = self.file_tree.item(item, "text")
             new_text = "☑" if current_text == "☐" else "☐"
             self.file_tree.item(item, text=new_text)
+
+    def _select_by_region(self, region_index):
+        """按天区索引选择文件"""
+        region_pattern = f"天区-{region_index}"
+        selected_count = 0
+
+        # 先取消所有选择
+        self._deselect_all()
+
+        # 选择包含指定天区索引的文件
+        for item in self.file_tree.get_children():
+            values = self.file_tree.item(item, "values")
+            filename = values[0]  # 文件名在第一列
+
+            if region_pattern in filename:
+                self.file_tree.item(item, text="☑")
+                selected_count += 1
+
+        # 记录日志
+        self._log(f"已选择包含 '{region_pattern}' 的文件，共 {selected_count} 个")
             
     def _select_download_dir(self):
         """选择下载根目录"""
