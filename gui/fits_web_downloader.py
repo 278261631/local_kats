@@ -551,10 +551,10 @@ class FitsWebDownloaderGUI:
             decoded_filename_no_ext = decoded_filename.replace(".fit", "").replace("_No Filter_", "_C_")
 
             # 构建原始文件路径
-            original_file_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/{decoded_filename}'
-            fix_cat_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/redux/{decoded_filename_no_ext}_pp.diff1.fixedsrc.cat'
-            mo_cat_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/redux/{decoded_filename_no_ext}_pp.diff1.mo.cat'
-            mpc80file = f'/data/{system_name}/{date_str}/{sky_region_prefix}/redux/{k_text}_mpc.80'
+            original_file_path = f'/data/{system_name}/20251332/{sky_region_prefix}/{decoded_filename}'
+            fix_cat_path = f'/data/{system_name}/20251332/{sky_region_prefix}/redux/{decoded_filename_no_ext}_pp.diff1.fixedsrc.cat'
+            mo_cat_path = f'/data/{system_name}/20251332/{sky_region_prefix}/redux/{decoded_filename_no_ext}_pp.diff1.mo.cat'
+
             # 生成autoredux命令
             redux_command = f'python autoredux_pool_server.py  "{original_file_path}" "{system_name}"'
             self._log_plain(redux_command)
@@ -568,9 +568,40 @@ class FitsWebDownloaderGUI:
             find_mo_command = f'timeout 1800 python find_mo.py "{mo_cat_path}" '
             self._log_plain(find_mo_command)
             self._log_plain(" ")
-            astcheck_command = f'timeout 1800 python astid.py {mpc80file}'
-            self._log_plain(astcheck_command)
+        mpc80file_debug = f'/data/{system_name}/20251332/{sky_region_prefix}/redux/{k_text}_mpc.80'
+        astcheck_command = f'timeout 1800 python astid.py "{mpc80file_debug}"'
+        self._log_plain(astcheck_command)
+        self._log_plain(" ")
+        self._log("=" * 50)
+
+        for filename in selected_files:
+            # URL解码文件名，去除%20等编码字符
+            import urllib.parse
+            decoded_filename = urllib.parse.unquote(filename)
+            decoded_filename_no_ext = decoded_filename.replace(".fit", "").replace("_No Filter_", "_C_")
+
+            # 构建原始文件路径
+            original_file_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/{decoded_filename}'
+            fix_cat_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/redux/{decoded_filename_no_ext}_pp.diff1.fixedsrc.cat'
+            mo_cat_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/redux/{decoded_filename_no_ext}_pp.diff1.mo.cat'
+
+            # 生成autoredux命令
+            redux_command = f'python autoredux_pool_server.py  "{original_file_path}" "{system_name}"'
+            self._log_plain(redux_command)
             self._log_plain(" ")
+            self._log_plain("cd redux")
+            self._log_plain(" ")
+
+            find_fix_command = f'timeout 1800 python find_fixedsrc.py "{fix_cat_path}" '
+            self._log_plain(find_fix_command)
+            self._log_plain(" ")
+            find_mo_command = f'timeout 1800 python find_mo.py "{mo_cat_path}" '
+            self._log_plain(find_mo_command)
+            self._log_plain(" ")
+        mpc80file = f'/data/{system_name}/{date_str}/{sky_region_prefix}/redux/{k_text}_mpc.80'
+        astcheck_command = f'timeout 1800 python astid.py "{mpc80file}"'
+        self._log_plain(astcheck_command)
+        self._log_plain(" ")
         self._log("=" * 50)
 
     def _select_download_dir(self):
