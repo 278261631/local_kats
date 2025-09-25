@@ -100,11 +100,12 @@ class RegionScanner:
 
 class URLBuilderFrame:
     """URL构建器界面组件"""
-    
-    def __init__(self, parent_frame, config_manager: ConfigManager, on_url_change: Optional[Callable] = None):
+
+    def __init__(self, parent_frame, config_manager: ConfigManager, on_url_change: Optional[Callable] = None, on_scan_fits: Optional[Callable] = None):
         self.parent_frame = parent_frame
         self.config_manager = config_manager
         self.on_url_change = on_url_change  # URL变化时的回调函数
+        self.on_scan_fits = on_scan_fits  # 扫描FITS文件时的回调函数
 
         self.logger = logging.getLogger(__name__)
 
@@ -137,27 +138,27 @@ class URLBuilderFrame:
 
         # 初始化后触发一次自动扫描
         self.parent_frame.after(1000, self._auto_scan_regions)
-    
+
     def _create_widgets(self):
         """创建界面组件"""
         # 主框架
         main_frame = ttk.LabelFrame(self.parent_frame, text="URL构建器", padding=10)
         main_frame.pack(fill=tk.X, pady=(0, 10))
-        
+
         # 第一行：望远镜选择
         row1 = ttk.Frame(main_frame)
         row1.pack(fill=tk.X, pady=(0, 5))
-        
+
         ttk.Label(row1, text="望远镜:").pack(side=tk.LEFT, padx=(0, 5))
         self.telescope_combo = ttk.Combobox(
-            row1, 
+            row1,
             textvariable=self.telescope_var,
             values=self.config_manager.get_telescope_names(),
             state="readonly",
             width=8
         )
         self.telescope_combo.pack(side=tk.LEFT, padx=(0, 15))
-        
+
         # 日期选择
         ttk.Label(row1, text="日期:").pack(side=tk.LEFT, padx=(0, 5))
 
@@ -207,7 +208,11 @@ class URLBuilderFrame:
         # 天区状态标签
         self.region_status_label = ttk.Label(row1, text="", foreground="gray")
         self.region_status_label.pack(side=tk.LEFT, padx=(5, 0))
-        
+
+        # 扫描FITS文件按钮
+        self.scan_fits_button = ttk.Button(row1, text="扫描FITS文件", command=self._on_scan_fits_clicked)
+        self.scan_fits_button.pack(side=tk.LEFT, padx=(15, 0))
+
         # 第二行：URL模板选择
         row2 = ttk.Frame(main_frame)
         row2.pack(fill=tk.X, pady=(5, 0))
@@ -240,9 +245,9 @@ class URLBuilderFrame:
 
         # 构建按钮
         ttk.Button(row3, text="构建URL", command=self._update_url, width=8).pack(side=tk.RIGHT)
-    
 
-    
+
+
     def _load_last_selections(self):
         """加载上次的选择"""
         last_selected = self.config_manager.get_last_selected()
@@ -256,14 +261,14 @@ class URLBuilderFrame:
         template_options = self.config_manager.get_url_template_options()
         template_display_name = template_options.get(current_template_type, template_options["standard"])
         self.url_template_var.set(template_display_name)
-    
+
     def _bind_events(self):
         """绑定事件"""
         self.telescope_var.trace('w', self._on_telescope_or_date_change)
         self.date_var.trace('w', self._on_telescope_or_date_change)
         self.k_number_var.trace('w', self._on_selection_change)
         self.url_template_var.trace('w', self._on_template_change)
-    
+
     def _on_telescope_or_date_change(self, *args):
         """望远镜或日期变化事件处理"""
         # 检查是否可以启用天区扫描按钮
@@ -305,7 +310,7 @@ class URLBuilderFrame:
 
         except Exception as e:
             self.logger.error(f"更改URL模板类型失败: {str(e)}")
-    
+
     def _update_url(self):
         """更新URL"""
         try:
@@ -313,31 +318,31 @@ class URLBuilderFrame:
             tel_name = self.telescope_var.get()
             date = self.date_var.get()
             k_number = self.k_number_var.get()
-            
+
             if not tel_name or not date or not k_number:
                 self.url_var.set("请选择所有参数")
                 return
-            
+
             # 验证日期格式
             if not self.config_manager.validate_date(date):
                 self.url_var.set("日期格式无效 (需要YYYYMMDD)")
                 return
-            
+
             # 构建URL
             url = self.config_manager.build_url(tel_name, date, k_number)
             self.url_var.set(url)
-            
+
             # 调用回调函数
             if self.on_url_change:
                 self.on_url_change(url)
-                
+
             self.logger.info(f"URL已更新: {url}")
-            
+
         except Exception as e:
             error_msg = f"构建URL失败: {str(e)}"
             self.url_var.set(error_msg)
             self.logger.error(error_msg)
-    
+
     def _save_selections(self):
         """保存当前选择"""
         try:
@@ -348,7 +353,7 @@ class URLBuilderFrame:
             )
         except Exception as e:
             self.logger.error(f"保存选择失败: {str(e)}")
-    
+
     def _set_today(self):
         """设置为今天的日期"""
         today = datetime.now().strftime('%Y%m%d')
@@ -528,11 +533,11 @@ class URLBuilderFrame:
                 messagebox.showwarning("警告", "没有有效的URL可复制")
         except Exception as e:
             messagebox.showerror("错误", f"复制失败: {str(e)}")
-    
+
     def get_current_url(self) -> str:
         """获取当前构建的URL"""
         return self.url_var.get()
-    
+
     def get_current_selections(self) -> dict:
         """获取当前选择的参数"""
         return {
@@ -540,7 +545,7 @@ class URLBuilderFrame:
             "date": self.date_var.get(),
             "k_number": self.k_number_var.get()
         }
-    
+
     def set_selections(self, telescope_name: str = None, date: str = None, k_number: str = None):
         """设置选择的参数"""
         if telescope_name:
@@ -549,72 +554,87 @@ class URLBuilderFrame:
             self.date_var.set(date)
         if k_number:
             self.k_number_var.set(k_number)
-    
+
     def validate_current_selections(self) -> tuple:
         """
         验证当前选择
-        
+
         Returns:
             tuple: (是否有效, 错误信息)
         """
         tel_name = self.telescope_var.get()
         date = self.date_var.get()
         k_number = self.k_number_var.get()
-        
+
         if not tel_name:
             return False, "请选择望远镜"
-        
+
         if not self.config_manager.validate_telescope_name(tel_name):
             return False, f"无效的望远镜名称: {tel_name}"
-        
+
         if not date:
             return False, "请输入日期"
-        
+
         if not self.config_manager.validate_date(date):
             return False, "日期格式无效，请使用YYYYMMDD格式"
-        
+
         if not k_number:
             return False, "请选择天区序号"
-        
+
         if not self.config_manager.validate_k_number(k_number):
             return False, f"无效的天区序号: {k_number}"
-        
+
         return True, ""
-    
+
+
+    def _on_scan_fits_clicked(self):
+        """扫描FITS文件按钮点击事件"""
+        if self.on_scan_fits:
+            self.on_scan_fits()
+
+    def set_scan_button_state(self, state: str):
+        """设置扫描按钮状态"""
+        if hasattr(self, 'scan_fits_button'):
+            self.scan_fits_button.config(state=state)
+
+    def set_scan_button_text(self, text: str):
+        """设置扫描按钮文本"""
+        if hasattr(self, 'scan_fits_button'):
+            self.scan_fits_button.config(text=text)
 
 
 
 class URLBuilderDialog:
     """URL构建器对话框"""
-    
+
     def __init__(self, parent, config_manager: ConfigManager):
         self.parent = parent
         self.config_manager = config_manager
         self.result = None
-        
+
         # 创建对话框
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("URL构建器")
         self.dialog.geometry("600x200")
         self.dialog.transient(parent)
         self.dialog.grab_set()
-        
+
         # 创建URL构建器
         self.url_builder = URLBuilderFrame(self.dialog, config_manager)
-        
+
         # 创建按钮
         button_frame = ttk.Frame(self.dialog)
         button_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+
         ttk.Button(button_frame, text="确定", command=self._on_ok).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(button_frame, text="取消", command=self._on_cancel).pack(side=tk.RIGHT)
-        
+
         # 居中显示
         self.dialog.update_idletasks()
         x = (self.dialog.winfo_screenwidth() // 2) - (self.dialog.winfo_width() // 2)
         y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
         self.dialog.geometry(f"+{x}+{y}")
-    
+
     def _on_ok(self):
         """确定按钮事件"""
         valid, error_msg = self.url_builder.validate_current_selections()
@@ -626,11 +646,11 @@ class URLBuilderDialog:
             self.dialog.destroy()
         else:
             messagebox.showerror("验证失败", error_msg)
-    
+
     def _on_cancel(self):
         """取消按钮事件"""
         self.dialog.destroy()
-    
+
     def show(self):
         """显示对话框并返回结果"""
         self.dialog.wait_window()

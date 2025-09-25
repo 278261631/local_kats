@@ -90,18 +90,14 @@ class FitsWebDownloaderGUI:
     def _create_scan_widgets(self):
         """创建扫描和下载界面"""
         # URL构建器区域
-        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change)
+        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan)
 
-        # 扫描控制区域
-        scan_control_frame = ttk.Frame(self.scan_frame)
-        scan_control_frame.pack(fill=tk.X, pady=(0, 10))
+        # 扫描状态标签
+        scan_status_frame = ttk.Frame(self.scan_frame)
+        scan_status_frame.pack(fill=tk.X, pady=(0, 10))
 
-        self.scan_button = ttk.Button(scan_control_frame, text="扫描FITS文件", command=self._start_scan)
-        self.scan_button.pack(side=tk.LEFT)
-
-        # 状态标签
-        self.scan_status_label = ttk.Label(scan_control_frame, text="就绪")
-        self.scan_status_label.pack(side=tk.LEFT, padx=(20, 0))
+        self.scan_status_label = ttk.Label(scan_status_frame, text="就绪")
+        self.scan_status_label.pack(side=tk.LEFT)
         
         # 文件列表区域
         list_frame = ttk.LabelFrame(self.scan_frame, text="FITS文件列表", padding=10)
@@ -289,7 +285,7 @@ class FitsWebDownloaderGUI:
             return
 
         # 禁用扫描按钮
-        self.scan_button.config(state="disabled")
+        self.url_builder.set_scan_button_state("disabled")
         self.scan_status_label.config(text="正在扫描...")
 
         # 清空文件列表
@@ -325,7 +321,7 @@ class FitsWebDownloaderGUI:
             self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
         finally:
             # 重新启用扫描按钮
-            self.root.after(0, lambda: self.scan_button.config(state="normal"))
+            self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.scan_status_label.config(text="就绪"))
             
     def _update_file_list(self):
