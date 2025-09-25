@@ -474,6 +474,7 @@ class FitsWebDownloaderGUI:
         # 根据新状态选择或取消选择对应文件
         selected_count = 0
         deselected_count = 0
+        selected_files = []  # 存储选中的文件信息
 
         for item in self.file_tree.get_children():
             values = self.file_tree.item(item, "values")
@@ -484,6 +485,7 @@ class FitsWebDownloaderGUI:
                     # 选中状态：选择文件
                     self.file_tree.item(item, text="☑")
                     selected_count += 1
+                    selected_files.append(filename)
                 else:
                     # 未选中状态：取消选择文件
                     self.file_tree.item(item, text="☐")
@@ -492,9 +494,46 @@ class FitsWebDownloaderGUI:
         # 记录日志
         if new_state:
             self._log(f"已选择包含 '{k_text}' 的文件，共 {selected_count} 个")
+            # 输出cp命令
+            self._output_cp_commands(selected_files, k_text)
         else:
             self._log(f"已取消选择包含 '{k_text}' 的文件，共 {deselected_count} 个")
-            
+
+    def _output_cp_commands(self, selected_files, k_text):
+        """输出选中文件的cp命令"""
+        if not selected_files:
+            return
+
+        # 获取当前选择的参数
+        selections = self.url_builder.get_current_selections()
+        telescope_name = selections.get('telescope_name', 'Unknown')  # 例如：GY1
+        date_str = selections.get('date', 'Unknown')  # 例如：20250922
+
+        # 从k_text中提取天区前缀，例如从"K025-1"提取"K025"
+        import re
+        match = re.search(r'(K\d{3})', k_text)
+        sky_region_prefix = match.group(1) if match else k_text
+
+        # 转换系统名称为小写
+        system_name = telescope_name.lower()
+
+        self._log("=" * 50)
+        self._log(f"选中天区 {k_text} 的文件cp命令:")
+
+        for filename in selected_files:
+            # 构建原始文件路径
+            original_file_path = f'/data/{system_name}/{date_str}/{sky_region_prefix}/{filename}'
+
+            # 构建服务调试路径
+            serv_debug_path = f'/data/{system_name}/20251332/{sky_region_prefix}/'
+
+            # 生成cp命令
+            cp_command = f'cp "{original_file_path}" {serv_debug_path}'
+
+            self._log(cp_command)
+
+        self._log("=" * 50)
+
     def _select_download_dir(self):
         """选择下载根目录"""
         # 获取当前目录作为初始目录
