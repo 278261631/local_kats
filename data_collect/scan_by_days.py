@@ -1,22 +1,32 @@
 import datetime
 import re
 import subprocess
+import os
+import sys
+
+# 添加config目录到路径
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config'))
+from url_config_manager import url_config_manager
 
 
 def scan_by_day_path(year_in_path, ymd_in_paht, recent_data, sys_name_root='GY6-DATA', file_limit=0):
     # 最后的斜线很重要，否则wget np参数会不识别，造成下载其他不必要的数据
+    # 使用URL配置管理器构建URL
+    base_url = url_config_manager.get_base_url()
+
     if recent_data:
-        download_url_root = f'https://download.china-vo.org/psp/KATS/{sys_name_root}/{ymd_in_paht}/'
+        download_url_root = f'{base_url}/{sys_name_root}/{ymd_in_paht}/'
     else:
-        download_url_root = f'https://download.china-vo.org/psp/KATS/{sys_name_root}/{year_in_path}/{ymd_in_paht}/'
-    temp_path = r'E:/test_download'
+        download_url_root = f'{base_url}/{sys_name_root}/{year_in_path}/{ymd_in_paht}/'
+
+    temp_path = url_config_manager.get_path_setting('temp_download_path')
     print(f'path: {temp_path}')
     print(f'path: {download_url_root}')
     # 运行wget命令的spider功能，检查网站的链接，而不下载任何文件，并返回一个进程对象
     process = subprocess.Popen(["wget", "-N",
                                 # ###   no download no dir creat
                                 "--spider", "-nd",
-                                '--user-agent', 'MyCustomUserAgent',
+                                '--user-agent', url_config_manager.get_setting('user_agent'),
                                 "-r", "-np", "-nH", "-R", "index.html", "-P", temp_path, "--level=0",
                                 # https 证书过期处理
                                 "--no-check-certificate",

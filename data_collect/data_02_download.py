@@ -8,6 +8,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import threading
 
+# 添加config目录到路径
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config'))
+from url_config_manager import url_config_manager
+
 
 class FitsDownloader:
     def __init__(self, max_workers=4, retry_times=3, timeout=30):
@@ -65,7 +69,7 @@ class FitsDownloader:
             try:
                 # 创建请求对象，设置User-Agent
                 req = urllib.request.Request(url)
-                req.add_header('User-Agent', 'MyCustomUserAgent')
+                req.add_header('User-Agent', url_config_manager.get_setting('user_agent'))
 
                 # 下载文件
                 with urllib.request.urlopen(req, timeout=self.timeout) as response:

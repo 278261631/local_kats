@@ -6,9 +6,14 @@
 
 import json
 import os
+import sys
 from datetime import datetime
 from typing import Dict, List, Any
 import logging
+
+# 添加config目录到路径
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config'))
+from url_config_manager import url_config_manager
 
 
 class ConfigManager:
@@ -42,10 +47,8 @@ class ConfigManager:
                 "auto_select_from_download_dir": True
             },
             "url_template_type": "standard",  # "standard" 或 "with_year"
-            "url_templates": {
-                "standard": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/",
-                "with_year": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{year_of_date}/{date}/{k_number}/"
-            }
+            # URL模板现在从独立的URL配置文件中读取
+            "url_templates": url_config_manager.get_available_templates()
         }
         
         # 加载配置
@@ -151,22 +154,26 @@ class ConfigManager:
     def get_url_template(self) -> str:
         """获取当前URL模板"""
         template_type = self.get_url_template_type()
-        templates = self.config.get("url_templates", {})
 
-        # 如果配置中没有新的模板格式，使用旧的配置兼容性
-        if not templates:
-            return self.config.get("url_template",
-                "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/")
+        # 从URL配置管理器获取模板，并添加基础URL
+        base_url = url_config_manager.get_base_url()
+        template = url_config_manager.get_url_template(template_type)
 
-        return templates.get(template_type, templates.get("standard",
-            "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/"))
+        # 将模板中的{base_url}替换为实际的基础URL
+        return template.replace("{base_url}", base_url)
 
     def get_url_templates(self) -> Dict[str, str]:
         """获取所有URL模板"""
-        return self.config.get("url_templates", {
-            "standard": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/",
-            "with_year": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{year_of_date}/{date}/{k_number}/"
-        })
+        # 从URL配置管理器获取模板
+        templates = url_config_manager.get_available_templates()
+        base_url = url_config_manager.get_base_url()
+
+        # 将所有模板中的{base_url}替换为实际的基础URL
+        result = {}
+        for key, template in templates.items():
+            result[key] = template.replace("{base_url}", base_url)
+
+        return result
 
     def update_url_template_type(self, template_type: str):
         """更新URL模板类型"""
@@ -201,25 +208,9 @@ class ConfigManager:
         date = date or last_selected["date"]
         k_number = k_number or last_selected["k_number"]
 
-        url_template = self.get_url_template()
-
-        # 准备格式化参数
-        format_params = {
-            'tel_name': tel_name,
-            'date': date,
-            'k_number': k_number
-        }
-
-        # 如果模板需要年份，添加年份参数
-        if '{year_of_date}' in url_template:
-            try:
-                # 从日期字符串中提取年份 (YYYYMMDD -> YYYY)
-                year_of_date = date[:4] if len(date) >= 4 else datetime.now().strftime('%Y')
-                format_params['year_of_date'] = year_of_date
-            except Exception:
-                format_params['year_of_date'] = datetime.now().strftime('%Y')
-
-        return url_template.format(**format_params)
+        # 使用URL配置管理器构建URL
+        template_type = self.get_url_template_type()
+        return url_config_manager.build_url(tel_name, date, k_number, template_type)
     
     def validate_date(self, date_str: str) -> bool:
         """

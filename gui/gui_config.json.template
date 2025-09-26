@@ -37,8 +37,5 @@
     "auto_select_from_download_dir": true
   },
   "url_template_type": "standard",
-  "url_templates": {
-    "standard": "https://****/KATS/{tel_name}-DATA/{date}/{k_number}/",
-    "with_year": "https://****/KATS/{tel_name}-DATA/{year_of_date}/{date}/{k_number}/"
-  }
+  "_note": "URL模板现在从独立的config/url_config.json文件中读取，请修改该文件来配置URL"
 }
