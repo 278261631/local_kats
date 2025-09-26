@@ -28,7 +28,7 @@ gui/
 ## 🚀 主要功能
 
 ### 1. 智能URL构建
-- 支持KATS数据URL自动构建：`https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{YYYYMMDD}/{K0??}/`
+- 支持KATS数据URL自动构建：`https://*****/{tel_name}-DATA/{YYYYMMDD}/{K0??}/`
 - 望远镜选择：GY1, GY2, GY3, GY4, GY5, GY6
 - **日历式日期选择**：直观的日历界面，支持月份导航和快速选择
 - 天区选择：K001 - K099

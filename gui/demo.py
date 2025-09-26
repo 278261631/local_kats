@@ -18,7 +18,7 @@ def demo_web_scanner():
     from web_scanner import WebFitsScanner, DirectoryScanner
     
     # 测试URL
-    test_url = "https://download.china-vo.org/psp/KATS/GY5-DATA/20250701/K096/"
+    test_url = "https://****/GY5-DATA/20250701/K096/"
     
     print(f"扫描URL: {test_url}")
     print("使用DirectoryScanner...")
@@ -157,7 +157,7 @@ def show_usage_instructions():
     print()
     
     print("3. 默认测试URL:")
-    print("   https://download.china-vo.org/psp/KATS/GY5-DATA/20250701/K096/")
+    print("   https://****/GY5-DATA/20250701/K096/")
     print()
     
     print("4. 支持的文件格式:")

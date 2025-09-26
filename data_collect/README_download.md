@@ -45,15 +45,7 @@ python data_02_download.py E:\fix_data\20250714\20250714_urls.txt --retry-times 
 - `--retry-times`: 重试次数（默认3）
 - `--timeout`: 下载超时时间，单位秒（默认30）
 
-## 输入文件格式
 
-URL列表文件应该是纯文本文件，每行一个URL，例如：
-
-```
-https://download.china-vo.org/psp/KATS/GY5-DATA/20250714/file1.fits
-https://download.china-vo.org/psp/KATS/GY5-DATA/20250714/file2.fits
-https://download.china-vo.org/psp/KATS/GY5-DATA/20250714/file3.fits
-```
 
 ## 输出
 

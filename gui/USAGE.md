@@ -17,7 +17,7 @@ python run_gui.py
 
 #### 步骤1：扫描FITS文件
 1. 在"扫描和下载"标签页中，输入要扫描的URL
-   - 默认URL：`https://download.china-vo.org/psp/KATS/GY5-DATA/20250701/K096/`
+   - 默认URL：`https://****/GY5-DATA/20250701/K096/`
 2. 点击"扫描"按钮
 3. 等待扫描完成，文件列表将显示所有可下载的FITS文件
 
@@ -117,7 +117,7 @@ python demo.py
 
 2. **测试网络连接**
    ```bash
-   curl -I https://download.china-vo.org/psp/KATS/GY5-DATA/20250701/K096/
+   curl -I https://****/GY5-DATA/20250701/K096/
    ```
 
 3. **验证FITS文件**

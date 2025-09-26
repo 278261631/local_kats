@@ -38,7 +38,7 @@
   },
   "url_template_type": "standard",
   "url_templates": {
-    "standard": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{date}/{k_number}/",
-    "with_year": "https://download.china-vo.org/psp/KATS/{tel_name}-DATA/{year_of_date}/{date}/{k_number}/"
+    "standard": "https://****/KATS/{tel_name}-DATA/{date}/{k_number}/",
+    "with_year": "https://****/KATS/{tel_name}-DATA/{year_of_date}/{date}/{k_number}/"
   }
 }
