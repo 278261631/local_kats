@@ -65,13 +65,18 @@ class WebFitsScanner:
         """
         try:
             self.logger.info(f"开始扫描URL: {base_url}")
-            
-            # 发送HTTP请求
-            response = self.session.get(base_url, timeout=self.timeout)
-            response.raise_for_status()
-            
+
+            # 尝试使用requests，如果失败则使用urllib
+            try:
+                response = self.session.get(base_url, timeout=self.timeout)
+                response.raise_for_status()
+                content = response.text
+            except Exception as e:
+                self.logger.warning(f"requests失败，尝试urllib: {str(e)}")
+                content = self._get_content_with_urllib(base_url)
+
             # 解析HTML内容
-            soup = BeautifulSoup(response.content, 'html.parser')
+            soup = BeautifulSoup(content, 'html.parser')
             
             fits_files = []
             
@@ -149,6 +154,35 @@ class WebFitsScanner:
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} TB"
 
+    def _get_content_with_urllib(self, url: str) -> str:
+        """使用urllib获取网页内容（作为requests的备用方案）"""
+        import urllib.request
+        import urllib.error
+        import ssl
+
+        # 创建SSL上下文
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        # 创建无代理的opener
+        proxy_handler = urllib.request.ProxyHandler({})
+        https_handler = urllib.request.HTTPSHandler(context=context)
+        opener = urllib.request.build_opener(proxy_handler, https_handler)
+
+        # 设置请求头
+        headers = {
+            'User-Agent': self.user_agent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Connection': 'keep-alive'
+        }
+
+        req = urllib.request.Request(url, headers=headers)
+
+        with opener.open(req, timeout=self.timeout) as response:
+            return response.read().decode('utf-8', errors='ignore')
+
 
 class DirectoryScanner:
     """目录式网页扫描器（类似Apache目录列表）"""
@@ -202,28 +236,34 @@ class DirectoryScanner:
             List[Tuple[str, str, int]]: [(文件名, 完整URL, 文件大小)]
         """
         try:
-            response = self.session.get(url, timeout=self.timeout)
-            response.raise_for_status()
-            
+            # 尝试使用requests，如果失败则使用urllib
+            try:
+                response = self.session.get(url, timeout=self.timeout)
+                response.raise_for_status()
+                content = response.text
+            except Exception as e:
+                self.logger.warning(f"requests失败，尝试urllib: {str(e)}")
+                content = self._get_content_with_urllib(url)
+
             # 尝试解析Apache风格的目录列表
             fits_files = []
-            
+
             # 使用正则表达式匹配文件链接
             # 匹配类似 <a href="filename.fits">filename.fits</a> 的模式
             pattern = r'<a\s+href="([^"]*\.fits?)"[^>]*>([^<]*)</a>'
-            matches = re.findall(pattern, response.text, re.IGNORECASE)
+            matches = re.findall(pattern, content, re.IGNORECASE)
             
             for href, display_name in matches:
                 if self._should_include_file(href):
                     full_url = urljoin(url, href)
                     filename = self._extract_filename(href)
-                    file_size = self._extract_size_from_listing(response.text, href)
-                    
+                    file_size = self._extract_size_from_listing(content, href)
+
                     fits_files.append((filename, full_url, file_size))
-            
+
             # 如果正则表达式没有找到，尝试BeautifulSoup
             if not fits_files:
-                fits_files = self._parse_with_beautifulsoup(url, response.text)
+                fits_files = self._parse_with_beautifulsoup(url, content)
             
             self.logger.info(f"目录扫描完成，找到 {len(fits_files)} 个FITS文件")
             return fits_files
@@ -284,3 +324,32 @@ class DirectoryScanner:
                 fits_files.append((filename, full_url, file_size))
         
         return fits_files
+
+    def _get_content_with_urllib(self, url: str) -> str:
+        """使用urllib获取网页内容（作为requests的备用方案）"""
+        import urllib.request
+        import urllib.error
+        import ssl
+
+        # 创建SSL上下文
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        # 创建无代理的opener
+        proxy_handler = urllib.request.ProxyHandler({})
+        https_handler = urllib.request.HTTPSHandler(context=context)
+        opener = urllib.request.build_opener(proxy_handler, https_handler)
+
+        # 设置请求头
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Connection': 'keep-alive'
+        }
+
+        req = urllib.request.Request(url, headers=headers)
+
+        with opener.open(req, timeout=self.timeout) as response:
+            return response.read().decode('utf-8', errors='ignore')
