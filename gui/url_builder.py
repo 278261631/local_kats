@@ -24,8 +24,49 @@ class RegionScanner:
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
         })
+
+        # 禁用代理
+        self.session.proxies = {
+            'http': None,
+            'https': None
+        }
+
+        # 禁用SSL验证以避免证书问题
+        self.session.verify = False
+
+        # 禁用SSL警告
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        # 设置更宽松的SSL适配器
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        import ssl
+
+        # 创建自定义的HTTPAdapter
+        class SSLAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                # 设置更宽松的SSL选项
+                try:
+                    context.set_ciphers('DEFAULT@SECLEVEL=1')
+                except:
+                    pass  # 如果设置失败就忽略
+                kwargs['ssl_context'] = context
+                return super().init_poolmanager(*args, **kwargs)
+
+        # 挂载适配器
+        self.session.mount('https://', SSLAdapter())
+
         self.logger = logging.getLogger(__name__)
 
     def scan_available_regions(self, base_url: str) -> List[str]:
@@ -41,12 +82,17 @@ class RegionScanner:
         try:
             self.logger.info(f"开始扫描天区: {base_url}")
 
-            # 发送HTTP请求
-            response = self.session.get(base_url, timeout=self.timeout)
-            response.raise_for_status()
+            # 尝试使用requests，如果失败则使用urllib
+            try:
+                response = self.session.get(base_url, timeout=self.timeout)
+                response.raise_for_status()
+                content = response.text
+            except Exception as e:
+                self.logger.warning(f"requests失败，尝试urllib: {str(e)}")
+                content = self._get_content_with_urllib(base_url)
 
             # 解析HTML内容
-            soup = BeautifulSoup(response.content, 'html.parser')
+            soup = BeautifulSoup(content, 'html.parser')
 
             regions = []
 
@@ -96,6 +142,35 @@ class RegionScanner:
 
         # 返回大写的天区名称
         return dir_name.upper()
+
+    def _get_content_with_urllib(self, url: str) -> str:
+        """使用urllib获取网页内容（作为requests的备用方案）"""
+        import urllib.request
+        import urllib.error
+        import ssl
+
+        # 创建SSL上下文
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        # 创建无代理的opener
+        proxy_handler = urllib.request.ProxyHandler({})
+        https_handler = urllib.request.HTTPSHandler(context=context)
+        opener = urllib.request.build_opener(proxy_handler, https_handler)
+
+        # 设置请求头
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Connection': 'keep-alive'
+        }
+
+        req = urllib.request.Request(url, headers=headers)
+
+        with opener.open(req, timeout=self.timeout) as response:
+            return response.read().decode('utf-8', errors='ignore')
 
 
 class URLBuilderFrame:

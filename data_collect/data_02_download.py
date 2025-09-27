@@ -71,8 +71,12 @@ class FitsDownloader:
                 req = urllib.request.Request(url)
                 req.add_header('User-Agent', url_config_manager.get_setting('user_agent'))
 
+                # 创建无代理的opener
+                proxy_handler = urllib.request.ProxyHandler({})
+                opener = urllib.request.build_opener(proxy_handler)
+
                 # 下载文件
-                with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                with opener.open(req, timeout=self.timeout) as response:
                     # 获取文件总大小
                     total_size = response.headers.get('Content-Length')
                     total_size = int(total_size) if total_size else None

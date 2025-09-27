@@ -20,6 +20,35 @@ class WebFitsScanner:
         self.user_agent = user_agent
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': self.user_agent})
+
+        # 禁用代理
+        self.session.proxies = {
+            'http': None,
+            'https': None
+        }
+
+        # 禁用SSL验证以避免证书问题
+        self.session.verify = False
+
+        # 禁用SSL警告
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        # 设置更宽松的SSL适配器
+        from requests.adapters import HTTPAdapter
+        import ssl
+
+        # 创建自定义的HTTPAdapter
+        class SSLAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                kwargs['ssl_context'] = context
+                return super().init_poolmanager(*args, **kwargs)
+
+        # 挂载适配器
+        self.session.mount('https://', SSLAdapter())
         
         # 设置日志
         self.logger = logging.getLogger(__name__)
@@ -130,6 +159,36 @@ class DirectoryScanner:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
+
+        # 禁用代理
+        self.session.proxies = {
+            'http': None,
+            'https': None
+        }
+
+        # 禁用SSL验证以避免证书问题
+        self.session.verify = False
+
+        # 禁用SSL警告
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        # 设置更宽松的SSL适配器
+        from requests.adapters import HTTPAdapter
+        import ssl
+
+        # 创建自定义的HTTPAdapter
+        class SSLAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                kwargs['ssl_context'] = context
+                return super().init_poolmanager(*args, **kwargs)
+
+        # 挂载适配器
+        self.session.mount('https://', SSLAdapter())
+
         self.logger = logging.getLogger(__name__)
     
     def scan_directory_listing(self, url: str) -> List[Tuple[str, str, int]]:
