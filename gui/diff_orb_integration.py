@@ -98,8 +98,8 @@ class DiffOrbIntegration:
         
         # 查找对应的模板文件
         tel_name = parsed_info['tel_name']
-        k_number = parsed_info.get('k_number', '')
-        
+        k_number = parsed_info.get('k_full', parsed_info.get('k_number', ''))  # 优先使用完整的天区加索引格式
+
         template_file = self.filename_parser.find_template_file(template_dir, tel_name, k_number)
         if not template_file:
             return False, f"未找到匹配的模板文件 (tel_name: {tel_name}, k_number: {k_number})"
@@ -125,8 +125,8 @@ class DiffOrbIntegration:
                 return None
             
             tel_name = parsed_info['tel_name']
-            k_number = parsed_info.get('k_number', '')
-            
+            k_number = parsed_info.get('k_full', parsed_info.get('k_number', ''))  # 优先使用完整的天区加索引格式
+
             # 查找模板文件
             template_file = self.filename_parser.find_template_file(template_dir, tel_name, k_number)
             
