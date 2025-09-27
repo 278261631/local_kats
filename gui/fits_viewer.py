@@ -91,6 +91,27 @@ class FitsImageViewer:
                                                variable=self.hot_cold_var)
         self.hot_cold_checkbox.pack(side=tk.LEFT, padx=(5, 0))
 
+        # 对齐方式选择框架
+        alignment_frame = ttk.Frame(toolbar_frame)
+        alignment_frame.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 对齐方式标签
+        ttk.Label(alignment_frame, text="对齐方式:").pack(side=tk.LEFT)
+
+        # 对齐方式单选框
+        self.alignment_var = tk.StringVar(value="rigid")  # 默认选择rigid
+
+        alignment_methods = [
+            ("Rigid", "rigid", "刚体变换（平移+旋转）"),
+            ("WCS", "wcs", "基于WCS信息对齐")
+        ]
+
+        for text, value, tooltip in alignment_methods:
+            rb = ttk.Radiobutton(alignment_frame, text=text,
+                               variable=self.alignment_var, value=value)
+            rb.pack(side=tk.LEFT, padx=(5, 0))
+            # 可以考虑添加tooltip功能
+
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
@@ -791,8 +812,13 @@ class FitsImageViewer:
                 noise_methods = ['outlier']
                 self.logger.warning("未选择降噪方式，使用默认的outlier方法")
 
+            # 获取选择的对齐方式
+            alignment_method = self.alignment_var.get()
+            self.logger.info(f"选择的对齐方式: {alignment_method}")
+
             # 执行diff操作
-            result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir, noise_methods=noise_methods)
+            result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir,
+                                              noise_methods=noise_methods, alignment_method=alignment_method)
 
             if result and result.get('success'):
                 # 显示结果摘要

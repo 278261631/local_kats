@@ -141,7 +141,7 @@ class DiffOrbIntegration:
             self.logger.error(f"查找模板文件时出错: {str(e)}")
             return None
     
-    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None) -> Optional[Dict]:
+    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid') -> Optional[Dict]:
         """
         执行diff操作
 
@@ -150,6 +150,7 @@ class DiffOrbIntegration:
             template_file (str): 模板文件路径（作为参考文件）
             output_dir (str): 输出目录，如果为None则自动创建
             noise_methods (list): 降噪方式列表，可选值：['outlier', 'hot_cold']
+            alignment_method (str): 对齐方式，可选值：['rigid', 'wcs']
 
         Returns:
             Optional[Dict]: 处理结果字典，包含输出文件路径等信息
@@ -184,14 +185,22 @@ class DiffOrbIntegration:
                 download_file, template_file, output_dir, noise_methods
             )
 
-            # 步骤1: 先进行图像对齐
-            self.logger.info("步骤1: 执行图像对齐...")
-            alignment_result = self.alignment_comparator.process_fits_comparison(
-                processed_template_file,      # 参考文件（处理后的模板）
-                processed_download_file,      # 待比较文件（处理后的下载文件）
-                output_dir=output_dir,
-                show_visualization=False  # 在GUI中不显示matplotlib窗口
-            )
+            # 步骤1: 根据选择的对齐方式进行图像对齐
+            self.logger.info(f"步骤1: 执行图像对齐（方式: {alignment_method}）...")
+
+            if alignment_method == 'wcs':
+                # 使用WCS对齐
+                alignment_result = self._align_using_wcs(
+                    processed_template_file, processed_download_file, output_dir
+                )
+            else:
+                # 使用特征点对齐（只支持rigid方式）
+                alignment_result = self.alignment_comparator.process_fits_comparison(
+                    processed_template_file,      # 参考文件（处理后的模板）
+                    processed_download_file,      # 待比较文件（处理后的下载文件）
+                    output_dir=output_dir,
+                    show_visualization=False  # 在GUI中不显示matplotlib窗口
+                )
 
             if not alignment_result or not alignment_result.get('alignment_success'):
                 self.logger.error("图像对齐失败")
@@ -554,6 +563,116 @@ class DiffOrbIntegration:
 
         self.logger.info("噪点处理步骤完成")
         return processed_download_file, processed_template_file
+
+    def _align_using_wcs(self, template_file: str, download_file: str, output_dir: str) -> Optional[Dict]:
+        """
+        使用WCS信息进行图像对齐
+
+        Args:
+            template_file (str): 模板文件路径
+            download_file (str): 下载文件路径
+            output_dir (str): 输出目录
+
+        Returns:
+            Optional[Dict]: 对齐结果字典
+        """
+        try:
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            from astropy.coordinates import SkyCoord
+            from astropy import units as u
+            import numpy as np
+            from scipy.ndimage import map_coordinates
+
+            self.logger.info("开始基于WCS信息的图像对齐...")
+
+            # 读取两个文件的WCS信息
+            with fits.open(template_file) as hdul_template:
+                template_header = hdul_template[0].header
+                template_data = hdul_template[0].data.astype(np.float64)
+                template_wcs = WCS(template_header)
+
+            with fits.open(download_file) as hdul_download:
+                download_header = hdul_download[0].header
+                download_data = hdul_download[0].data.astype(np.float64)
+                download_wcs = WCS(download_header)
+
+            # 检查WCS信息是否有效
+            if not template_wcs.has_celestial or not download_wcs.has_celestial:
+                self.logger.error("文件缺少有效的WCS天体坐标信息")
+                return None
+
+            self.logger.info("WCS信息验证通过，开始坐标变换...")
+
+            # 创建模板图像的像素坐标网格
+            template_shape = template_data.shape
+            y_indices, x_indices = np.mgrid[0:template_shape[0], 0:template_shape[1]]
+
+            # 将模板图像的像素坐标转换为天体坐标
+            template_coords = template_wcs.pixel_to_world(x_indices, y_indices)
+
+            # 将天体坐标转换为下载图像的像素坐标
+            download_x, download_y = download_wcs.world_to_pixel(template_coords)
+
+            # 使用插值将下载图像重采样到模板图像的坐标系
+            self.logger.info("执行图像重采样...")
+
+            # 创建坐标数组用于插值
+            coords = np.array([download_y.flatten(), download_x.flatten()])
+
+            # 使用双线性插值重采样下载图像
+            aligned_download_data = map_coordinates(
+                download_data,
+                coords,
+                order=1,  # 双线性插值
+                cval=0.0,  # 边界外的值设为0
+                prefilter=False
+            ).reshape(template_shape)
+
+            self.logger.info("WCS对齐完成，保存对齐后的文件...")
+
+            # 保存对齐后的文件
+            template_basename = os.path.splitext(os.path.basename(template_file))[0]
+            download_basename = os.path.splitext(os.path.basename(download_file))[0]
+
+            # 保存对齐后的模板文件（实际上就是原文件的副本）
+            aligned_template_file = os.path.join(output_dir, f"{template_basename}_aligned.fits")
+            fits.writeto(aligned_template_file, template_data, header=template_header, overwrite=True)
+
+            # 保存对齐后的下载文件
+            aligned_download_file = os.path.join(output_dir, f"{download_basename}_aligned.fits")
+            # 使用模板文件的WCS信息作为对齐后文件的header
+            aligned_header = template_header.copy()
+            # 更新一些关键信息
+            aligned_header['HISTORY'] = 'Aligned using WCS information'
+            fits.writeto(aligned_download_file, aligned_download_data, header=aligned_header, overwrite=True)
+
+            # 创建结果字典
+            result = {
+                'alignment_success': True,
+                'alignment_method': 'wcs',
+                'template_aligned_file': aligned_template_file,
+                'download_aligned_file': aligned_download_file,
+                'output_directory': output_dir,
+                'wcs_info': {
+                    'template_wcs_valid': True,
+                    'download_wcs_valid': True,
+                    'coordinate_system': template_wcs.wcs.ctype[0] if hasattr(template_wcs.wcs, 'ctype') else 'Unknown'
+                }
+            }
+
+            self.logger.info(f"WCS对齐成功完成")
+            self.logger.info(f"对齐后的模板文件: {os.path.basename(aligned_template_file)}")
+            self.logger.info(f"对齐后的下载文件: {os.path.basename(aligned_download_file)}")
+
+            return result
+
+        except ImportError as e:
+            self.logger.error(f"WCS对齐需要astropy库: {str(e)}")
+            return None
+        except Exception as e:
+            self.logger.error(f"WCS对齐失败: {str(e)}")
+            return None
 
 
 # 测试代码
