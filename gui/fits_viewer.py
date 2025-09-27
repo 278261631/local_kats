@@ -72,6 +72,25 @@ class FitsImageViewer:
                                        command=self._display_selected_image, state="disabled")
         self.display_button.pack(side=tk.LEFT, padx=(10, 0))
 
+        # 降噪方式选择框架
+        noise_frame = ttk.Frame(toolbar_frame)
+        noise_frame.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 降噪方式标签
+        ttk.Label(noise_frame, text="降噪方式:").pack(side=tk.LEFT)
+
+        # 降噪方式复选框
+        self.outlier_var = tk.BooleanVar(value=True)  # 默认选中outlier
+        self.hot_cold_var = tk.BooleanVar(value=False)  # 默认不选中hot_cold
+
+        self.outlier_checkbox = ttk.Checkbutton(noise_frame, text="Outlier",
+                                              variable=self.outlier_var)
+        self.outlier_checkbox.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.hot_cold_checkbox = ttk.Checkbutton(noise_frame, text="Hot/Cold",
+                                               variable=self.hot_cold_var)
+        self.hot_cold_checkbox.pack(side=tk.LEFT, padx=(5, 0))
+
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
@@ -760,8 +779,20 @@ class FitsImageViewer:
             # 获取输出目录
             output_dir = self._get_diff_output_directory()
 
+            # 获取选择的降噪方式
+            noise_methods = []
+            if self.outlier_var.get():
+                noise_methods.append('outlier')
+            if self.hot_cold_var.get():
+                noise_methods.append('hot_cold')
+
+            # 如果没有选择任何方式，默认使用outlier
+            if not noise_methods:
+                noise_methods = ['outlier']
+                self.logger.warning("未选择降噪方式，使用默认的outlier方法")
+
             # 执行diff操作
-            result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir)
+            result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir, noise_methods=noise_methods)
 
             if result and result.get('success'):
                 # 显示结果摘要

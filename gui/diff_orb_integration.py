@@ -141,15 +141,16 @@ class DiffOrbIntegration:
             self.logger.error(f"查找模板文件时出错: {str(e)}")
             return None
     
-    def process_diff(self, download_file: str, template_file: str, output_dir: str = None) -> Optional[Dict]:
+    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None) -> Optional[Dict]:
         """
         执行diff操作
-        
+
         Args:
             download_file (str): 下载文件路径（作为待比较文件）
             template_file (str): 模板文件路径（作为参考文件）
             output_dir (str): 输出目录，如果为None则自动创建
-            
+            noise_methods (list): 降噪方式列表，可选值：['outlier', 'hot_cold']
+
         Returns:
             Optional[Dict]: 处理结果字典，包含输出文件路径等信息
         """
@@ -180,7 +181,7 @@ class DiffOrbIntegration:
 
             # 步骤0: 噪点处理
             processed_download_file, processed_template_file = self._preprocess_noise_removal(
-                download_file, template_file, output_dir
+                download_file, template_file, output_dir, noise_methods
             )
 
             # 步骤1: 先进行图像对齐
@@ -346,7 +347,7 @@ class DiffOrbIntegration:
 
         return "\n".join(summary_lines)
 
-    def _preprocess_noise_removal(self, download_file: str, template_file: str, output_dir: str) -> Tuple[str, str]:
+    def _preprocess_noise_removal(self, download_file: str, template_file: str, output_dir: str, noise_methods: list = None) -> Tuple[str, str]:
         """
         在diff操作之前对输入文件进行噪点处理
 
@@ -354,6 +355,7 @@ class DiffOrbIntegration:
             download_file (str): 下载文件路径
             template_file (str): 模板文件路径
             output_dir (str): 输出目录
+            noise_methods (list): 降噪方式列表，可选值：['outlier', 'hot_cold']
 
         Returns:
             Tuple[str, str]: (处理后的下载文件路径, 处理后的模板文件路径)
@@ -362,7 +364,11 @@ class DiffOrbIntegration:
             self.logger.warning("噪点处理模块不可用，跳过噪点处理步骤")
             return download_file, template_file
 
-        self.logger.info("步骤0: 执行噪点处理...")
+        # 设置默认降噪方式
+        if noise_methods is None:
+            noise_methods = ['outlier']
+
+        self.logger.info(f"步骤0: 执行噪点处理，使用方法: {', '.join(noise_methods)}")
 
         processed_download_file = download_file
         processed_template_file = template_file
@@ -370,11 +376,70 @@ class DiffOrbIntegration:
         try:
             # 处理下载文件（观测文件）
             self.logger.info(f"处理观测文件: {os.path.basename(download_file)}")
-            download_result = process_fits_simple(
-                download_file,
-                method='outlier',
-                threshold=4.0
-            )
+
+            # 对每种降噪方式进行处理
+            final_repaired_data = None
+            final_noise_data = None
+            final_noise_mask = None
+
+            for method in noise_methods:
+                self.logger.info(f"  使用 {method} 方法处理观测文件")
+                download_result = process_fits_simple(
+                    download_file,
+                    method=method,
+                    threshold=4.0
+                )
+
+                if download_result and len(download_result) >= 3:
+                    repaired_data, noise_data, noise_mask = download_result
+
+                    if final_repaired_data is None:
+                        # 第一次处理，直接使用结果
+                        final_repaired_data = repaired_data.copy()
+                        final_noise_data = noise_data.copy()
+                        final_noise_mask = noise_mask.copy()
+                    else:
+                        # 后续处理，在前一次结果基础上继续处理
+                        # 使用前一次的修复结果作为输入
+                        import tempfile
+                        import os
+                        from astropy.io import fits
+
+                        # 创建临时文件保存中间结果
+                        with tempfile.NamedTemporaryFile(suffix='.fits', delete=False) as temp_file:
+                            temp_filename = temp_file.name
+
+                        # 读取原始文件的header
+                        with fits.open(download_file) as hdul:
+                            header = hdul[0].header.copy()
+
+                        # 保存中间结果到临时文件
+                        fits.writeto(temp_filename, final_repaired_data, header=header, overwrite=True)
+
+                        # 对临时文件进行下一轮处理
+                        next_result = process_fits_simple(
+                            temp_filename,
+                            method=method,
+                            threshold=4.0
+                        )
+
+                        # 清理临时文件
+                        try:
+                            os.unlink(temp_filename)
+                        except:
+                            pass
+
+                        if next_result and len(next_result) >= 3:
+                            final_repaired_data, next_noise_data, next_noise_mask = next_result
+                            # 累积噪点数据和掩码
+                            final_noise_data += next_noise_data
+                            final_noise_mask |= next_noise_mask
+                        else:
+                            self.logger.warning(f"  {method} 方法处理失败，跳过")
+                else:
+                    self.logger.warning(f"  {method} 方法处理失败，跳过")
+
+            download_result = (final_repaired_data, final_noise_data, final_noise_mask) if final_repaired_data is not None else None
 
             if download_result and len(download_result) >= 3:
                 repaired_data, noise_data, noise_mask = download_result
@@ -401,11 +466,69 @@ class DiffOrbIntegration:
         try:
             # 处理模板文件
             self.logger.info(f"处理模板文件: {os.path.basename(template_file)}")
-            template_result = process_fits_simple(
-                template_file,
-                method='outlier',
-                threshold=4.0
-            )
+
+            # 对每种降噪方式进行处理
+            final_repaired_data = None
+            final_noise_data = None
+            final_noise_mask = None
+
+            for method in noise_methods:
+                self.logger.info(f"  使用 {method} 方法处理模板文件")
+                template_result = process_fits_simple(
+                    template_file,
+                    method=method,
+                    threshold=4.0
+                )
+
+                if template_result and len(template_result) >= 3:
+                    repaired_data, noise_data, noise_mask = template_result
+
+                    if final_repaired_data is None:
+                        # 第一次处理，直接使用结果
+                        final_repaired_data = repaired_data.copy()
+                        final_noise_data = noise_data.copy()
+                        final_noise_mask = noise_mask.copy()
+                    else:
+                        # 后续处理，在前一次结果基础上继续处理
+                        import tempfile
+                        import os
+                        from astropy.io import fits
+
+                        # 创建临时文件保存中间结果
+                        with tempfile.NamedTemporaryFile(suffix='.fits', delete=False) as temp_file:
+                            temp_filename = temp_file.name
+
+                        # 读取原始文件的header
+                        with fits.open(template_file) as hdul:
+                            header = hdul[0].header.copy()
+
+                        # 保存中间结果到临时文件
+                        fits.writeto(temp_filename, final_repaired_data, header=header, overwrite=True)
+
+                        # 对临时文件进行下一轮处理
+                        next_result = process_fits_simple(
+                            temp_filename,
+                            method=method,
+                            threshold=4.0
+                        )
+
+                        # 清理临时文件
+                        try:
+                            os.unlink(temp_filename)
+                        except:
+                            pass
+
+                        if next_result and len(next_result) >= 3:
+                            final_repaired_data, next_noise_data, next_noise_mask = next_result
+                            # 累积噪点数据和掩码
+                            final_noise_data += next_noise_data
+                            final_noise_mask |= next_noise_mask
+                        else:
+                            self.logger.warning(f"  {method} 方法处理失败，跳过")
+                else:
+                    self.logger.warning(f"  {method} 方法处理失败，跳过")
+
+            template_result = (final_repaired_data, final_noise_data, final_noise_mask) if final_repaired_data is not None else None
 
             if template_result and len(template_result) >= 3:
                 repaired_data, noise_data, noise_mask = template_result
