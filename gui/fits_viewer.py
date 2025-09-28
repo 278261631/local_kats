@@ -76,21 +76,25 @@ class FitsImageViewer:
         main_frame = ttk.Frame(self.parent_frame)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 创建工具栏
-        toolbar_frame = ttk.Frame(main_frame)
-        toolbar_frame.pack(fill=tk.X, pady=(0, 5))
+        # 创建工具栏容器
+        toolbar_container = ttk.Frame(main_frame)
+        toolbar_container.pack(fill=tk.X, pady=(0, 5))
+
+        # 第一行工具栏
+        toolbar_frame1 = ttk.Frame(toolbar_container)
+        toolbar_frame1.pack(fill=tk.X, pady=(0, 2))
 
         # 文件信息标签
-        self.file_info_label = ttk.Label(toolbar_frame, text="未选择文件")
+        self.file_info_label = ttk.Label(toolbar_frame1, text="未选择文件")
         self.file_info_label.pack(side=tk.LEFT)
 
         # 显示图像按钮
-        self.display_button = ttk.Button(toolbar_frame, text="显示图像",
+        self.display_button = ttk.Button(toolbar_frame1, text="显示图像",
                                        command=self._display_selected_image, state="disabled")
         self.display_button.pack(side=tk.LEFT, padx=(10, 0))
 
         # 降噪方式选择框架
-        noise_frame = ttk.Frame(toolbar_frame)
+        noise_frame = ttk.Frame(toolbar_frame1)
         noise_frame.pack(side=tk.LEFT, padx=(5, 0))
 
         # 降噪方式标签
@@ -113,9 +117,17 @@ class FitsImageViewer:
                                                       variable=self.adaptive_median_var)
         self.adaptive_median_checkbox.pack(side=tk.LEFT, padx=(5, 0))
 
+        # 图像统计信息标签（放在第一行右侧）
+        self.stats_label = ttk.Label(toolbar_frame1, text="")
+        self.stats_label.pack(side=tk.RIGHT)
+
+        # 第二行工具栏
+        toolbar_frame2 = ttk.Frame(toolbar_container)
+        toolbar_frame2.pack(fill=tk.X, pady=(2, 0))
+
         # 对齐方式选择框架
-        alignment_frame = ttk.Frame(toolbar_frame)
-        alignment_frame.pack(side=tk.LEFT, padx=(5, 0))
+        alignment_frame = ttk.Frame(toolbar_frame2)
+        alignment_frame.pack(side=tk.LEFT, padx=(0, 0))
 
         # 对齐方式标签
         ttk.Label(alignment_frame, text="对齐方式:").pack(side=tk.LEFT)
@@ -135,12 +147,12 @@ class FitsImageViewer:
             # 可以考虑添加tooltip功能
 
         # diff操作按钮
-        self.diff_button = ttk.Button(toolbar_frame, text="执行Diff",
+        self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
-        self.diff_button.pack(side=tk.LEFT, padx=(5, 0))
+        self.diff_button.pack(side=tk.LEFT, padx=(10, 0))
 
         # ASTAP处理按钮
-        self.astap_button = ttk.Button(toolbar_frame, text="执行ASTAP",
+        self.astap_button = ttk.Button(toolbar_frame2, text="执行ASTAP",
                                      command=self._execute_astap, state="disabled")
         self.astap_button.pack(side=tk.LEFT, padx=(5, 0))
 
@@ -149,13 +161,9 @@ class FitsImageViewer:
             self.astap_button.config(state="disabled", text="ASTAP不可用")
 
         # 打开目录按钮
-        self.open_dir_button = ttk.Button(toolbar_frame, text="打开下载目录",
+        self.open_dir_button = ttk.Button(toolbar_frame2, text="打开下载目录",
                                         command=self._open_download_directory)
         self.open_dir_button.pack(side=tk.LEFT, padx=(5, 0))
-
-        # 图像统计信息标签
-        self.stats_label = ttk.Label(toolbar_frame, text="")
-        self.stats_label.pack(side=tk.RIGHT)
 
         # 创建主要内容区域（左右分割）
         content_frame = ttk.Frame(main_frame)
