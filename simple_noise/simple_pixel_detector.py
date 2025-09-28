@@ -242,7 +242,7 @@ def repair_pixels_simple(image, pixel_mask):
     
     return repaired_image
 
-def process_fits_simple(input_file, method='outlier', threshold=4.0):
+def process_fits_simple(input_file, method='outlier', threshold=4.0, output_dir=None):
     """
     简单处理FITS文件中的单像素噪点
 
@@ -250,6 +250,7 @@ def process_fits_simple(input_file, method='outlier', threshold=4.0):
     input_file: 输入FITS文件
     method: 检测方法 ('outlier', 'hot_cold', 或 'adaptive_median')
     threshold: 检测阈值
+    output_dir: 输出目录，如果为None则使用输入文件所在目录
     """
     
     print(f"正在读取FITS文件: {input_file}")
@@ -282,17 +283,25 @@ def process_fits_simple(input_file, method='outlier', threshold=4.0):
         noise_mask = hot_mask | cold_mask
 
         # 保存热像素和冷像素
-        base_name = os.path.splitext(input_file)[0]
+        base_name = os.path.splitext(os.path.basename(input_file))[0]
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            hot_file = os.path.join(output_dir, f"{base_name}_hot_pixels_simple.fits")
+            cold_file = os.path.join(output_dir, f"{base_name}_cold_pixels_simple.fits")
+        else:
+            hot_file = f"{os.path.splitext(input_file)[0]}_hot_pixels_simple.fits"
+            cold_file = f"{os.path.splitext(input_file)[0]}_cold_pixels_simple.fits"
+
         hot_image = np.zeros_like(image_data)
         hot_image[hot_mask] = image_data[hot_mask]
-        fits.writeto(f"{base_name}_hot_pixels_simple.fits", hot_image, header=header, overwrite=True)
+        fits.writeto(hot_file, hot_image, header=header, overwrite=True)
 
         cold_image = np.zeros_like(image_data)
         cold_image[cold_mask] = image_data[cold_mask]
-        fits.writeto(f"{base_name}_cold_pixels_simple.fits", cold_image, header=header, overwrite=True)
+        fits.writeto(cold_file, cold_image, header=header, overwrite=True)
 
-        print(f"热像素图像保存为: {base_name}_hot_pixels_simple.fits")
-        print(f"冷像素图像保存为: {base_name}_cold_pixels_simple.fits")
+        print(f"热像素图像保存为: {hot_file}")
+        print(f"冷像素图像保存为: {cold_file}")
 
     elif method == 'adaptive_median':
         # 自适应中值滤波降噪
@@ -308,9 +317,14 @@ def process_fits_simple(input_file, method='outlier', threshold=4.0):
         noise_mask = np.abs(noise_image) > noise_threshold
 
         # 生成输出文件名
-        base_name = os.path.splitext(input_file)[0]
-        output_file = f"{base_name}_adaptive_median_filtered.fits"
-        noise_file = f"{base_name}_adaptive_median_noise.fits"
+        base_name = os.path.splitext(os.path.basename(input_file))[0]
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = os.path.join(output_dir, f"{base_name}_adaptive_median_filtered.fits")
+            noise_file = os.path.join(output_dir, f"{base_name}_adaptive_median_noise.fits")
+        else:
+            output_file = f"{os.path.splitext(input_file)[0]}_adaptive_median_filtered.fits"
+            noise_file = f"{os.path.splitext(input_file)[0]}_adaptive_median_noise.fits"
 
         # 保存结果
         print(f"\n保存滤波后的图像到: {output_file}")
@@ -343,9 +357,14 @@ def process_fits_simple(input_file, method='outlier', threshold=4.0):
     noise_image = image_data - repaired_image
     
     # 生成输出文件名
-    base_name = os.path.splitext(input_file)[0]
-    output_file = f"{base_name}_simple_repaired.fits"
-    noise_file = f"{base_name}_simple_noise.fits"
+    base_name = os.path.splitext(os.path.basename(input_file))[0]
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"{base_name}_simple_repaired.fits")
+        noise_file = os.path.join(output_dir, f"{base_name}_simple_noise.fits")
+    else:
+        output_file = f"{os.path.splitext(input_file)[0]}_simple_repaired.fits"
+        noise_file = f"{os.path.splitext(input_file)[0]}_simple_noise.fits"
     
     # 保存结果
     print(f"\n保存修复后的图像到: {output_file}")

@@ -396,7 +396,8 @@ class DiffOrbIntegration:
                 download_result = process_fits_simple(
                     download_file,
                     method=method,
-                    threshold=4.0
+                    threshold=4.0,
+                    output_dir=output_dir
                 )
 
                 if download_result and len(download_result) >= 3:
@@ -410,8 +411,6 @@ class DiffOrbIntegration:
                     else:
                         # 后续处理，在前一次结果基础上继续处理
                         # 使用前一次的修复结果作为输入
-                        import tempfile
-                        import os
                         from astropy.io import fits
 
                         # 创建临时文件保存中间结果
@@ -486,7 +485,8 @@ class DiffOrbIntegration:
                 template_result = process_fits_simple(
                     template_file,
                     method=method,
-                    threshold=4.0
+                    threshold=4.0,
+                    output_dir=output_dir
                 )
 
                 if template_result and len(template_result) >= 3:
@@ -499,8 +499,6 @@ class DiffOrbIntegration:
                         final_noise_mask = noise_mask.copy()
                     else:
                         # 后续处理，在前一次结果基础上继续处理
-                        import tempfile
-                        import os
                         from astropy.io import fits
 
                         # 创建临时文件保存中间结果
@@ -518,7 +516,8 @@ class DiffOrbIntegration:
                         next_result = process_fits_simple(
                             temp_filename,
                             method=method,
-                            threshold=4.0
+                            threshold=4.0,
+                            output_dir=output_dir
                         )
 
                         # 清理临时文件
