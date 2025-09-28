@@ -12,6 +12,7 @@ beautifulsoup4>=4.9.0
 
 # 图像处理和统计
 scipy>=1.7.0
+opencv-python>=4.5.0
 
 # 日志和工具
 pathlib2>=2.3.0  # Python 3.4+兼容性

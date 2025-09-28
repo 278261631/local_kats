@@ -82,6 +82,7 @@ class FitsImageViewer:
         # 降噪方式复选框
         self.outlier_var = tk.BooleanVar(value=True)  # 默认选中outlier
         self.hot_cold_var = tk.BooleanVar(value=False)  # 默认不选中hot_cold
+        self.adaptive_median_var = tk.BooleanVar(value=False)  # 默认不选中adaptive_median
 
         self.outlier_checkbox = ttk.Checkbutton(noise_frame, text="Outlier",
                                               variable=self.outlier_var)
@@ -90,6 +91,10 @@ class FitsImageViewer:
         self.hot_cold_checkbox = ttk.Checkbutton(noise_frame, text="Hot/Cold",
                                                variable=self.hot_cold_var)
         self.hot_cold_checkbox.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.adaptive_median_checkbox = ttk.Checkbutton(noise_frame, text="Adaptive Median",
+                                                      variable=self.adaptive_median_var)
+        self.adaptive_median_checkbox.pack(side=tk.LEFT, padx=(5, 0))
 
         # 对齐方式选择框架
         alignment_frame = ttk.Frame(toolbar_frame)
@@ -806,6 +811,8 @@ class FitsImageViewer:
                 noise_methods.append('outlier')
             if self.hot_cold_var.get():
                 noise_methods.append('hot_cold')
+            if self.adaptive_median_var.get():
+                noise_methods.append('adaptive_median')
 
             # 如果没有选择任何方式，默认使用outlier
             if not noise_methods:

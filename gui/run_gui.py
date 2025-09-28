@@ -16,7 +16,8 @@ def check_dependencies():
         'astropy',
         'requests',
         'bs4',  # beautifulsoup4
-        'scipy'
+        'scipy',
+        'cv2'   # opencv-python
     ]
     
     missing_packages = []

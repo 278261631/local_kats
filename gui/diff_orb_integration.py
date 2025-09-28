@@ -149,7 +149,7 @@ class DiffOrbIntegration:
             download_file (str): 下载文件路径（作为待比较文件）
             template_file (str): 模板文件路径（作为参考文件）
             output_dir (str): 输出目录，如果为None则自动创建
-            noise_methods (list): 降噪方式列表，可选值：['outlier', 'hot_cold']
+            noise_methods (list): 降噪方式列表，可选值：['outlier', 'hot_cold', 'adaptive_median']
             alignment_method (str): 对齐方式，可选值：['rigid', 'wcs']
 
         Returns:
@@ -364,7 +364,7 @@ class DiffOrbIntegration:
             download_file (str): 下载文件路径
             template_file (str): 模板文件路径
             output_dir (str): 输出目录
-            noise_methods (list): 降噪方式列表，可选值：['outlier', 'hot_cold']
+            noise_methods (list): 降噪方式列表，可选值：['outlier', 'hot_cold', 'adaptive_median']
 
         Returns:
             Tuple[str, str]: (处理后的下载文件路径, 处理后的模板文件路径)
