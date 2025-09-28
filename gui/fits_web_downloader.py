@@ -22,6 +22,13 @@ from data_collect.data_02_download import FitsDownloader
 from config_manager import ConfigManager
 from url_builder import URLBuilderFrame
 
+# 尝试导入ASTAP处理器
+try:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from astap_processor import ASTAPProcessor
+except ImportError:
+    ASTAPProcessor = None
+
 
 class FitsWebDownloaderGUI:
     """FITS文件网页下载器主界面"""
@@ -212,7 +219,17 @@ class FitsWebDownloaderGUI:
 
         ttk.Label(params_frame, text="超时(秒):").pack(side=tk.LEFT)
         self.timeout_var = tk.IntVar(value=30)
-        ttk.Spinbox(params_frame, from_=10, to=120, textvariable=self.timeout_var, width=5).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Spinbox(params_frame, from_=10, to=120, textvariable=self.timeout_var, width=5).pack(side=tk.LEFT, padx=(5, 15))
+
+        # ASTAP处理选项
+        self.enable_astap_var = tk.BooleanVar(value=False)
+        astap_checkbox = ttk.Checkbutton(params_frame, text="启用ASTAP处理", variable=self.enable_astap_var)
+        astap_checkbox.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 如果ASTAP处理器不可用，禁用选项
+        if not ASTAPProcessor:
+            astap_checkbox.config(state="disabled")
+            ttk.Label(params_frame, text="(ASTAP处理器不可用)", foreground="gray").pack(side=tk.LEFT, padx=(5, 0))
         
         # 下载按钮和进度条
         control_frame = ttk.Frame(download_frame)
@@ -713,7 +730,9 @@ class FitsWebDownloaderGUI:
             self.downloader = FitsDownloader(
                 max_workers=self.max_workers_var.get(),
                 retry_times=self.retry_times_var.get(),
-                timeout=self.timeout_var.get()
+                timeout=self.timeout_var.get(),
+                enable_astap=self.enable_astap_var.get(),
+                astap_config_path="config/url_config.json"
             )
 
             # 准备URL列表

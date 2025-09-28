@@ -12,12 +12,21 @@ import threading
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config'))
 from url_config_manager import url_config_manager
 
+# 添加项目根目录到路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from astap_processor import ASTAPProcessor
+except ImportError:
+    ASTAPProcessor = None
+
 
 class FitsDownloader:
-    def __init__(self, max_workers=4, retry_times=3, timeout=30):
+    def __init__(self, max_workers=4, retry_times=3, timeout=30, enable_astap=False, astap_config_path=None):
         self.max_workers = max_workers
         self.retry_times = retry_times
         self.timeout = timeout
+        self.enable_astap = enable_astap
         self.download_stats = {
             'total': 0,
             'completed': 0,
@@ -25,6 +34,17 @@ class FitsDownloader:
             'failed': 0
         }
         self.stats_lock = threading.Lock()
+
+        # 初始化ASTAP处理器
+        self.astap_processor = None
+        if self.enable_astap and ASTAPProcessor:
+            try:
+                config_path = astap_config_path or "config/url_config.json"
+                self.astap_processor = ASTAPProcessor(config_path)
+                print(f"ASTAP处理器已启用，配置文件: {config_path}")
+            except Exception as e:
+                print(f"初始化ASTAP处理器失败: {str(e)}")
+                self.astap_processor = None
     
     def read_url_list(self, url_file_path):
         """读取URL列表文件"""
@@ -99,6 +119,19 @@ class FitsDownloader:
                 if os.path.getsize(file_path) > 0:
                     with self.stats_lock:
                         self.download_stats['completed'] += 1
+
+                    # 如果启用了ASTAP处理，处理下载的FITS文件
+                    if self.astap_processor and filename.lower().endswith(('.fits', '.fit', '.fts')):
+                        try:
+                            print(f"开始ASTAP处理: {filename}")
+                            success = self.astap_processor.process_fits_file(file_path)
+                            if success:
+                                print(f"ASTAP处理成功: {filename}")
+                            else:
+                                print(f"ASTAP处理失败: {filename}")
+                        except Exception as e:
+                            print(f"ASTAP处理出错 {filename}: {str(e)}")
+
                     return f"下载成功: {filename}"
                 else:
                     raise Exception("下载的文件大小为0")

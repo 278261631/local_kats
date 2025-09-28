@@ -20,6 +20,14 @@ from pathlib import Path
 from typing import Optional, Tuple, Callable
 from diff_orb_integration import DiffOrbIntegration
 
+# 尝试导入ASTAP处理器
+try:
+    import sys
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from astap_processor import ASTAPProcessor
+except ImportError:
+    ASTAPProcessor = None
+
 
 class FitsImageViewer:
     """FITS图像查看器"""
@@ -46,6 +54,15 @@ class FitsImageViewer:
 
         # 初始化diff_orb集成
         self.diff_orb = DiffOrbIntegration()
+
+        # 初始化ASTAP处理器
+        self.astap_processor = None
+        if ASTAPProcessor:
+            try:
+                self.astap_processor = ASTAPProcessor("config/url_config.json")
+                self.logger.info("ASTAP处理器初始化成功")
+            except Exception as e:
+                self.logger.warning(f"ASTAP处理器初始化失败: {str(e)}")
 
         # 创建界面
         self._create_widgets()
@@ -121,6 +138,15 @@ class FitsImageViewer:
         self.diff_button = ttk.Button(toolbar_frame, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
         self.diff_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        # ASTAP处理按钮
+        self.astap_button = ttk.Button(toolbar_frame, text="执行ASTAP",
+                                     command=self._execute_astap, state="disabled")
+        self.astap_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 如果ASTAP处理器不可用，禁用按钮
+        if not self.astap_processor:
+            self.astap_button.config(state="disabled", text="ASTAP不可用")
 
         # 打开目录按钮
         self.open_dir_button = ttk.Button(toolbar_frame, text="打开下载目录",
@@ -560,6 +586,8 @@ class FitsImageViewer:
             self.selected_file_path = None
             self.display_button.config(state="disabled")
             self.diff_button.config(state="disabled")
+            if self.astap_processor:
+                self.astap_button.config(state="disabled")
             self.file_info_label.config(text="未选择文件")
             return
 
@@ -595,14 +623,22 @@ class FitsImageViewer:
             # 设置diff按钮状态
             self.diff_button.config(state="normal" if can_diff else "disabled")
 
+            # 检查是否可以执行ASTAP操作（任何FITS文件都可以执行ASTAP）
+            can_astap = self.astap_processor is not None
+            self.astap_button.config(state="normal" if can_astap else "disabled")
+
             # 更新状态标签
             status_text = f"已选择: {filename}"
             if is_download_file:
                 status_text += " (下载文件)"
                 if can_diff:
                     status_text += " [可执行Diff]"
+                if can_astap:
+                    status_text += " [可执行ASTAP]"
             else:
                 status_text += " (模板文件)"
+                if can_astap:
+                    status_text += " [可执行ASTAP]"
 
             self.file_info_label.config(text=status_text)
             self.logger.info(f"已选择FITS文件: {filename}")
@@ -611,6 +647,8 @@ class FitsImageViewer:
             self.selected_file_path = None
             self.display_button.config(state="disabled")
             self.diff_button.config(state="disabled")
+            if self.astap_processor:
+                self.astap_button.config(state="disabled")
             self.file_info_label.config(text="未选择FITS文件")
 
     def _on_tree_double_click(self, event):
@@ -742,6 +780,8 @@ class FitsImageViewer:
         self.stats_label.config(text="")
         self.display_button.config(state="disabled")
         self.diff_button.config(state="disabled")
+        if self.astap_processor:
+            self.astap_button.config(state="disabled")
 
     def _is_from_download_directory(self, file_path: str) -> bool:
         """
@@ -960,3 +1000,51 @@ class FitsImageViewer:
                 header_text += f"{key:8} = {value}\n"
         
         return header_text
+
+    def _execute_astap(self):
+        """执行ASTAP处理"""
+        if not self.selected_file_path:
+            messagebox.showwarning("警告", "请先选择一个FITS文件")
+            return
+
+        if not self.astap_processor:
+            messagebox.showerror("错误", "ASTAP处理器不可用")
+            return
+
+        try:
+            # 禁用按钮
+            self.astap_button.config(state="disabled", text="处理中...")
+            self.parent_frame.update()  # 更新界面显示
+
+            filename = os.path.basename(self.selected_file_path)
+            self.logger.info(f"开始ASTAP处理: {filename}")
+
+            # 执行ASTAP处理
+            success = self.astap_processor.process_fits_file(self.selected_file_path)
+
+            if success:
+                messagebox.showinfo("ASTAP处理完成",
+                                  f"文件 {filename} 的ASTAP处理已完成！\n\n"
+                                  f"处理过程:\n"
+                                  f"1. 从文件名提取天区编号\n"
+                                  f"2. 获取对应的RA/DEC坐标\n"
+                                  f"3. 生成并执行ASTAP命令\n\n"
+                                  f"请检查ASTAP输出文件。")
+                self.logger.info(f"ASTAP处理成功: {filename}")
+            else:
+                messagebox.showerror("ASTAP处理失败",
+                                   f"文件 {filename} 的ASTAP处理失败！\n\n"
+                                   f"可能的原因:\n"
+                                   f"1. 无法从文件名提取天区编号\n"
+                                   f"2. 配置文件中没有对应天区的坐标\n"
+                                   f"3. ASTAP程序执行失败\n\n"
+                                   f"请检查日志获取详细信息。")
+                self.logger.error(f"ASTAP处理失败: {filename}")
+
+        except Exception as e:
+            self.logger.error(f"执行ASTAP处理时出错: {str(e)}")
+            messagebox.showerror("错误", f"执行ASTAP处理时出错: {str(e)}")
+        finally:
+            # 恢复按钮状态
+            if self.astap_processor:
+                self.astap_button.config(state="normal", text="执行ASTAP")
