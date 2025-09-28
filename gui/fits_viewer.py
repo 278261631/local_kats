@@ -120,9 +120,9 @@ class FitsImageViewer:
         ttk.Label(noise_frame, text="降噪方式:").pack(side=tk.LEFT)
 
         # 降噪方式复选框
-        self.outlier_var = tk.BooleanVar(value=True)  # 默认选中outlier
+        self.outlier_var = tk.BooleanVar(value=False)  # 默认不选中outlier
         self.hot_cold_var = tk.BooleanVar(value=False)  # 默认不选中hot_cold
-        self.adaptive_median_var = tk.BooleanVar(value=False)  # 默认不选中adaptive_median
+        self.adaptive_median_var = tk.BooleanVar(value=True)  # 默认选中adaptive_median
 
         self.outlier_checkbox = ttk.Checkbutton(noise_frame, text="Outlier",
                                               variable=self.outlier_var)
@@ -152,7 +152,7 @@ class FitsImageViewer:
         ttk.Label(alignment_frame, text="对齐方式:").pack(side=tk.LEFT)
 
         # 对齐方式单选框
-        self.alignment_var = tk.StringVar(value="rigid")  # 默认选择rigid
+        self.alignment_var = tk.StringVar(value="wcs")  # 默认选择wcs
 
         alignment_methods = [
             ("Rigid", "rigid", "刚体变换（平移+旋转）"),
@@ -898,10 +898,10 @@ class FitsImageViewer:
             if self.adaptive_median_var.get():
                 noise_methods.append('adaptive_median')
 
-            # 如果没有选择任何方式，默认使用outlier
+            # 如果没有选择任何方式，默认使用adaptive_median
             if not noise_methods:
-                noise_methods = ['outlier']
-                self.logger.warning("未选择降噪方式，使用默认的outlier方法")
+                noise_methods = ['adaptive_median']
+                self.logger.warning("未选择降噪方式，使用默认的adaptive_median方法")
 
             # 获取选择的对齐方式
             alignment_method = self.alignment_var.get()
