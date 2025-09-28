@@ -26,6 +26,12 @@ try:
 except ImportError:
     ASTAPProcessor = None
 
+# 导入WCS检查器
+try:
+    from wcs_checker import WCSChecker
+except ImportError:
+    WCSChecker = None
+
 
 class FitsImageViewer:
     """FITS图像查看器"""
@@ -67,6 +73,15 @@ class FitsImageViewer:
                 self.logger.info("ASTAP处理器初始化成功")
             except Exception as e:
                 self.logger.warning(f"ASTAP处理器初始化失败: {str(e)}")
+
+        # 初始化WCS检查器
+        self.wcs_checker = None
+        if WCSChecker:
+            try:
+                self.wcs_checker = WCSChecker()
+                self.logger.info("WCS检查器初始化成功")
+            except Exception as e:
+                self.logger.warning(f"WCS检查器初始化失败: {str(e)}")
 
         # 创建界面
         self._create_widgets()
@@ -163,6 +178,15 @@ class FitsImageViewer:
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
             self.astap_button.config(state="disabled", text="ASTAP不可用")
+
+        # WCS检查按钮
+        self.wcs_check_button = ttk.Button(toolbar_frame2, text="检查WCS",
+                                         command=self._check_directory_wcs, state="disabled")
+        self.wcs_check_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 如果WCS检查器不可用，禁用按钮
+        if not self.wcs_checker:
+            self.wcs_check_button.config(state="disabled", text="WCS检查不可用")
 
         # 打开目录按钮
         self.open_dir_button = ttk.Button(toolbar_frame2, text="打开下载目录",
@@ -600,6 +624,8 @@ class FitsImageViewer:
             self.diff_button.config(state="disabled")
             if self.astap_processor:
                 self.astap_button.config(state="disabled")
+            if self.wcs_checker:
+                self.wcs_check_button.config(state="disabled")
             self.file_info_label.config(text="未选择文件")
             return
 
@@ -639,6 +665,10 @@ class FitsImageViewer:
             can_astap = self.astap_processor is not None
             self.astap_button.config(state="normal" if can_astap else "disabled")
 
+            # 检查是否可以执行WCS检查（选择文件时检查其所在目录）
+            can_wcs_check = self.wcs_checker is not None
+            self.wcs_check_button.config(state="normal" if can_wcs_check else "disabled")
+
             # 更新状态标签
             status_text = f"已选择: {filename}"
             if is_download_file:
@@ -661,6 +691,8 @@ class FitsImageViewer:
             self.diff_button.config(state="disabled")
             if self.astap_processor:
                 self.astap_button.config(state="disabled")
+            if self.wcs_checker:
+                self.wcs_check_button.config(state="disabled")
             self.file_info_label.config(text="未选择FITS文件")
 
     def _on_tree_double_click(self, event):
@@ -1035,13 +1067,8 @@ class FitsImageViewer:
             success = self.astap_processor.process_fits_file(self.selected_file_path)
 
             if success:
-                messagebox.showinfo("ASTAP处理完成",
-                                  f"文件 {filename} 的ASTAP处理已完成！\n\n"
-                                  f"处理过程:\n"
-                                  f"1. 从文件名提取天区编号\n"
-                                  f"2. 获取对应的RA/DEC坐标\n"
-                                  f"3. 生成并执行ASTAP命令\n\n"
-                                  f"请检查ASTAP输出文件。")
+                # 在状态栏显示成功信息，不弹出对话框
+                self.file_info_label.config(text=f"ASTAP处理完成: {filename}")
                 self.logger.info(f"ASTAP处理成功: {filename}")
             else:
                 messagebox.showerror("ASTAP处理失败",
@@ -1054,9 +1081,117 @@ class FitsImageViewer:
                 self.logger.error(f"ASTAP处理失败: {filename}")
 
         except Exception as e:
-            self.logger.error(f"执行ASTAP处理时出错: {str(e)}")
-            messagebox.showerror("错误", f"执行ASTAP处理时出错: {str(e)}")
+            self.logger.error(f"ASTAP处理异常: {str(e)}")
+            messagebox.showerror("错误", f"ASTAP处理时发生异常:\n{str(e)}")
+
         finally:
             # 恢复按钮状态
             if self.astap_processor:
                 self.astap_button.config(state="normal", text="执行ASTAP")
+
+    def _check_directory_wcs(self):
+        """检查目录中FITS文件的WCS信息"""
+        if not self.wcs_checker:
+            messagebox.showerror("错误", "WCS检查器不可用")
+            return
+
+        if not self.selected_file_path:
+            messagebox.showwarning("警告", "请先选择一个FITS文件")
+            return
+
+        try:
+            # 获取选中文件所在的目录
+            directory_path = os.path.dirname(self.selected_file_path)
+
+            # 显示进度对话框
+            progress_window = tk.Toplevel(self.parent_frame)
+            progress_window.title("WCS检查进度")
+            progress_window.geometry("400x150")
+            progress_window.transient(self.parent_frame)
+            progress_window.grab_set()
+
+            # 居中显示
+            progress_window.update_idletasks()
+            x = (progress_window.winfo_screenwidth() // 2) - (progress_window.winfo_width() // 2)
+            y = (progress_window.winfo_screenheight() // 2) - (progress_window.winfo_height() // 2)
+            progress_window.geometry(f"+{x}+{y}")
+
+            progress_label = ttk.Label(progress_window, text="正在检查目录中的FITS文件...")
+            progress_label.pack(pady=20)
+
+            progress_bar = ttk.Progressbar(progress_window, mode='indeterminate')
+            progress_bar.pack(pady=10, padx=20, fill=tk.X)
+            progress_bar.start()
+
+            # 强制更新界面
+            progress_window.update()
+
+            # 执行WCS检查
+            self.logger.info(f"开始检查目录WCS信息: {directory_path}")
+            with_wcs, total, with_wcs_files, without_wcs_files = self.wcs_checker.get_wcs_summary(directory_path)
+
+            # 关闭进度对话框
+            progress_bar.stop()
+            progress_window.destroy()
+
+            # 更新目录树中的文件颜色
+            self._update_tree_wcs_colors(directory_path, with_wcs_files, without_wcs_files)
+
+            # 在状态栏显示简单的结果信息，不弹出对话框
+            self.file_info_label.config(text=f"WCS检查完成: {with_wcs}/{total} 个文件包含WCS信息")
+            self.logger.info(f"WCS检查完成: {with_wcs}/{total} 个文件包含WCS信息")
+
+        except Exception as e:
+            # 确保关闭进度对话框
+            try:
+                progress_bar.stop()
+                progress_window.destroy()
+            except:
+                pass
+
+            self.logger.error(f"WCS检查失败: {str(e)}")
+            messagebox.showerror("错误", f"WCS检查失败:\n{str(e)}")
+
+    def _update_tree_wcs_colors(self, directory_path, with_wcs_files, without_wcs_files):
+        """更新目录树中文件的颜色标识"""
+        try:
+            # 配置标签样式
+            self.directory_tree.tag_configure("wcs_green", foreground="green")
+            self.directory_tree.tag_configure("wcs_orange", foreground="orange")
+
+            # 遍历目录树，找到对应的文件节点并更新颜色
+            def update_node_colors(parent_item):
+                for child in self.directory_tree.get_children(parent_item):
+                    values = self.directory_tree.item(child, "values")
+                    tags = self.directory_tree.item(child, "tags")
+
+                    if values and "fits_file" in tags:
+                        file_path = values[0]
+                        filename = os.path.basename(file_path)
+
+                        # 检查文件是否在当前检查的目录中
+                        if os.path.dirname(file_path) == directory_path:
+                            if filename in with_wcs_files:
+                                # 有WCS信息，显示为绿色
+                                current_tags = list(tags)
+                                current_tags.append("wcs_green")
+                                self.directory_tree.item(child, tags=current_tags)
+                            elif filename in without_wcs_files:
+                                # 无WCS信息，显示为橙色
+                                current_tags = list(tags)
+                                current_tags.append("wcs_orange")
+                                self.directory_tree.item(child, tags=current_tags)
+
+                    # 递归处理子节点
+                    update_node_colors(child)
+
+            # 从根节点开始更新
+            for root_item in self.directory_tree.get_children():
+                update_node_colors(root_item)
+
+            self.logger.info(f"已更新目录树颜色标识: {len(with_wcs_files)}个绿色, {len(without_wcs_files)}个橙色")
+
+        except Exception as e:
+            self.logger.error(f"更新目录树颜色失败: {str(e)}")
+
+
