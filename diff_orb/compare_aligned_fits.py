@@ -242,39 +242,73 @@ class AlignedFITSComparator:
     def find_aligned_fits_files(self, directory):
         """
         在指定目录中查找已对齐的FITS文件
-        
+
         Args:
             directory (str): 目录路径
-            
+
         Returns:
             tuple: (参考文件路径, 对齐文件路径)
         """
         fits_files = glob.glob(os.path.join(directory, "*.fits"))
-        
+
         if len(fits_files) < 2:
             self.logger.error(f"目录中FITS文件数量不足: {len(fits_files)}")
             return None, None
-        
+
         # 根据文件名模式识别参考文件和对齐文件
         reference_file = None
         aligned_file = None
-        
+        template_aligned_file = None
+        download_aligned_file = None
+
         for file_path in fits_files:
-            filename = os.path.basename(file_path)
+            filename = os.path.basename(file_path).lower()
+
+            # 传统命名模式：reference + aligned
             if "reference" in filename:
                 reference_file = file_path
-            elif "aligned" in filename:
+            elif "aligned" in filename and "reference" not in filename:
                 aligned_file = file_path
-        
-        if not reference_file or not aligned_file:
-            # 如果没有找到特定模式，使用前两个文件
-            reference_file = fits_files[0]
-            aligned_file = fits_files[1]
-            self.logger.warning("未找到标准命名模式，使用前两个FITS文件")
-        
+
+            # WCS对齐命名模式：template_xxx_aligned.fits + download_xxx_aligned.fits
+            if "_aligned.fits" in filename:
+                if filename.startswith("template") or "template" in filename:
+                    template_aligned_file = file_path
+                elif filename.startswith("download") or "download" in filename:
+                    download_aligned_file = file_path
+
+        # 优先使用传统命名模式
+        if reference_file and aligned_file:
+            self.logger.info("使用传统命名模式 (reference + aligned)")
+            self.logger.info(f"参考文件: {os.path.basename(reference_file)}")
+            self.logger.info(f"对齐文件: {os.path.basename(aligned_file)}")
+            return reference_file, aligned_file
+
+        # 其次使用WCS对齐命名模式
+        if template_aligned_file and download_aligned_file:
+            self.logger.info("使用WCS对齐命名模式 (template_aligned + download_aligned)")
+            self.logger.info(f"模板文件: {os.path.basename(template_aligned_file)}")
+            self.logger.info(f"下载文件: {os.path.basename(download_aligned_file)}")
+            return template_aligned_file, download_aligned_file
+
+        # 如果有多个_aligned文件，尝试智能匹配
+        aligned_files = [f for f in fits_files if "_aligned.fits" in os.path.basename(f).lower()]
+        if len(aligned_files) >= 2:
+            # 按文件名排序，确保一致的选择顺序
+            aligned_files.sort()
+            self.logger.info("找到多个对齐文件，使用前两个")
+            self.logger.info(f"参考文件: {os.path.basename(aligned_files[0])}")
+            self.logger.info(f"对齐文件: {os.path.basename(aligned_files[1])}")
+            return aligned_files[0], aligned_files[1]
+
+        # 最后使用前两个文件作为备选
+        fits_files.sort()  # 确保一致的选择顺序
+        reference_file = fits_files[0]
+        aligned_file = fits_files[1]
+        self.logger.warning("未找到标准命名模式，使用前两个FITS文件")
         self.logger.info(f"参考文件: {os.path.basename(reference_file)}")
         self.logger.info(f"对齐文件: {os.path.basename(aligned_file)}")
-        
+
         return reference_file, aligned_file
 
     def process_aligned_fits_comparison(self, input_directory, output_directory=None):
