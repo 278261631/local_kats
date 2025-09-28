@@ -22,8 +22,6 @@ from diff_orb_integration import DiffOrbIntegration
 
 # 尝试导入ASTAP处理器
 try:
-    import sys
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from astap_processor import ASTAPProcessor
 except ImportError:
     ASTAPProcessor = None
@@ -59,7 +57,13 @@ class FitsImageViewer:
         self.astap_processor = None
         if ASTAPProcessor:
             try:
-                self.astap_processor = ASTAPProcessor("config/url_config.json")
+                # 构建配置文件的绝对路径
+                # 从gui目录向上一级到项目根目录
+                current_dir = os.path.dirname(os.path.abspath(__file__))  # gui目录
+                project_root = os.path.dirname(current_dir)  # 项目根目录
+                config_path = os.path.join(project_root, "config", "url_config.json")
+
+                self.astap_processor = ASTAPProcessor(config_path)
                 self.logger.info("ASTAP处理器初始化成功")
             except Exception as e:
                 self.logger.warning(f"ASTAP处理器初始化失败: {str(e)}")

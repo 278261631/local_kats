@@ -16,6 +16,9 @@ from url_config_manager import url_config_manager
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
+    # ASTAP处理器现在在gui目录中
+    gui_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'gui')
+    sys.path.append(gui_path)
     from astap_processor import ASTAPProcessor
 except ImportError:
     ASTAPProcessor = None
