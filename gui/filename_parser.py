@@ -96,53 +96,92 @@ class FITSFilenameParser:
     def find_template_file(self, template_dir: str, tel_name: str, k_number: str) -> Optional[str]:
         """
         在模板目录中查找对应的模板文件
-        
+
+        要求：必须同时匹配系统名称和天区索引（不区分大小写）
+        天区索引格式: K***-* (例如 K053-1)
+
         Args:
             template_dir (str): 模板目录路径
             tel_name (str): 望远镜名称 (如 GY5)
-            k_number (str): K序号 (如 K096)
-            
+            k_number (str): 完整天区索引 (如 K053-1) 或 K序号 (如 K053)
+
         Returns:
             Optional[str]: 找到的模板文件路径，如果没找到返回None
         """
         if not os.path.exists(template_dir):
             self.logger.error(f"模板目录不存在: {template_dir}")
             return None
-        
+
         try:
-            # 搜索策略：按优先级查找匹配的模板文件
-            search_patterns = [
-                # 1. 精确匹配：望远镜名称和K序号都匹配
-                f"*{tel_name}*{k_number}*.fits",
-                f"*{tel_name}*{k_number}*.fit",
-                f"*{tel_name}*{k_number}*.fts",
-                
-                # 2. 望远镜匹配：只匹配望远镜名称
-                f"*{tel_name}*.fits",
-                f"*{tel_name}*.fit", 
-                f"*{tel_name}*.fts",
-                
-                # 3. K序号匹配：只匹配K序号
-                f"*{k_number}*.fits",
-                f"*{k_number}*.fit",
-                f"*{k_number}*.fts",
-                
-                # 4. 通用模板：查找reference、template、calibration等
-                "*reference*.fits",
-                "*template*.fits",
-                "*calibration*.fits",
-                "*standard*.fits",
-            ]
-            
-            for pattern in search_patterns:
-                matches = list(Path(template_dir).rglob(pattern))
-                if matches:
-                    # 返回第一个匹配的文件
-                    template_file = str(matches[0])
-                    self.logger.info(f"找到模板文件: {template_file} (模式: {pattern})")
-                    return template_file
-            
-            self.logger.warning(f"未找到匹配的模板文件: {tel_name}, {k_number}")
+            # 在与望远镜名称匹配的子目录中查找（不区分大小写）
+            # 例如: GY5 -> 查找 gy5, GY5, Gy5 等子目录
+            tel_name_lower = tel_name.lower()
+
+            # 遍历模板目录下的所有子目录
+            for item in os.listdir(template_dir):
+                item_path = os.path.join(template_dir, item)
+                if not os.path.isdir(item_path):
+                    continue
+
+                # 检查子目录名是否匹配望远镜名称（不区分大小写）
+                if item.lower() == tel_name_lower:
+                    self.logger.info(f"找到匹配的子目录: {item} (系统名称: {tel_name})")
+
+                    # 在子目录中查找天区索引匹配的文件（不区分大小写）
+                    k_number_lower = k_number.lower()
+
+                    # 提取文件名中的天区索引部分进行精确匹配
+                    # 例如: K053-1.fits -> K053-1
+                    for filename in os.listdir(item_path):
+                        # 检查文件扩展名
+                        if not filename.lower().endswith(('.fits', '.fit', '.fts')):
+                            continue
+
+                        # 移除扩展名
+                        name_without_ext = os.path.splitext(filename)[0]
+                        name_lower = name_without_ext.lower()
+
+                        # 检查文件名是否以天区索引开头（精确匹配）
+                        # 例如: K053-1.fits, K053-1_noise_cleaned.fits 都匹配 K053-1
+                        if name_lower.startswith(k_number_lower):
+                            # 确保后面是结束、下划线或其他分隔符，避免误匹配
+                            # 例如: K053-1 应该匹配 K053-1.fits, K053-1_xxx.fits
+                            # 但不应该匹配 K053-10.fits
+                            if len(name_lower) == len(k_number_lower) or name_lower[len(k_number_lower)] in ['_', '-', '.', ' ']:
+                                template_file = os.path.join(item_path, filename)
+                                self.logger.info(f"找到模板文件: {template_file}")
+                                self.logger.info(f"  系统名称: {tel_name} -> 子目录: {item}")
+                                self.logger.info(f"  天区索引: {k_number} -> 文件: {filename}")
+                                return template_file
+
+                    # 在匹配的子目录中没有找到天区索引匹配的文件
+                    self.logger.error(f"在子目录 {item} 中未找到匹配天区索引 {k_number} 的模板文件")
+                    self.logger.error(f"模板目录: {item_path}")
+                    self.logger.error(f"需要的文件名格式: {k_number}.fits 或 {k_number}_*.fits")
+
+                    # 列出该目录下的所有FITS文件供参考
+                    fits_files = [f for f in os.listdir(item_path) if f.lower().endswith(('.fits', '.fit', '.fts'))]
+                    if fits_files:
+                        self.logger.error(f"该目录下的FITS文件: {', '.join(fits_files[:10])}")
+                        if len(fits_files) > 10:
+                            self.logger.error(f"  ... 还有 {len(fits_files) - 10} 个文件")
+
+                    return None
+
+            # 没有找到匹配的子目录
+            self.logger.error(f"未找到匹配系统名称 {tel_name} 的子目录")
+            self.logger.error(f"模板根目录: {template_dir}")
+            self.logger.error(f"需要的子目录名称（不区分大小写）: {tel_name}")
+
+            # 列出所有子目录供参考
+            subdirs = [d for d in os.listdir(template_dir) if os.path.isdir(os.path.join(template_dir, d))]
+            if subdirs:
+                self.logger.error(f"现有子目录: {', '.join(subdirs)}")
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"查找模板文件时出错: {str(e)}")
             return None
             
         except Exception as e:

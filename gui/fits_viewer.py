@@ -898,10 +898,9 @@ class FitsImageViewer:
             if self.adaptive_median_var.get():
                 noise_methods.append('adaptive_median')
 
-            # 如果没有选择任何方式，默认使用adaptive_median
+            # 如果没有选择任何方式，不使用降噪（传入空列表）
             if not noise_methods:
-                noise_methods = ['adaptive_median']
-                self.logger.warning("未选择降噪方式，使用默认的adaptive_median方法")
+                self.logger.info("未选择降噪方式，跳过降噪处理")
 
             # 获取选择的对齐方式
             alignment_method = self.alignment_var.get()

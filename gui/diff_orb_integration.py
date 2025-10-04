@@ -377,6 +377,11 @@ class DiffOrbIntegration:
         if noise_methods is None:
             noise_methods = ['outlier']
 
+        # 如果noise_methods是空列表，跳过降噪处理
+        if not noise_methods:
+            self.logger.info("步骤0: 跳过噪点处理（未启用降噪）")
+            return download_file, template_file
+
         self.logger.info(f"步骤0: 执行噪点处理，使用方法: {', '.join(noise_methods)}")
 
         processed_download_file = download_file
@@ -452,24 +457,53 @@ class DiffOrbIntegration:
             if download_result and len(download_result) >= 3:
                 repaired_data, noise_data, noise_mask = download_result
 
-                # 保存处理后的观测文件
-                download_basename = os.path.splitext(os.path.basename(download_file))[0]
-                processed_download_file = os.path.join(output_dir, f"{download_basename}_noise_cleaned.fits")
-
-                # 读取原始文件的header
+                # 验证数据形状
                 from astropy.io import fits
                 with fits.open(download_file) as hdul:
+                    original_data = hdul[0].data
+                    original_shape = original_data.shape
                     header = hdul[0].header.copy()
 
-                # 保存处理后的数据
-                fits.writeto(processed_download_file, repaired_data, header=header, overwrite=True)
-                self.logger.info(f"观测文件噪点处理完成，保存到: {os.path.basename(processed_download_file)}")
+                self.logger.debug(f"下载文件原始形状: {original_shape}")
+                self.logger.debug(f"处理后数据形状: {repaired_data.shape}")
+
+                # 检查数据形状是否一致
+                if repaired_data.shape != original_shape:
+                    self.logger.error("=" * 60)
+                    self.logger.error("⚠️  降噪处理导致数据形状改变！")
+                    self.logger.error(f"原始形状: {original_shape}")
+                    self.logger.error(f"处理后形状: {repaired_data.shape}")
+                    self.logger.error(f"下载文件: {download_file}")
+                    self.logger.error("WCS信息可能不准确，使用原始文件代替")
+                    self.logger.error("=" * 60)
+
+                    # 删除process_fits_simple保存的错误文件
+                    download_basename = os.path.splitext(os.path.basename(download_file))[0]
+                    for suffix in ['_noise_cleaned.fits', '_adaptive_median_filtered.fits', '_simple_repaired.fits']:
+                        error_file = os.path.join(output_dir, f"{download_basename}{suffix}")
+                        if os.path.exists(error_file):
+                            try:
+                                os.remove(error_file)
+                                self.logger.info(f"已删除错误的降噪文件: {os.path.basename(error_file)}")
+                            except Exception as e:
+                                self.logger.warning(f"无法删除文件 {error_file}: {str(e)}")
+
+                    processed_download_file = download_file
+                else:
+                    # 保存处理后的观测文件
+                    download_basename = os.path.splitext(os.path.basename(download_file))[0]
+                    processed_download_file = os.path.join(output_dir, f"{download_basename}_noise_cleaned.fits")
+
+                    # 保存处理后的数据
+                    fits.writeto(processed_download_file, repaired_data, header=header, overwrite=True)
+                    self.logger.info(f"观测文件噪点处理完成，保存到: {os.path.basename(processed_download_file)}")
             else:
                 self.logger.warning("观测文件噪点处理失败，使用原始文件")
 
         except Exception as e:
             self.logger.error(f"处理观测文件时出错: {str(e)}")
             self.logger.warning("使用原始观测文件")
+            processed_download_file = download_file  # 确保使用原始文件
 
         try:
             # 处理模板文件
@@ -482,6 +516,16 @@ class DiffOrbIntegration:
 
             for method in noise_methods:
                 self.logger.info(f"  使用 {method} 方法处理模板文件")
+                self.logger.info(f"  输入文件: {template_file}")
+
+                # 读取原始文件验证
+                from astropy.io import fits
+                with fits.open(template_file) as hdul_verify:
+                    original_shape = hdul_verify[0].data.shape
+                    original_crval1 = hdul_verify[0].header.get('CRVAL1', 'N/A')
+                    original_crval2 = hdul_verify[0].header.get('CRVAL2', 'N/A')
+                    self.logger.info(f"  调用process_fits_simple前 - 形状: {original_shape}, CRVAL1: {original_crval1}, CRVAL2: {original_crval2}")
+
                 template_result = process_fits_simple(
                     template_file,
                     method=method,
@@ -491,12 +535,14 @@ class DiffOrbIntegration:
 
                 if template_result and len(template_result) >= 3:
                     repaired_data, noise_data, noise_mask = template_result
+                    self.logger.info(f"  process_fits_simple返回 - 数据形状: {repaired_data.shape}")
 
                     if final_repaired_data is None:
                         # 第一次处理，直接使用结果
                         final_repaired_data = repaired_data.copy()
                         final_noise_data = noise_data.copy()
                         final_noise_mask = noise_mask.copy()
+                        self.logger.debug(f"  第一次处理，数据形状: {final_repaired_data.shape}")
                     else:
                         # 后续处理，在前一次结果基础上继续处理
                         from astropy.io import fits
@@ -541,31 +587,152 @@ class DiffOrbIntegration:
             if template_result and len(template_result) >= 3:
                 repaired_data, noise_data, noise_mask = template_result
 
-                # 保存处理后的模板文件
-                template_basename = os.path.splitext(os.path.basename(template_file))[0]
-                processed_template_file = os.path.join(output_dir, f"{template_basename}_noise_cleaned.fits")
-
-                # 读取原始文件的header
+                # 验证数据形状
                 from astropy.io import fits
                 with fits.open(template_file) as hdul:
+                    original_data = hdul[0].data
+                    original_shape = original_data.shape
                     header = hdul[0].header.copy()
 
-                # 保存处理后的数据
-                fits.writeto(processed_template_file, repaired_data, header=header, overwrite=True)
-                self.logger.info(f"模板文件噪点处理完成，保存到: {os.path.basename(processed_template_file)}")
+                self.logger.debug(f"模板文件原始形状: {original_shape}")
+                self.logger.debug(f"处理后数据形状: {repaired_data.shape}")
+
+                # 检查数据形状是否一致
+                if repaired_data.shape != original_shape:
+                    self.logger.error("=" * 60)
+                    self.logger.error("⚠️  降噪处理导致数据形状改变！")
+                    self.logger.error(f"原始形状: {original_shape}")
+                    self.logger.error(f"处理后形状: {repaired_data.shape}")
+                    self.logger.error(f"模板文件: {template_file}")
+                    self.logger.error("WCS信息可能不准确，使用原始文件代替")
+                    self.logger.error("=" * 60)
+
+                    # 删除process_fits_simple保存的错误文件
+                    template_basename = os.path.splitext(os.path.basename(template_file))[0]
+                    for suffix in ['_noise_cleaned.fits', '_adaptive_median_filtered.fits', '_simple_repaired.fits']:
+                        error_file = os.path.join(output_dir, f"{template_basename}{suffix}")
+                        if os.path.exists(error_file):
+                            try:
+                                os.remove(error_file)
+                                self.logger.info(f"已删除错误的降噪文件: {os.path.basename(error_file)}")
+                            except Exception as e:
+                                self.logger.warning(f"无法删除文件 {error_file}: {str(e)}")
+
+                    processed_template_file = template_file
+                else:
+                    # 保存处理后的模板文件
+                    template_basename = os.path.splitext(os.path.basename(template_file))[0]
+                    processed_template_file = os.path.join(output_dir, f"{template_basename}_noise_cleaned.fits")
+
+                    # 调试：记录WCS关键信息
+                    self.logger.debug(f"模板文件原始WCS - CRVAL1: {header.get('CRVAL1', 'N/A')}, CRVAL2: {header.get('CRVAL2', 'N/A')}")
+                    self.logger.debug(f"模板文件原始WCS - CRPIX1: {header.get('CRPIX1', 'N/A')}, CRPIX2: {header.get('CRPIX2', 'N/A')}")
+
+                    # 保存处理后的数据
+                    fits.writeto(processed_template_file, repaired_data, header=header, overwrite=True)
+                    self.logger.info(f"模板文件噪点处理完成，保存到: {os.path.basename(processed_template_file)}")
+
+                    # 调试：验证保存后的WCS
+                    with fits.open(processed_template_file) as hdul_check:
+                        saved_header = hdul_check[0].header
+                        saved_shape = hdul_check[0].data.shape
+                        self.logger.debug(f"保存后的形状: {saved_shape}")
+                        self.logger.debug(f"保存后的WCS - CRVAL1: {saved_header.get('CRVAL1', 'N/A')}, CRVAL2: {saved_header.get('CRVAL2', 'N/A')}")
+                        self.logger.debug(f"保存后的WCS - CRPIX1: {saved_header.get('CRPIX1', 'N/A')}, CRPIX2: {saved_header.get('CRPIX2', 'N/A')}")
             else:
                 self.logger.warning("模板文件噪点处理失败，使用原始文件")
 
         except Exception as e:
             self.logger.error(f"处理模板文件时出错: {str(e)}")
             self.logger.warning("使用原始模板文件")
+            processed_template_file = template_file  # 确保使用原始文件
 
         self.logger.info("噪点处理步骤完成")
         return processed_download_file, processed_template_file
 
+    def _validate_wcs_quality(self, wcs1: 'WCS', wcs2: 'WCS', data1: 'np.ndarray', data2: 'np.ndarray',
+                              file1: str = "", file2: str = "") -> bool:
+        """
+        验证两个WCS的质量和兼容性
+
+        Args:
+            wcs1: 第一个WCS对象
+            wcs2: 第二个WCS对象
+            data1: 第一个图像数据
+            data2: 第二个图像数据
+            file1: 第一个文件路径（用于日志）
+            file2: 第二个文件路径（用于日志）
+
+        Returns:
+            bool: True表示WCS质量良好，可以进行对齐
+        """
+        try:
+            import numpy as np
+
+            # 检查像素尺度差异
+            scale1 = wcs1.proj_plane_pixel_scales()
+            scale2 = wcs2.proj_plane_pixel_scales()
+            scale_ratio_x = scale1[0] / scale2[0]
+            scale_ratio_y = scale1[1] / scale2[1]
+
+            self.logger.info(f"像素尺度比例: X={scale_ratio_x:.4f}, Y={scale_ratio_y:.4f}")
+
+            if abs(scale_ratio_x - 1.0) > 0.2 or abs(scale_ratio_y - 1.0) > 0.2:  # 超过20%差异
+                self.logger.warning(f"⚠️  像素尺度差异过大: X={scale_ratio_x:.3f}, Y={scale_ratio_y:.3f}")
+                if file1 and file2:
+                    self.logger.warning(f"模板文件: {file1}")
+                    self.logger.warning(f"下载文件: {file2}")
+                self.logger.warning("建议使用特征点对齐（Rigid）代替WCS对齐")
+                return False
+
+            # 检查中心坐标差异
+            center1 = wcs1.pixel_to_world(data1.shape[1]/2, data1.shape[0]/2)
+            center2 = wcs2.pixel_to_world(data2.shape[1]/2, data2.shape[0]/2)
+            separation = center1.separation(center2).deg
+
+            self.logger.info(f"中心坐标差异: {separation:.6f}度 = {separation*3600:.2f}角秒")
+
+            if separation > 1.0:  # 超过1度
+                self.logger.warning(f"⚠️  中心坐标差异过大: {separation:.3f}度")
+                if file1 and file2:
+                    self.logger.warning(f"模板文件: {file1}")
+                    self.logger.warning(f"下载文件: {file2}")
+                self.logger.warning("两个文件可能不是拍摄同一天区")
+                return False
+
+            # 记录旋转角度信息（仅用于调试，不影响对齐）
+            try:
+                # 获取PC矩阵（或CD矩阵）
+                pc1 = wcs1.wcs.get_pc()
+                pc2 = wcs2.wcs.get_pc()
+
+                # 计算旋转角度
+                rotation1 = np.arctan2(pc1[0, 1], pc1[0, 0]) * 180 / np.pi
+                rotation2 = np.arctan2(pc2[0, 1], pc2[0, 0]) * 180 / np.pi
+
+                # 计算角度差异（处理角度环绕）
+                rotation_diff = abs(rotation1 - rotation2)
+                if rotation_diff > 180:
+                    rotation_diff = 360 - rotation_diff
+
+                self.logger.info(f"旋转角度: 模板={rotation1:.2f}°, 下载={rotation2:.2f}°, 差异={rotation_diff:.2f}°")
+
+                # 注意：旋转角度差异不应该影响WCS对齐，因为WCS信息本身就包含了旋转信息
+                # WCS对齐是基于天球坐标系统的，可以处理任意旋转角度
+
+            except Exception as e:
+                self.logger.debug(f"无法计算旋转角度: {str(e)}")
+
+            self.logger.info("✓ WCS质量验证通过")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"WCS质量验证失败: {str(e)}")
+            return False
+
     def _align_using_wcs(self, template_file: str, download_file: str, output_dir: str) -> Optional[Dict]:
         """
-        使用WCS信息进行图像对齐
+        使用WCS信息进行图像对齐，失败时自动降级到特征点对齐
 
         Args:
             template_file (str): 模板文件路径
@@ -584,21 +751,80 @@ class DiffOrbIntegration:
             from scipy.ndimage import map_coordinates
 
             self.logger.info("开始基于WCS信息的图像对齐...")
+            self.logger.info(f"模板文件: {template_file}")
+            self.logger.info(f"下载文件: {download_file}")
 
             # 读取两个文件的WCS信息
+            self.logger.info("=" * 60)
+            self.logger.info("步骤1.1: 读取模板文件WCS信息")
+            self.logger.info("=" * 60)
             with fits.open(template_file) as hdul_template:
                 template_header = hdul_template[0].header
                 template_data = hdul_template[0].data.astype(np.float64)
                 template_wcs = WCS(template_header)
 
+                # 输出模板文件WCS关键信息
+                self.logger.info(f"模板文件形状: {template_data.shape}")
+                self.logger.info(f"模板CRVAL1 (RA参考点): {template_header.get('CRVAL1', 'N/A')}")
+                self.logger.info(f"模板CRVAL2 (DEC参考点): {template_header.get('CRVAL2', 'N/A')}")
+                self.logger.info(f"模板CRPIX1 (X参考像素): {template_header.get('CRPIX1', 'N/A')}")
+                self.logger.info(f"模板CRPIX2 (Y参考像素): {template_header.get('CRPIX2', 'N/A')}")
+                self.logger.info(f"模板CD1_1: {template_header.get('CD1_1', 'N/A')}")
+                self.logger.info(f"模板CD2_2: {template_header.get('CD2_2', 'N/A')}")
+
+                # 计算中心坐标
+                center_x = template_data.shape[1] / 2
+                center_y = template_data.shape[0] / 2
+                center_coord = template_wcs.pixel_to_world(center_x, center_y)
+                self.logger.info(f"模板中心像素: ({center_x:.1f}, {center_y:.1f})")
+                self.logger.info(f"模板中心天球坐标: RA={center_coord.ra.deg:.6f}°, DEC={center_coord.dec.deg:.6f}°")
+
+            self.logger.info("=" * 60)
+            self.logger.info("步骤1.2: 读取下载文件WCS信息")
+            self.logger.info("=" * 60)
             with fits.open(download_file) as hdul_download:
                 download_header = hdul_download[0].header
                 download_data = hdul_download[0].data.astype(np.float64)
                 download_wcs = WCS(download_header)
 
+                # 输出下载文件WCS关键信息
+                self.logger.info(f"下载文件形状: {download_data.shape}")
+                self.logger.info(f"下载CRVAL1 (RA参考点): {download_header.get('CRVAL1', 'N/A')}")
+                self.logger.info(f"下载CRVAL2 (DEC参考点): {download_header.get('CRVAL2', 'N/A')}")
+                self.logger.info(f"下载CRPIX1 (X参考像素): {download_header.get('CRPIX1', 'N/A')}")
+                self.logger.info(f"下载CRPIX2 (Y参考像素): {download_header.get('CRPIX2', 'N/A')}")
+                self.logger.info(f"下载CD1_1: {download_header.get('CD1_1', 'N/A')}")
+                self.logger.info(f"下载CD2_2: {download_header.get('CD2_2', 'N/A')}")
+
+                # 计算中心坐标
+                center_x = download_data.shape[1] / 2
+                center_y = download_data.shape[0] / 2
+                center_coord = download_wcs.pixel_to_world(center_x, center_y)
+                self.logger.info(f"下载中心像素: ({center_x:.1f}, {center_y:.1f})")
+                self.logger.info(f"下载中心天球坐标: RA={center_coord.ra.deg:.6f}°, DEC={center_coord.dec.deg:.6f}°")
+
             # 检查WCS信息是否有效
             if not template_wcs.has_celestial or not download_wcs.has_celestial:
-                self.logger.error("文件缺少有效的WCS天体坐标信息")
+                self.logger.error("=" * 60)
+                self.logger.error("WCS对齐失败：文件缺少有效的WCS天体坐标信息")
+                self.logger.error(f"模板文件: {template_file}")
+                self.logger.error(f"下载文件: {download_file}")
+                self.logger.error("建议使用特征点对齐（Rigid）代替WCS对齐")
+                self.logger.error("=" * 60)
+                return None
+
+            # 验证WCS质量
+            self.logger.info("=" * 60)
+            self.logger.info("步骤1.3: 验证WCS质量和兼容性")
+            self.logger.info("=" * 60)
+            if not self._validate_wcs_quality(template_wcs, download_wcs, template_data, download_data,
+                                               template_file, download_file):
+                self.logger.error("=" * 60)
+                self.logger.error("WCS对齐失败：WCS质量验证失败")
+                self.logger.error(f"模板文件: {template_file}")
+                self.logger.error(f"下载文件: {download_file}")
+                self.logger.error("建议使用特征点对齐（Rigid）代替WCS对齐")
+                self.logger.error("=" * 60)
                 return None
 
             self.logger.info("WCS信息验证通过，开始坐标变换...")
@@ -612,6 +838,21 @@ class DiffOrbIntegration:
 
             # 将天体坐标转换为下载图像的像素坐标
             download_x, download_y = download_wcs.world_to_pixel(template_coords)
+
+            # 检查有效坐标范围
+            valid_mask = (
+                (download_x >= 0) & (download_x < download_data.shape[1]) &
+                (download_y >= 0) & (download_y < download_data.shape[0]) &
+                np.isfinite(download_x) & np.isfinite(download_y)
+            )
+
+            valid_ratio = np.sum(valid_mask) / valid_mask.size
+            self.logger.info(f"有效重叠区域比例: {valid_ratio:.2%}")
+
+            if valid_ratio < 0.1:  # 重叠区域小于10%
+                self.logger.warning(f"重叠区域过小 ({valid_ratio:.2%})，WCS对齐可能不准确")
+                self.logger.warning("自动降级到特征点对齐（Rigid）")
+                return self._align_using_features(template_file, download_file, output_dir)
 
             # 使用插值将下载图像重采样到模板图像的坐标系
             self.logger.info("执行图像重采样...")
@@ -667,10 +908,20 @@ class DiffOrbIntegration:
             return result
 
         except ImportError as e:
-            self.logger.error(f"WCS对齐需要astropy库: {str(e)}")
+            self.logger.error("=" * 60)
+            self.logger.error(f"WCS对齐失败：需要astropy库 - {str(e)}")
+            self.logger.error(f"模板文件: {template_file}")
+            self.logger.error(f"下载文件: {download_file}")
+            self.logger.error("建议使用特征点对齐（Rigid）代替WCS对齐")
+            self.logger.error("=" * 60)
             return None
         except Exception as e:
-            self.logger.error(f"WCS对齐失败: {str(e)}")
+            self.logger.error("=" * 60)
+            self.logger.error(f"WCS对齐失败：{str(e)}")
+            self.logger.error(f"模板文件: {template_file}")
+            self.logger.error(f"下载文件: {download_file}")
+            self.logger.error("建议使用特征点对齐（Rigid）代替WCS对齐")
+            self.logger.error("=" * 60)
             return None
 
 
