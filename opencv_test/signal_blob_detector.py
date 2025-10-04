@@ -236,28 +236,54 @@ class SignalBlobDetector:
         
         return blobs
     
+    def sort_blobs(self, blobs, image_shape):
+        """
+        对斑点进行排序
+        规则：圆度 > 亮度 > 靠近图像中心
+        """
+        if not blobs:
+            return blobs
+
+        # 计算图像中心
+        img_center_y, img_center_x = image_shape[0] / 2, image_shape[1] / 2
+
+        # 为每个斑点计算到中心的距离
+        for blob in blobs:
+            cx, cy = blob['center']
+            distance = np.sqrt((cx - img_center_x)**2 + (cy - img_center_y)**2)
+            blob['distance_to_center'] = distance
+
+        # 排序：圆度降序（大的在前），亮度降序（大的在前），距离升序（近的在前）
+        sorted_blobs = sorted(blobs,
+                             key=lambda b: (-b['circularity'], -b['max_signal'], b['distance_to_center']))
+
+        return sorted_blobs
+
     def print_blob_info(self, blobs):
         """打印斑点信息"""
         if not blobs:
             print("\n未检测到任何斑点")
             return
-        
-        print(f"\n检测到的斑点详细信息:")
-        print(f"{'序号':<6} {'X坐标':<10} {'Y坐标':<10} {'面积':<10} {'圆度':<10} {'平均信号':<12} {'最大信号':<12}")
-        print("-" * 80)
-        
+
+        print(f"\n检测到的斑点详细信息（已排序：圆度>亮度>靠近中心）:")
+        print(f"{'序号':<6} {'X坐标':<10} {'Y坐标':<10} {'面积':<10} {'圆度':<10} {'最大信号':<12} {'平均信号':<12} {'距中心':<10}")
+        print("-" * 90)
+
         for i, blob in enumerate(blobs, 1):
             cx, cy = blob['center']
+            dist = blob.get('distance_to_center', 0)
             print(f"{i:<6} {cx:<10.2f} {cy:<10.2f} {blob['area']:<10.1f} "
-                  f"{blob['circularity']:<10.3f} {blob['mean_signal']:<12.6f} {blob['max_signal']:<12.6f}")
-        
+                  f"{blob['circularity']:<10.3f} {blob['max_signal']:<12.6f} {blob['mean_signal']:<12.6f} {dist:<10.1f}")
+
         # 统计信息
         areas = [b['area'] for b in blobs]
         signals = [b['mean_signal'] for b in blobs]
-        
+        circularities = [b['circularity'] for b in blobs]
+
         print(f"\n统计信息:")
         print(f"  - 总数: {len(blobs)}")
         print(f"  - 面积: {np.mean(areas):.2f} ± {np.std(areas):.2f} (范围: {np.min(areas):.2f} - {np.max(areas):.2f})")
+        print(f"  - 圆度: {np.mean(circularities):.3f} ± {np.std(circularities):.3f} (范围: {np.min(circularities):.3f} - {np.max(circularities):.3f})")
         print(f"  - 平均信号: {np.mean(signals):.6f} ± {np.std(signals):.6f}")
         print(f"  - 信号范围: {np.min(signals):.6f} - {np.max(signals):.6f}")
     
@@ -395,6 +421,9 @@ class SignalBlobDetector:
                 'threshold': threshold,
                 'stretch_method': 'none'
             }
+
+        # 排序斑点
+        blobs = self.sort_blobs(blobs, data.shape)
 
         # 打印信息
         self.print_blob_info(blobs)
