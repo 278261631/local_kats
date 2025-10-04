@@ -155,7 +155,54 @@ class SignalBlobDetector:
         print(f"  - {self.sigma_threshold}σ 阈值: {median + self.sigma_threshold * sigma:.6f}")
 
         return median, sigma
-    
+
+    def remove_bright_lines(self, image, threshold=50, dilate_size=5):
+        """
+        去除图像中的亮线
+        使用边缘检测和霍夫直线检测方法
+
+        Args:
+            image: 输入图像（uint8格式）
+            threshold: 亮度阈值
+            dilate_size: 膨胀大小
+
+        Returns:
+            去除亮线后的图像
+        """
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image.copy()
+
+        # 检测亮区域
+        _, binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+
+        # 边缘检测
+        edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+
+        # 霍夫直线检测
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=50,
+                                minLineLength=30, maxLineGap=10)
+
+        # 创建掩码
+        mask = np.zeros(gray.shape, dtype=np.uint8)
+
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                # 在掩码上画线，加粗一些
+                cv2.line(mask, (x1, y1), (x2, y2), 255, 3)
+
+        # 膨胀掩码
+        if dilate_size > 0:
+            kernel = np.ones((dilate_size, dilate_size), np.uint8)
+            mask = cv2.dilate(mask, kernel, iterations=1)
+
+        # 使用掩码修复图像
+        result = cv2.inpaint(image, mask, 3, cv2.INPAINT_TELEA)
+
+        return result
+
     def create_signal_mask(self, data, median, sigma):
         """
         创建信号掩码，只保留高于阈值的像素
@@ -569,6 +616,13 @@ class SignalBlobDetector:
         cv2.imwrite(stretched_output, stretched_uint8)
         print(f"保存拉伸图像: {stretched_output}")
 
+        # 去除亮线处理
+        print("执行亮线去除...")
+        stretched_no_lines = self.remove_bright_lines(stretched_uint8)
+        stretched_no_lines_output = os.path.join(output_folder, f"{base_name}_stretched_no_lines_{param_str}.png")
+        cv2.imwrite(stretched_no_lines_output, stretched_no_lines)
+        print(f"保存去除亮线后的图像: {stretched_no_lines_output}")
+
         # 保存掩码
         mask_output = os.path.join(output_folder, f"{base_name}_mask_{param_str}.png")
         cv2.imwrite(mask_output, mask)
@@ -660,17 +714,25 @@ class SignalBlobDetector:
         if use_peak_stretch:
             stretched_data, peak_value, end_value = self.histogram_peak_stretch(data, ratio=2.0/3.0)
 
-            # 使用简单阈值检测拉伸后的数据
-            print(f"\n使用拉伸后的数据进行检测...")
+            # 去除亮线处理
+            print("\n执行亮线去除...")
+            stretched_uint8 = (np.clip(stretched_data, 0, 1) * 255).astype(np.uint8)
+            stretched_no_lines_uint8 = self.remove_bright_lines(stretched_uint8)
+            # 转换回0-1范围的float数据用于后续检测
+            stretched_data_no_lines = stretched_no_lines_uint8.astype(np.float64) / 255.0
+            print("亮线去除完成，使用去除亮线后的数据进行检测")
+
+            # 使用简单阈值检测拉伸后的数据（去除亮线后）
+            print(f"\n使用去除亮线后的数据进行检测...")
             print(f"检测阈值: {detection_threshold}")
 
             # 创建掩码：拉伸后值 > detection_threshold 的像素
-            mask = (stretched_data > detection_threshold).astype(np.uint8) * 255
+            mask = (stretched_data_no_lines > detection_threshold).astype(np.uint8) * 255
             signal_pixels = np.sum(mask > 0)
             print(f"信号像素: {signal_pixels} ({signal_pixels/mask.size*100:.3f}%)")
 
-            # 检测斑点
-            blobs = self.detect_blobs_from_mask(mask, stretched_data)
+            # 检测斑点（使用去除亮线后的数据）
+            blobs = self.detect_blobs_from_mask(mask, stretched_data_no_lines)
 
             threshold_info = {
                 'threshold': detection_threshold,
