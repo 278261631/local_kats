@@ -369,13 +369,15 @@ class AlignedFITSComparator:
 
         return reference_file, aligned_file
 
-    def run_signal_blob_detector(self, diff_fits_path, output_directory):
+    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None):
         """
         对difference.fits执行signal_blob_detector检测
 
         Args:
             diff_fits_path: difference.fits文件路径
             output_directory: 输出目录
+            reference_file: 参考图像（模板）FITS文件路径
+            aligned_file: 对齐图像（下载）FITS文件路径
 
         Returns:
             dict: 检测结果信息
@@ -400,6 +402,12 @@ class AlignedFITSComparator:
                 '--max-area', '1000',
                 '--min-circularity', '0.3'
             ]
+
+            # 添加参考图像和对齐图像参数
+            if reference_file and os.path.exists(reference_file):
+                cmd.extend(['--reference', reference_file])
+            if aligned_file and os.path.exists(aligned_file):
+                cmd.extend(['--aligned', aligned_file])
 
             self.logger.info(f"执行命令: {' '.join(cmd)}")
 
@@ -585,7 +593,11 @@ class AlignedFITSComparator:
 
         # 执行signal_blob_detector检测
         self.logger.info("执行signal_blob_detector检测...")
-        blob_detection_result = self.run_signal_blob_detector(diff_fits_path, output_directory)
+        blob_detection_result = self.run_signal_blob_detector(
+            diff_fits_path, output_directory,
+            reference_file=reference_file,
+            aligned_file=aligned_file
+        )
 
         # 返回处理结果
         result = {

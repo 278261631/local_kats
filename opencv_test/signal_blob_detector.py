@@ -10,6 +10,7 @@ import os
 import sys
 import argparse
 from datetime import datetime
+from PIL import Image
 
 
 class SignalBlobDetector:
@@ -307,8 +308,162 @@ class SignalBlobDetector:
 
         return color_image
     
+    def local_stretch(self, cutout, method='percentile', low_percentile=1, high_percentile=99):
+        """
+        对截图进行局部拉伸以增强细节
+
+        Args:
+            cutout: 截图数据
+            method: 拉伸方法 ('percentile', 'adaptive', 'histogram')
+            low_percentile: 低百分位（默认1%）
+            high_percentile: 高百分位（默认99%）
+
+        Returns:
+            拉伸后的uint8图像
+        """
+        if cutout.size == 0:
+            return np.zeros_like(cutout, dtype=np.uint8)
+
+        if method == 'percentile':
+            # 百分位拉伸：使用1%和99%百分位作为黑白点
+            vmin = np.percentile(cutout, low_percentile)
+            vmax = np.percentile(cutout, high_percentile)
+
+            if vmax - vmin < 1e-10:
+                # 如果范围太小，使用全局最小最大值
+                vmin = np.min(cutout)
+                vmax = np.max(cutout)
+
+            stretched = np.clip((cutout - vmin) / (vmax - vmin + 1e-10), 0, 1)
+
+        elif method == 'adaptive':
+            # 自适应拉伸：基于局部统计
+            mean = np.mean(cutout)
+            std = np.std(cutout)
+
+            vmin = max(np.min(cutout), mean - 2 * std)
+            vmax = min(np.max(cutout), mean + 2 * std)
+
+            stretched = np.clip((cutout - vmin) / (vmax - vmin + 1e-10), 0, 1)
+
+        elif method == 'histogram':
+            # 直方图均衡化
+            # 先归一化到0-1
+            normalized = (cutout - np.min(cutout)) / (np.max(cutout) - np.min(cutout) + 1e-10)
+            # 转换到0-255
+            uint8_img = (normalized * 255).astype(np.uint8)
+            # 应用直方图均衡化
+            equalized = cv2.equalizeHist(uint8_img)
+            stretched = equalized / 255.0
+
+        else:
+            # 默认：简单归一化
+            stretched = (cutout - np.min(cutout)) / (np.max(cutout) - np.min(cutout) + 1e-10)
+
+        return (stretched * 255).astype(np.uint8)
+
+    def extract_blob_cutouts(self, original_data, stretched_data, result_image, blobs,
+                            output_folder, base_name, cutout_size=100,
+                            reference_data=None, aligned_data=None,
+                            stretch_method='percentile', low_percentile=1, high_percentile=99):
+        """
+        为每个检测结果提取截图并生成GIF
+
+        Args:
+            original_data: 原始FITS数据（difference.fits）
+            stretched_data: 拉伸后的数据
+            result_image: 带标记的结果图
+            blobs: 检测到的斑点列表
+            output_folder: 输出文件夹
+            base_name: 基础文件名
+            cutout_size: 截图大小（默认100x100）
+            reference_data: 参考图像数据（模板图像）
+            aligned_data: 对齐图像数据（下载图像）
+            stretch_method: 拉伸方法 ('percentile', 'adaptive', 'histogram')
+            low_percentile: 低百分位（默认1%）
+            high_percentile: 高百分位（默认99%）
+        """
+        if not blobs:
+            return
+
+        print(f"\n生成每个检测结果的截图（局部拉伸方法: {stretch_method}, 百分位: {low_percentile}-{high_percentile}）...")
+
+        half_size = cutout_size // 2
+
+        for i, blob in enumerate(blobs, 1):
+            cx, cy = blob['center']
+            cx, cy = int(cx), int(cy)
+
+            # 创建单独的文件夹
+            blob_folder = os.path.join(output_folder, f"blob_{i:03d}")
+            os.makedirs(blob_folder, exist_ok=True)
+
+            # 计算截图区域
+            x1 = max(0, cx - half_size)
+            y1 = max(0, cy - half_size)
+            x2 = min(original_data.shape[1], cx + half_size)
+            y2 = min(original_data.shape[0], cy + half_size)
+
+            # 提取参考图像截图（模板图像）- 使用局部拉伸
+            if reference_data is not None:
+                ref_cutout = reference_data[y1:y2, x1:x2]
+                ref_norm = self.local_stretch(ref_cutout, method=stretch_method,
+                                             low_percentile=low_percentile, high_percentile=high_percentile)
+                ref_path = os.path.join(blob_folder, f"1_reference.png")
+                cv2.imwrite(ref_path, ref_norm)
+            else:
+                # 如果没有参考图像，使用原始数据
+                original_cutout = original_data[y1:y2, x1:x2]
+                original_norm = self.local_stretch(original_cutout, method=stretch_method,
+                                                   low_percentile=low_percentile, high_percentile=high_percentile)
+                ref_path = os.path.join(blob_folder, f"1_reference.png")
+                cv2.imwrite(ref_path, original_norm)
+
+            # 提取对齐图像截图（下载图像）- 使用局部拉伸
+            if aligned_data is not None:
+                aligned_cutout = aligned_data[y1:y2, x1:x2]
+                aligned_norm = self.local_stretch(aligned_cutout, method=stretch_method,
+                                                 low_percentile=low_percentile, high_percentile=high_percentile)
+                aligned_path = os.path.join(blob_folder, f"2_aligned.png")
+                cv2.imwrite(aligned_path, aligned_norm)
+            else:
+                # 如果没有对齐图像，使用拉伸后的数据
+                stretched_cutout = stretched_data[y1:y2, x1:x2]
+                stretched_norm = (np.clip(stretched_cutout, 0, 1) * 255).astype(np.uint8)
+                aligned_path = os.path.join(blob_folder, f"2_aligned.png")
+                cv2.imwrite(aligned_path, stretched_norm)
+
+            # 提取检测结果截图
+            result_cutout = result_image[y1:y2, x1:x2]
+            result_path = os.path.join(blob_folder, f"3_detection.png")
+            cv2.imwrite(result_path, result_cutout)
+
+            # 生成GIF动画
+            try:
+                images = []
+                for img_path in [ref_path, aligned_path, result_path]:
+                    img = Image.open(img_path)
+                    # 确保尺寸一致
+                    if img.size != (cutout_size, cutout_size):
+                        img = img.resize((cutout_size, cutout_size), Image.LANCZOS)
+                    images.append(img)
+
+                gif_path = os.path.join(blob_folder, f"animation.gif")
+                images[0].save(
+                    gif_path,
+                    save_all=True,
+                    append_images=images[1:],
+                    duration=800,  # 每帧800ms
+                    loop=0  # 无限循环
+                )
+
+            except Exception as e:
+                print(f"  警告: 生成GIF失败 (blob {i}): {str(e)}")
+
+        print(f"已为 {len(blobs)} 个检测结果生成截图和GIF")
+
     def save_results(self, original_data, stretched_data, mask, result_image, blobs,
-                     output_dir, base_name, threshold_info):
+                     output_dir, base_name, threshold_info, reference_data=None, aligned_data=None):
         """保存检测结果"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -337,6 +492,11 @@ class SignalBlobDetector:
         result_output = os.path.join(output_folder, f"{base_name}_blobs_{param_str}.png")
         cv2.imwrite(result_output, result_image)
         print(f"保存检测结果图: {result_output}")
+
+        # 生成每个检测结果的截图和GIF
+        self.extract_blob_cutouts(original_data, stretched_data, result_image, blobs,
+                                  output_folder, base_name,
+                                  reference_data=reference_data, aligned_data=aligned_data)
 
         # 保存详细信息
         txt_output = os.path.join(output_folder, f"{base_name}_analysis_{param_str}.txt")
@@ -377,12 +537,37 @@ class SignalBlobDetector:
 
         print(f"保存分析报告: {txt_output}")
     
-    def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=True, detection_threshold=0.5):
-        """处理 FITS 文件的完整流程"""
+    def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=True, detection_threshold=0.5,
+                         reference_fits=None, aligned_fits=None):
+        """
+        处理 FITS 文件的完整流程
+
+        Args:
+            fits_path: difference.fits文件路径
+            output_dir: 输出目录
+            use_peak_stretch: 是否使用峰值拉伸
+            detection_threshold: 检测阈值
+            reference_fits: 参考图像（模板）FITS文件路径
+            aligned_fits: 对齐图像（下载）FITS文件路径
+        """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
         if data is None:
             return
+
+        # 加载参考图像和对齐图像（如果提供）
+        reference_data = None
+        aligned_data = None
+
+        if reference_fits and os.path.exists(reference_fits):
+            reference_data, _ = self.load_fits_image(reference_fits)
+            if reference_data is not None:
+                print(f"已加载参考图像: {os.path.basename(reference_fits)}")
+
+        if aligned_fits and os.path.exists(aligned_fits):
+            aligned_data, _ = self.load_fits_image(aligned_fits)
+            if aligned_data is not None:
+                print(f"已加载对齐图像: {os.path.basename(aligned_fits)}")
 
         # 基于直方图峰值拉伸
         if use_peak_stretch:
@@ -438,7 +623,8 @@ class SignalBlobDetector:
         base_name = os.path.splitext(os.path.basename(fits_path))[0]
 
         self.save_results(data, stretched_data, mask, result_image, blobs,
-                         output_dir, base_name, threshold_info)
+                         output_dir, base_name, threshold_info,
+                         reference_data=reference_data, aligned_data=aligned_data)
 
         print(f"\n处理完成！")
         return blobs
@@ -449,7 +635,7 @@ def main():
     parser = argparse.ArgumentParser(description='基于直方图峰值的斑点检测')
     parser.add_argument('fits_file', nargs='?',
                        default='aligned_comparison_20251004_151632_difference.fits',
-                       help='FITS 文件路径')
+                       help='FITS 文件路径（difference.fits）')
     parser.add_argument('--threshold', type=float, default=0.5,
                        help='检测阈值（拉伸后的值），默认 0.5，推荐范围 0.3-0.8')
     parser.add_argument('--min-area', type=float, default=1,
@@ -460,6 +646,10 @@ def main():
                        help='最小圆度 (0-1)，默认 0.3')
     parser.add_argument('--no-peak-stretch', action='store_true',
                        help='禁用基于峰值的拉伸')
+    parser.add_argument('--reference', type=str, default=None,
+                       help='参考图像（模板）FITS文件路径')
+    parser.add_argument('--aligned', type=str, default=None,
+                       help='对齐图像（下载）FITS文件路径')
 
     args = parser.parse_args()
 
@@ -492,7 +682,9 @@ def main():
 
     detector.process_fits_file(fits_file,
                               use_peak_stretch=not args.no_peak_stretch,
-                              detection_threshold=args.threshold)
+                              detection_threshold=args.threshold,
+                              reference_fits=args.reference,
+                              aligned_fits=args.aligned)
 
 
 if __name__ == "__main__":
