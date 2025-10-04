@@ -19,6 +19,7 @@ import logging
 from datetime import datetime
 import warnings
 import glob
+import subprocess
 
 # 忽略警告
 warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -368,6 +369,68 @@ class AlignedFITSComparator:
 
         return reference_file, aligned_file
 
+    def run_signal_blob_detector(self, diff_fits_path, output_directory):
+        """
+        对difference.fits执行signal_blob_detector检测
+
+        Args:
+            diff_fits_path: difference.fits文件路径
+            output_directory: 输出目录
+
+        Returns:
+            dict: 检测结果信息
+        """
+        try:
+            # 查找signal_blob_detector.py
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir)
+            detector_script = os.path.join(project_root, 'opencv_test', 'signal_blob_detector.py')
+
+            if not os.path.exists(detector_script):
+                self.logger.warning(f"未找到signal_blob_detector.py: {detector_script}")
+                return None
+
+            # 构建命令
+            cmd = [
+                sys.executable,
+                detector_script,
+                diff_fits_path,
+                '--threshold', '0.5',
+                '--min-area', '1',
+                '--max-area', '1000',
+                '--min-circularity', '0.3'
+            ]
+
+            self.logger.info(f"执行命令: {' '.join(cmd)}")
+
+            # 执行检测
+            result = subprocess.run(
+                cmd,
+                cwd=output_directory,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5分钟超时
+            )
+
+            if result.returncode == 0:
+                self.logger.info("signal_blob_detector检测完成")
+                # 从输出中提取检测数量
+                output_lines = result.stdout.split('\n')
+                for line in output_lines:
+                    if '过滤后剩余' in line and '个斑点' in line:
+                        self.logger.info(f"  {line.strip()}")
+                return {'success': True, 'output': result.stdout}
+            else:
+                self.logger.error(f"signal_blob_detector执行失败: {result.stderr}")
+                return {'success': False, 'error': result.stderr}
+
+        except subprocess.TimeoutExpired:
+            self.logger.error("signal_blob_detector执行超时")
+            return {'success': False, 'error': 'Timeout'}
+        except Exception as e:
+            self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
+            return {'success': False, 'error': str(e)}
+
     def process_aligned_fits_comparison(self, input_directory, output_directory=None):
         """
         处理已对齐FITS文件的差异比较
@@ -520,6 +583,10 @@ class AlignedFITSComparator:
                     f.write(f"  面积: {spot['area']:.1f} 像素\n")
                     f.write("\n")
 
+        # 执行signal_blob_detector检测
+        self.logger.info("执行signal_blob_detector检测...")
+        blob_detection_result = self.run_signal_blob_detector(diff_fits_path, output_directory)
+
         # 返回处理结果
         result = {
             'success': True,
@@ -528,6 +595,7 @@ class AlignedFITSComparator:
             'output_directory': output_directory,
             'new_bright_spots': len(bright_spots),
             'bright_spots_details': bright_spots,
+            'blob_detection': blob_detection_result,
             'output_files': {
                 'fits': {
                     'difference': diff_fits_path,
