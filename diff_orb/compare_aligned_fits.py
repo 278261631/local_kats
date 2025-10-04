@@ -189,21 +189,78 @@ class AlignedFITSComparator:
         except Exception as e:
             self.logger.error(f"保存FITS文件失败 {output_path}: {str(e)}")
     
-    def save_jpg_result(self, data, output_path, title="", colormap='viridis'):
+    def get_overlap_bounding_box(self, overlap_mask):
+        """
+        获取重叠区域的边界框
+
+        Args:
+            overlap_mask (numpy.ndarray): 重叠区域掩码
+
+        Returns:
+            tuple: (x_min, y_min, x_max, y_max) 边界框坐标，如果没有重叠区域返回None
+        """
+        try:
+            # 找到所有非零像素的坐标
+            coords = np.argwhere(overlap_mask > 0)
+
+            if len(coords) == 0:
+                return None
+
+            # 获取边界框 (注意：argwhere返回的是(row, col)即(y, x))
+            y_min, x_min = coords.min(axis=0)
+            y_max, x_max = coords.max(axis=0)
+
+            return (x_min, y_min, x_max, y_max)
+
+        except Exception as e:
+            self.logger.error(f"计算重叠区域边界框失败: {str(e)}")
+            return None
+
+    def save_jpg_result(self, data, output_path, title="", colormap='viridis',
+                       overlap_bbox=None, draw_alignment_box=False):
         """
         保存数据为JPG文件
-        
+
         Args:
             data (numpy.ndarray): 要保存的数据
             output_path (str): 输出路径
             title (str): 图像标题
             colormap (str): 颜色映射
+            overlap_bbox (tuple): 重叠区域边界框 (x_min, y_min, x_max, y_max)
+            draw_alignment_box (bool): 是否绘制对齐区域方框
         """
         try:
-            plt.figure(figsize=(10, 8))
-            plt.imshow(data, cmap=colormap, origin='lower')
-            plt.colorbar(label='强度')
-            plt.title(title)
+            fig, ax = plt.subplots(figsize=(10, 8))
+            im = ax.imshow(data, cmap=colormap, origin='lower')
+            plt.colorbar(im, ax=ax, label='强度')
+            ax.set_title(title)
+
+            # 如果需要绘制对齐区域方框
+            if draw_alignment_box and overlap_bbox is not None:
+                x_min, y_min, x_max, y_max = overlap_bbox
+                width = x_max - x_min
+                height = y_max - y_min
+
+                # 绘制绿色方框表示对齐区域
+                from matplotlib.patches import Rectangle
+                rect = Rectangle((x_min, y_min), width, height,
+                               linewidth=2, edgecolor='lime', facecolor='none',
+                               linestyle='--', label='Alignment Region')
+                ax.add_patch(rect)
+
+                # 添加文本标注
+                text_x = x_min + 10
+                text_y = y_min + 20
+                ax.text(text_x, text_y,
+                       f'Align Box: ({x_min},{y_min})-({x_max},{y_max})\nSize: {width}x{height}',
+                       color='lime', fontsize=9, weight='bold',
+                       bbox=dict(boxstyle='round,pad=0.5', facecolor='black', alpha=0.7))
+
+                # 添加图例
+                ax.legend(loc='upper right', fontsize=9)
+
+                self.logger.info(f"对齐区域边界框: ({x_min},{y_min})-({x_max},{y_max}), 大小: {width}x{height}")
+
             plt.tight_layout()
             plt.savefig(output_path, dpi=150, bbox_inches='tight')
             plt.close()
@@ -385,40 +442,62 @@ class AlignedFITSComparator:
         overlap_mask_fits_path = os.path.join(output_directory, f"{base_name}_overlap_mask.fits")
         self.save_fits_result(overlap_mask.astype(np.float32), overlap_mask_fits_path)
 
-        # 保存JPG格式结果
-        self.logger.info("保存JPG格式结果...")
+        # 计算重叠区域边界框用于调试可视化
+        self.logger.info("计算对齐区域边界框...")
+        overlap_bbox = self.get_overlap_bounding_box(overlap_mask)
 
-        # 保存参考图像（JPG）
+        # 保存JPG格式结果
+        self.logger.info("保存JPG格式结果（包含对齐区域调试信息）...")
+
+        # 保存参考图像（JPG）- 带对齐区域方框
         ref_jpg_path = os.path.join(output_directory, f"{base_name}_reference.jpg")
         self.save_jpg_result(self.normalize_image(ref_data), ref_jpg_path,
-                           "参考图像（非重叠区域已设为黑色）", 'gray')
+                           "参考图像（非重叠区域已设为黑色）", 'gray',
+                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存对齐图像（JPG）
+        # 保存对齐图像（JPG）- 带对齐区域方框
         aligned_jpg_path = os.path.join(output_directory, f"{base_name}_aligned.jpg")
         self.save_jpg_result(self.normalize_image(aligned_data), aligned_jpg_path,
-                           "对齐图像（非重叠区域已设为黑色）", 'gray')
+                           "对齐图像（非重叠区域已设为黑色）", 'gray',
+                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存差异图像（JPG）
+        # 保存差异图像（JPG）- 带对齐区域方框
         diff_jpg_path = os.path.join(output_directory, f"{base_name}_difference.jpg")
         self.save_jpg_result(diff_image, diff_jpg_path,
-                           "差异图像（仅重叠区域）", 'hot')
+                           "差异图像（仅重叠区域）", 'hot',
+                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存二值化差异图像（JPG）
+        # 保存二值化差异图像（JPG）- 带对齐区域方框
         binary_jpg_path = os.path.join(output_directory, f"{base_name}_binary_diff.jpg")
         self.save_jpg_result(binary_diff, binary_jpg_path,
-                           "二值化差异图像（仅重叠区域）", 'gray')
+                           "二值化差异图像（仅重叠区域）", 'gray',
+                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存重叠掩码（JPG）
+        # 保存重叠掩码（JPG）- 带对齐区域方框
         overlap_mask_jpg_path = os.path.join(output_directory, f"{base_name}_overlap_mask.jpg")
         self.save_jpg_result(overlap_mask, overlap_mask_jpg_path,
-                           "重叠区域掩码（白色=重叠，黑色=非重叠）", 'gray')
+                           "重叠区域掩码（白色=重叠，黑色=非重叠）", 'gray',
+                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存标记图像（JPG）
+        # 保存标记图像（JPG）- 带对齐区域方框
         marked_jpg_path = os.path.join(output_directory, f"{base_name}_marked.jpg")
-        plt.figure(figsize=(10, 8))
-        plt.imshow(marked_image, origin='lower')
-        plt.title(f"标记新亮点图像 (共{len(bright_spots)}个)")
-        plt.axis('off')
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.imshow(marked_image, origin='lower')
+        ax.set_title(f"标记新亮点图像 (共{len(bright_spots)}个)")
+        ax.axis('off')
+
+        # 在标记图像上也绘制对齐区域方框
+        if overlap_bbox is not None:
+            x_min, y_min, x_max, y_max = overlap_bbox
+            width = x_max - x_min
+            height = y_max - y_min
+            from matplotlib.patches import Rectangle
+            rect = Rectangle((x_min, y_min), width, height,
+                           linewidth=2, edgecolor='lime', facecolor='none',
+                           linestyle='--', label='Alignment Region')
+            ax.add_patch(rect)
+            ax.legend(loc='upper right', fontsize=9)
+
         plt.tight_layout()
         plt.savefig(marked_jpg_path, dpi=150, bbox_inches='tight')
         plt.close()
