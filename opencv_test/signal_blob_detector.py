@@ -362,10 +362,67 @@ class SignalBlobDetector:
 
         return (stretched * 255).astype(np.uint8)
 
+    def pixel_to_radec(self, x, y, header):
+        """
+        将像素坐标转换为RA/DEC坐标
+
+        Args:
+            x: X像素坐标
+            y: Y像素坐标
+            header: FITS header
+
+        Returns:
+            (ra, dec) 或 (None, None)
+        """
+        try:
+            # 尝试从header中获取WCS信息
+            if 'CRVAL1' in header and 'CRVAL2' in header:
+                crval1 = header['CRVAL1']  # 参考点RA
+                crval2 = header['CRVAL2']  # 参考点DEC
+                crpix1 = header.get('CRPIX1', header['NAXIS1'] / 2)  # 参考像素X
+                crpix2 = header.get('CRPIX2', header['NAXIS2'] / 2)  # 参考像素Y
+                cd1_1 = header.get('CD1_1', header.get('CDELT1', 0))
+                cd2_2 = header.get('CD2_2', header.get('CDELT2', 0))
+
+                # 简单线性转换
+                dx = x - crpix1
+                dy = y - crpix2
+                ra = crval1 + dx * cd1_1
+                dec = crval2 + dy * cd2_2
+
+                return ra, dec
+        except:
+            pass
+
+        return None, None
+
+    def extract_filename_info(self, base_name):
+        """
+        从文件名中提取gy*和K***-*信息
+
+        Args:
+            base_name: 基础文件名
+
+        Returns:
+            (gy_info, k_info) 或 (None, None)
+        """
+        import re
+
+        # 尝试匹配gy*格式
+        gy_match = re.search(r'(gy\d+)', base_name, re.IGNORECASE)
+        gy_info = gy_match.group(1) if gy_match else None
+
+        # 尝试匹配K***-*格式
+        k_match = re.search(r'(K\d+-\d+)', base_name, re.IGNORECASE)
+        k_info = k_match.group(1) if k_match else None
+
+        return gy_info, k_info
+
     def extract_blob_cutouts(self, original_data, stretched_data, result_image, blobs,
                             output_folder, base_name, cutout_size=100,
                             reference_data=None, aligned_data=None,
-                            stretch_method='percentile', low_percentile=1, high_percentile=99):
+                            stretch_method='percentile', low_percentile=1, high_percentile=99,
+                            header=None):
         """
         为每个检测结果提取截图并生成GIF
 
@@ -382,11 +439,19 @@ class SignalBlobDetector:
             stretch_method: 拉伸方法 ('percentile', 'adaptive', 'histogram')
             low_percentile: 低百分位（默认1%）
             high_percentile: 高百分位（默认99%）
+            header: FITS header（用于坐标转换）
         """
         if not blobs:
             return
 
         print(f"\n生成每个检测结果的截图（局部拉伸方法: {stretch_method}, 百分位: {low_percentile}-{high_percentile}）...")
+
+        # 创建统一的cutouts文件夹
+        cutouts_folder = os.path.join(output_folder, "cutouts")
+        os.makedirs(cutouts_folder, exist_ok=True)
+
+        # 提取文件名信息
+        gy_info, k_info = self.extract_filename_info(base_name)
 
         half_size = cutout_size // 2
 
@@ -394,9 +459,30 @@ class SignalBlobDetector:
             cx, cy = blob['center']
             cx, cy = int(cx), int(cy)
 
-            # 创建单独的文件夹
-            blob_folder = os.path.join(output_folder, f"blob_{i:03d}")
-            os.makedirs(blob_folder, exist_ok=True)
+            # 转换为RA/DEC坐标
+            ra, dec = None, None
+            if header is not None:
+                ra, dec = self.pixel_to_radec(cx, cy, header)
+
+            # 构建文件名前缀，排序序号放在最前面
+            name_parts = []
+
+            # 首先添加排序序号（3位补零）
+            name_parts.append(f"{i:03d}")
+
+            # 然后添加坐标信息
+            if ra is not None and dec is not None:
+                name_parts.append(f"RA{ra:.6f}_DEC{dec:.6f}")
+            else:
+                name_parts.append(f"X{cx:04d}_Y{cy:04d}")
+
+            # 最后添加其他信息
+            if gy_info:
+                name_parts.append(gy_info)
+            if k_info:
+                name_parts.append(k_info)
+
+            file_prefix = "_".join(name_parts)
 
             # 计算截图区域
             x1 = max(0, cx - half_size)
@@ -409,14 +495,14 @@ class SignalBlobDetector:
                 ref_cutout = reference_data[y1:y2, x1:x2]
                 ref_norm = self.local_stretch(ref_cutout, method=stretch_method,
                                              low_percentile=low_percentile, high_percentile=high_percentile)
-                ref_path = os.path.join(blob_folder, f"1_reference.png")
+                ref_path = os.path.join(cutouts_folder, f"{file_prefix}_1_reference.png")
                 cv2.imwrite(ref_path, ref_norm)
             else:
                 # 如果没有参考图像，使用原始数据
                 original_cutout = original_data[y1:y2, x1:x2]
                 original_norm = self.local_stretch(original_cutout, method=stretch_method,
                                                    low_percentile=low_percentile, high_percentile=high_percentile)
-                ref_path = os.path.join(blob_folder, f"1_reference.png")
+                ref_path = os.path.join(cutouts_folder, f"{file_prefix}_1_reference.png")
                 cv2.imwrite(ref_path, original_norm)
 
             # 提取对齐图像截图（下载图像）- 使用局部拉伸
@@ -424,18 +510,18 @@ class SignalBlobDetector:
                 aligned_cutout = aligned_data[y1:y2, x1:x2]
                 aligned_norm = self.local_stretch(aligned_cutout, method=stretch_method,
                                                  low_percentile=low_percentile, high_percentile=high_percentile)
-                aligned_path = os.path.join(blob_folder, f"2_aligned.png")
+                aligned_path = os.path.join(cutouts_folder, f"{file_prefix}_2_aligned.png")
                 cv2.imwrite(aligned_path, aligned_norm)
             else:
                 # 如果没有对齐图像，使用拉伸后的数据
                 stretched_cutout = stretched_data[y1:y2, x1:x2]
                 stretched_norm = (np.clip(stretched_cutout, 0, 1) * 255).astype(np.uint8)
-                aligned_path = os.path.join(blob_folder, f"2_aligned.png")
+                aligned_path = os.path.join(cutouts_folder, f"{file_prefix}_2_aligned.png")
                 cv2.imwrite(aligned_path, stretched_norm)
 
             # 提取检测结果截图
             result_cutout = result_image[y1:y2, x1:x2]
-            result_path = os.path.join(blob_folder, f"3_detection.png")
+            result_path = os.path.join(cutouts_folder, f"{file_prefix}_3_detection.png")
             cv2.imwrite(result_path, result_cutout)
 
             # 生成GIF动画
@@ -448,7 +534,7 @@ class SignalBlobDetector:
                         img = img.resize((cutout_size, cutout_size), Image.LANCZOS)
                     images.append(img)
 
-                gif_path = os.path.join(blob_folder, f"animation.gif")
+                gif_path = os.path.join(cutouts_folder, f"{file_prefix}_animation.gif")
                 images[0].save(
                     gif_path,
                     save_all=True,
@@ -463,7 +549,7 @@ class SignalBlobDetector:
         print(f"已为 {len(blobs)} 个检测结果生成截图和GIF")
 
     def save_results(self, original_data, stretched_data, mask, result_image, blobs,
-                     output_dir, base_name, threshold_info, reference_data=None, aligned_data=None):
+                     output_dir, base_name, threshold_info, reference_data=None, aligned_data=None, header=None):
         """保存检测结果"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -496,7 +582,8 @@ class SignalBlobDetector:
         # 生成每个检测结果的截图和GIF
         self.extract_blob_cutouts(original_data, stretched_data, result_image, blobs,
                                   output_folder, base_name,
-                                  reference_data=reference_data, aligned_data=aligned_data)
+                                  reference_data=reference_data, aligned_data=aligned_data,
+                                  header=header)
 
         # 保存详细信息
         txt_output = os.path.join(output_folder, f"{base_name}_analysis_{param_str}.txt")
@@ -624,7 +711,8 @@ class SignalBlobDetector:
 
         self.save_results(data, stretched_data, mask, result_image, blobs,
                          output_dir, base_name, threshold_info,
-                         reference_data=reference_data, aligned_data=aligned_data)
+                         reference_data=reference_data, aligned_data=aligned_data,
+                         header=header)
 
         print(f"\n处理完成！")
         return blobs
