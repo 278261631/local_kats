@@ -369,7 +369,7 @@ class AlignedFITSComparator:
 
         return reference_file, aligned_file
 
-    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None):
+    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True):
         """
         对difference.fits执行signal_blob_detector检测
 
@@ -378,6 +378,7 @@ class AlignedFITSComparator:
             output_directory: 输出目录
             reference_file: 参考图像（模板）FITS文件路径
             aligned_file: 对齐图像（下载）FITS文件路径
+            remove_bright_lines: 是否去除亮线，默认True
 
         Returns:
             dict: 检测结果信息
@@ -402,6 +403,10 @@ class AlignedFITSComparator:
                 '--max-area', '1000',
                 '--min-circularity', '0.3'
             ]
+
+            # 添加去除亮线参数
+            if remove_bright_lines:
+                cmd.append('--remove-lines')
 
             # 添加参考图像和对齐图像参数
             if reference_file and os.path.exists(reference_file):
@@ -439,13 +444,14 @@ class AlignedFITSComparator:
             self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
             return {'success': False, 'error': str(e)}
 
-    def process_aligned_fits_comparison(self, input_directory, output_directory=None):
+    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True):
         """
         处理已对齐FITS文件的差异比较
 
         Args:
             input_directory (str): 输入目录路径
             output_directory (str): 输出目录路径
+            remove_bright_lines (bool): 是否去除亮线，默认True
 
         Returns:
             dict: 处理结果信息
@@ -596,7 +602,8 @@ class AlignedFITSComparator:
         blob_detection_result = self.run_signal_blob_detector(
             diff_fits_path, output_directory,
             reference_file=reference_file,
-            aligned_file=aligned_file
+            aligned_file=aligned_file,
+            remove_bright_lines=remove_bright_lines
         )
 
         # 返回处理结果

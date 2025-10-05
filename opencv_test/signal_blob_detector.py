@@ -700,7 +700,7 @@ class SignalBlobDetector:
         print(f"保存分析报告: {txt_output}")
     
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=True, detection_threshold=0.5,
-                         reference_fits=None, aligned_fits=None):
+                         reference_fits=None, aligned_fits=None, remove_bright_lines=True):
         """
         处理 FITS 文件的完整流程
 
@@ -711,6 +711,7 @@ class SignalBlobDetector:
             detection_threshold: 检测阈值
             reference_fits: 参考图像（模板）FITS文件路径
             aligned_fits: 对齐图像（下载）FITS文件路径
+            remove_bright_lines: 是否去除亮线，默认True
         """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
@@ -735,16 +736,21 @@ class SignalBlobDetector:
         if use_peak_stretch:
             stretched_data, peak_value, end_value = self.histogram_peak_stretch(data, ratio=2.0/3.0)
 
-            # 去除亮线处理
-            print("\n执行亮线去除...")
-            stretched_uint8 = (np.clip(stretched_data, 0, 1) * 255).astype(np.uint8)
-            stretched_no_lines_uint8 = self.remove_bright_lines(stretched_uint8)
-            # 转换回0-1范围的float数据用于后续检测
-            stretched_data_no_lines = stretched_no_lines_uint8.astype(np.float64) / 255.0
-            print("亮线去除完成，使用去除亮线后的数据进行检测")
+            # 根据参数决定是否去除亮线
+            if remove_bright_lines:
+                print("\n执行亮线去除...")
+                stretched_uint8 = (np.clip(stretched_data, 0, 1) * 255).astype(np.uint8)
+                stretched_no_lines_uint8 = self.remove_bright_lines(stretched_uint8)
+                # 转换回0-1范围的float数据用于后续检测
+                stretched_data_no_lines = stretched_no_lines_uint8.astype(np.float64) / 255.0
+                print("亮线去除完成，使用去除亮线后的数据进行检测")
+            else:
+                print("\n跳过亮线去除，使用原始拉伸数据进行检测")
+                stretched_data_no_lines = stretched_data
 
-            # 使用简单阈值检测拉伸后的数据（去除亮线后）
-            print(f"\n使用去除亮线后的数据进行检测...")
+            # 使用简单阈值检测拉伸后的数据
+            detection_data_desc = "去除亮线后的数据" if remove_bright_lines else "拉伸数据"
+            print(f"\n使用{detection_data_desc}进行检测...")
             print(f"检测阈值: {detection_threshold}")
 
             # 创建掩码：拉伸后值 > detection_threshold 的像素
@@ -752,7 +758,7 @@ class SignalBlobDetector:
             signal_pixels = np.sum(mask > 0)
             print(f"信号像素: {signal_pixels} ({signal_pixels/mask.size*100:.3f}%)")
 
-            # 检测斑点（使用去除亮线后的数据）
+            # 检测斑点
             blobs = self.detect_blobs_from_mask(mask, stretched_data_no_lines)
 
             threshold_info = {
@@ -820,6 +826,8 @@ def main():
                        help='最小圆度 (0-1)，默认 0.3')
     parser.add_argument('--no-peak-stretch', action='store_true',
                        help='禁用基于峰值的拉伸')
+    parser.add_argument('--remove-lines', action='store_true',
+                       help='去除亮线（默认不去除，添加此参数后去除）')
     parser.add_argument('--reference', type=str, default=None,
                        help='参考图像（模板）FITS文件路径')
     parser.add_argument('--aligned', type=str, default=None,
@@ -858,7 +866,8 @@ def main():
                               use_peak_stretch=not args.no_peak_stretch,
                               detection_threshold=args.threshold,
                               reference_fits=args.reference,
-                              aligned_fits=args.aligned)
+                              aligned_fits=args.aligned,
+                              remove_bright_lines=args.remove_lines)
 
 
 if __name__ == "__main__":

@@ -136,6 +136,12 @@ class FitsImageViewer:
                                                       variable=self.adaptive_median_var)
         self.adaptive_median_checkbox.pack(side=tk.LEFT, padx=(5, 0))
 
+        # 去除亮线选项
+        self.remove_lines_var = tk.BooleanVar(value=True)  # 默认选中去除亮线
+        self.remove_lines_checkbox = ttk.Checkbutton(noise_frame, text="去除亮线",
+                                                     variable=self.remove_lines_var)
+        self.remove_lines_checkbox.pack(side=tk.LEFT, padx=(5, 0))
+
         # 图像统计信息标签（放在第一行右侧）
         self.stats_label = ttk.Label(toolbar_frame1, text="")
         self.stats_label.pack(side=tk.RIGHT)
@@ -906,9 +912,14 @@ class FitsImageViewer:
             alignment_method = self.alignment_var.get()
             self.logger.info(f"选择的对齐方式: {alignment_method}")
 
+            # 获取是否去除亮线选项
+            remove_bright_lines = self.remove_lines_var.get()
+            self.logger.info(f"去除亮线: {'是' if remove_bright_lines else '否'}")
+
             # 执行diff操作
             result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir,
-                                              noise_methods=noise_methods, alignment_method=alignment_method)
+                                              noise_methods=noise_methods, alignment_method=alignment_method,
+                                              remove_bright_lines=remove_bright_lines)
 
             if result and result.get('success'):
                 # 显示结果摘要
