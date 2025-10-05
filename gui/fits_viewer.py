@@ -142,6 +142,28 @@ class FitsImageViewer:
                                                      variable=self.remove_lines_var)
         self.remove_lines_checkbox.pack(side=tk.LEFT, padx=(5, 0))
 
+        # 拉伸方法选择
+        self.stretch_method_var = tk.StringVar(value="percentile")  # 默认百分位数拉伸
+        stretch_methods = [
+            ("峰值", "peak"),
+            ("百分位数", "percentile")
+        ]
+        for text, value in stretch_methods:
+            rb = ttk.Radiobutton(noise_frame, text=text,
+                               variable=self.stretch_method_var, value=value)
+            rb.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 百分位数输入框
+        percentile_label = ttk.Label(noise_frame, text="百分位:")
+        percentile_label.pack(side=tk.LEFT, padx=(10, 2))
+
+        self.percentile_var = tk.StringVar(value="99.5")  # 默认99.5%
+        self.percentile_entry = ttk.Entry(noise_frame, textvariable=self.percentile_var, width=6)
+        self.percentile_entry.pack(side=tk.LEFT, padx=(0, 2))
+
+        percentile_unit = ttk.Label(noise_frame, text="%")
+        percentile_unit.pack(side=tk.LEFT, padx=(0, 5))
+
         # 图像统计信息标签（放在第一行右侧）
         self.stats_label = ttk.Label(toolbar_frame1, text="")
         self.stats_label.pack(side=tk.RIGHT)
@@ -916,10 +938,28 @@ class FitsImageViewer:
             remove_bright_lines = self.remove_lines_var.get()
             self.logger.info(f"去除亮线: {'是' if remove_bright_lines else '否'}")
 
+            # 获取拉伸方法选项
+            stretch_method = self.stretch_method_var.get()
+            self.logger.info(f"拉伸方法: {stretch_method}")
+
+            # 获取百分位数参数
+            percentile_low = 99.5  # 默认值
+            if stretch_method == 'percentile':
+                try:
+                    percentile_low = float(self.percentile_var.get())
+                    if percentile_low < 0 or percentile_low > 100:
+                        raise ValueError("百分位数必须在0-100之间")
+                    self.logger.info(f"百分位数: {percentile_low}%")
+                except ValueError as e:
+                    self.logger.warning(f"百分位数输入无效，使用默认值99.5%: {e}")
+                    percentile_low = 99.5
+
             # 执行diff操作
             result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir,
                                               noise_methods=noise_methods, alignment_method=alignment_method,
-                                              remove_bright_lines=remove_bright_lines)
+                                              remove_bright_lines=remove_bright_lines,
+                                              stretch_method=stretch_method,
+                                              percentile_low=percentile_low)
 
             if result and result.get('success'):
                 # 显示结果摘要

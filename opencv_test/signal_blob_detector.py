@@ -139,6 +139,53 @@ class SignalBlobDetector:
 
         return stretched, peak_value, end_value
 
+    def percentile_stretch(self, data, low_percentile=99.5, use_max=True):
+        """
+        基于百分位数的拉伸策略
+        使用指定百分位数作为起点，最大值作为终点
+
+        Args:
+            data: 输入数据
+            low_percentile: 低百分位数，默认99.5
+            use_max: 是否使用最大值作为终点，默认True
+        """
+        print(f"\n基于百分位数的拉伸 ({low_percentile}%-最大值):")
+        print(f"  - 原始范围: [{np.min(data):.6f}, {np.max(data):.6f}]")
+        print(f"  - 原始均值: {np.mean(data):.6f}, 标准差: {np.std(data):.6f}")
+
+        # 计算百分位数作为起点
+        vmin = np.percentile(data, low_percentile)
+        # 使用实际最大值作为终点
+        vmax = np.max(data)
+
+        print(f"  - {low_percentile}% 百分位数: {vmin:.6f}")
+        print(f"  - 最大值: {vmax:.6f}")
+        print(f"  - 拉伸起点: {vmin:.6f}")
+        print(f"  - 拉伸终点（最大值）: {vmax:.6f}")
+
+        # 线性拉伸
+        if vmax > vmin:
+            stretched = (data - vmin) / (vmax - vmin)
+            stretched = np.clip(stretched, 0, 1)
+        else:
+            stretched = data.copy()
+
+        print(f"  - 拉伸后范围: [{np.min(stretched):.6f}, {np.max(stretched):.6f}]")
+        print(f"  - 拉伸后均值: {np.mean(stretched):.6f}, 标准差: {np.std(stretched):.6f}")
+
+        # 统计拉伸效果
+        bg_pixels = np.sum(stretched <= 0)
+        dark_pixels = np.sum((stretched > 0) & (stretched < 0.1))
+        mid_pixels = np.sum((stretched >= 0.1) & (stretched < 0.5))
+        bright_pixels = np.sum(stretched >= 0.5)
+        total = stretched.size
+        print(f"  - 背景像素(<=0): {bg_pixels} ({bg_pixels/total*100:.2f}%)")
+        print(f"  - 暗像素(0-0.1): {dark_pixels} ({dark_pixels/total*100:.2f}%)")
+        print(f"  - 中等像素(0.1-0.5): {mid_pixels} ({mid_pixels/total*100:.2f}%)")
+        print(f"  - 亮像素(>=0.5): {bright_pixels} ({bright_pixels/total*100:.2f}%)")
+
+        return stretched, vmin, vmax
+
     def estimate_background_noise(self, data):
         """
         估计背景噪声水平
@@ -632,12 +679,19 @@ class SignalBlobDetector:
 
         # 构建参数字符串
         threshold = threshold_info.get('threshold', 0)
-        peak_value = threshold_info.get('peak_value', 0)
-        param_str = f"thr{threshold:.2f}_peak{peak_value:.3f}_area{self.min_area:.0f}-{self.max_area:.0f}_circ{self.min_circularity:.2f}"
+        stretch_method = threshold_info.get('stretch_method', 'unknown')
+
+        # 根据拉伸方法构建不同的参数字符串
+        if 'peak' in stretch_method:
+            peak_value = threshold_info.get('peak_value', 0)
+            param_str = f"{stretch_method}_thr{threshold:.2f}_peak{peak_value:.3f}_area{self.min_area:.0f}-{self.max_area:.0f}_circ{self.min_circularity:.2f}"
+        else:
+            # percentile 方法
+            param_str = f"{stretch_method}_thr{threshold:.2f}_area{self.min_area:.0f}-{self.max_area:.0f}_circ{self.min_circularity:.2f}"
 
         # 保存拉伸后的图像（已经是去除亮线后的数据）
         stretched_uint8 = (np.clip(stretched_data, 0, 1) * 255).astype(np.uint8)
-        stretched_output = os.path.join(output_folder, f"{base_name}_stretched_{param_str}.png")
+        stretched_output = os.path.join(output_folder, f"{base_name}_stretched_{stretch_method}.png")
         cv2.imwrite(stretched_output, stretched_uint8)
         print(f"保存拉伸图像（已去除亮线）: {stretched_output}")
 
@@ -699,19 +753,22 @@ class SignalBlobDetector:
 
         print(f"保存分析报告: {txt_output}")
     
-    def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=True, detection_threshold=0.5,
-                         reference_fits=None, aligned_fits=None, remove_bright_lines=True):
+    def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.5,
+                         reference_fits=None, aligned_fits=None, remove_bright_lines=True,
+                         stretch_method='percentile', percentile_low=99.5):
         """
         处理 FITS 文件的完整流程
 
         Args:
             fits_path: difference.fits文件路径
             output_dir: 输出目录
-            use_peak_stretch: 是否使用峰值拉伸
+            use_peak_stretch: 是否使用峰值拉伸（已废弃，使用stretch_method，默认None表示由stretch_method决定）
             detection_threshold: 检测阈值
             reference_fits: 参考图像（模板）FITS文件路径
             aligned_fits: 对齐图像（下载）FITS文件路径
             remove_bright_lines: 是否去除亮线，默认True
+            stretch_method: 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸（默认）
+            percentile_low: 百分位数起点，默认99.5，终点使用最大值
         """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
@@ -732,56 +789,59 @@ class SignalBlobDetector:
             if aligned_data is not None:
                 print(f"已加载对齐图像: {os.path.basename(aligned_fits)}")
 
-        # 基于直方图峰值拉伸
-        if use_peak_stretch:
-            stretched_data, peak_value, end_value = self.histogram_peak_stretch(data, ratio=2.0/3.0)
-
-            # 根据参数决定是否去除亮线
-            if remove_bright_lines:
-                print("\n执行亮线去除...")
-                stretched_uint8 = (np.clip(stretched_data, 0, 1) * 255).astype(np.uint8)
-                stretched_no_lines_uint8 = self.remove_bright_lines(stretched_uint8)
-                # 转换回0-1范围的float数据用于后续检测
-                stretched_data_no_lines = stretched_no_lines_uint8.astype(np.float64) / 255.0
-                print("亮线去除完成，使用去除亮线后的数据进行检测")
-            else:
-                print("\n跳过亮线去除，使用原始拉伸数据进行检测")
-                stretched_data_no_lines = stretched_data
-
-            # 使用简单阈值检测拉伸后的数据
-            detection_data_desc = "去除亮线后的数据" if remove_bright_lines else "拉伸数据"
-            print(f"\n使用{detection_data_desc}进行检测...")
-            print(f"检测阈值: {detection_threshold}")
-
-            # 创建掩码：拉伸后值 > detection_threshold 的像素
-            mask = (stretched_data_no_lines > detection_threshold).astype(np.uint8) * 255
-            signal_pixels = np.sum(mask > 0)
-            print(f"信号像素: {signal_pixels} ({signal_pixels/mask.size*100:.3f}%)")
-
-            # 检测斑点
-            blobs = self.detect_blobs_from_mask(mask, stretched_data_no_lines)
-
-            threshold_info = {
-                'threshold': detection_threshold,
-                'peak_value': peak_value,
-                'end_value': end_value,
-                'stretch_method': 'histogram_peak',
-                'signal_pixels': signal_pixels
-            }
+        # 根据选择的拉伸方法进行拉伸
+        # 如果明确指定了 use_peak_stretch，则使用该参数（向后兼容）
+        # 否则使用 stretch_method 参数
+        if use_peak_stretch is True or (use_peak_stretch is None and stretch_method == 'peak'):
+            # 峰值拉伸
+            stretched_data, value1, value2 = self.histogram_peak_stretch(data, ratio=2.0/3.0)
+            stretch_method_name = 'histogram_peak'
+        elif use_peak_stretch is False or stretch_method == 'percentile':
+            # 百分位数拉伸（使用最大值作为终点）
+            stretched_data, value1, value2 = self.percentile_stretch(data, percentile_low, use_max=True)
+            stretch_method_name = f'percentile_{percentile_low}_max'
         else:
-            # 使用原始数据检测
-            print(f"\n使用原始数据进行检测...")
-            stretched_data = data
-            median, sigma = self.estimate_background_noise(data)
-            mask, threshold = self.create_signal_mask(data, median, sigma)
-            blobs = self.detect_blobs_from_mask(mask, data)
+            # 默认使用百分位数拉伸
+            stretched_data, value1, value2 = self.percentile_stretch(data, percentile_low, use_max=True)
+            stretch_method_name = f'percentile_{percentile_low}_max'
 
-            threshold_info = {
-                'median': median,
-                'sigma': sigma,
-                'threshold': threshold,
-                'stretch_method': 'none'
-            }
+        # 根据参数决定是否去除亮线
+        if remove_bright_lines:
+            print("\n执行亮线去除...")
+            stretched_uint8 = (np.clip(stretched_data, 0, 1) * 255).astype(np.uint8)
+            stretched_no_lines_uint8 = self.remove_bright_lines(stretched_uint8)
+            # 转换回0-1范围的float数据用于后续检测
+            stretched_data_no_lines = stretched_no_lines_uint8.astype(np.float64) / 255.0
+            print("亮线去除完成，使用去除亮线后的数据进行检测")
+        else:
+            print("\n跳过亮线去除，使用原始拉伸数据进行检测")
+            stretched_data_no_lines = stretched_data
+
+        # 使用简单阈值检测拉伸后的数据
+        detection_data_desc = "去除亮线后的数据" if remove_bright_lines else "拉伸数据"
+        print(f"\n使用{detection_data_desc}进行检测...")
+        print(f"检测阈值: {detection_threshold}")
+
+        # 创建掩码：拉伸后值 > detection_threshold 的像素
+        mask = (stretched_data_no_lines > detection_threshold).astype(np.uint8) * 255
+        signal_pixels = np.sum(mask > 0)
+        print(f"信号像素: {signal_pixels} ({signal_pixels/mask.size*100:.3f}%)")
+
+        # 检测斑点
+        blobs = self.detect_blobs_from_mask(mask, stretched_data_no_lines)
+
+        threshold_info = {
+            'threshold': detection_threshold,
+            'value1': value1,
+            'value2': value2,
+            'stretch_method': stretch_method_name,
+            'signal_pixels': signal_pixels
+        }
+
+        # 兼容旧代码
+        if stretch_method == 'peak' or use_peak_stretch:
+            threshold_info['peak_value'] = value1
+            threshold_info['end_value'] = value2
 
         # 排序斑点
         blobs = self.sort_blobs(blobs, data.shape)
@@ -790,8 +850,7 @@ class SignalBlobDetector:
         self.print_blob_info(blobs)
 
         # 绘制结果（使用去除亮线后的数据）
-        display_data = stretched_data_no_lines if use_peak_stretch else stretched_data
-        result_image = self.draw_blobs(display_data, blobs, mask)
+        result_image = self.draw_blobs(stretched_data_no_lines, blobs, mask)
 
         # 保存结果
         if output_dir is None:
@@ -800,8 +859,7 @@ class SignalBlobDetector:
         base_name = os.path.splitext(os.path.basename(fits_path))[0]
 
         # 保存时传递去除亮线后的数据
-        save_stretched_data = stretched_data_no_lines if use_peak_stretch else stretched_data
-        self.save_results(data, save_stretched_data, mask, result_image, blobs,
+        self.save_results(data, stretched_data_no_lines, mask, result_image, blobs,
                          output_dir, base_name, threshold_info,
                          reference_data=reference_data, aligned_data=aligned_data,
                          header=header)
@@ -824,8 +882,13 @@ def main():
                        help='最大面积，默认 1000')
     parser.add_argument('--min-circularity', type=float, default=0.3,
                        help='最小圆度 (0-1)，默认 0.3')
+    parser.add_argument('--stretch-method', type=str, default='percentile',
+                       choices=['peak', 'percentile'],
+                       help='拉伸方法: peak=峰值拉伸, percentile=百分位数拉伸(默认)')
+    parser.add_argument('--percentile-low', type=float, default=99.5,
+                       help='百分位数拉伸的低百分位数，默认99.5，终点使用最大值')
     parser.add_argument('--no-peak-stretch', action='store_true',
-                       help='禁用基于峰值的拉伸')
+                       help='禁用基于峰值的拉伸（已废弃，使用--stretch-method）')
     parser.add_argument('--remove-lines', action='store_true',
                        help='去除亮线（默认不去除，添加此参数后去除）')
     parser.add_argument('--reference', type=str, default=None,
@@ -836,10 +899,12 @@ def main():
     args = parser.parse_args()
 
     print("=" * 80)
-    print("基于直方图峰值的斑点检测")
-    if not args.no_peak_stretch:
+    print("基于直方图的斑点检测")
+    if args.stretch_method == 'peak':
         print("拉伸策略: 峰值为起点，峰值到最大值的2/3为终点")
-        print(f"检测阈值: {args.threshold}")
+    elif args.stretch_method == 'percentile':
+        print(f"拉伸策略: {args.percentile_low}%-最大值")
+    print(f"检测阈值: {args.threshold}")
     print("=" * 80)
 
     # 处理文件路径
@@ -862,12 +927,18 @@ def main():
         gamma=2.2  # 保留但不使用
     )
 
+    # 如果指定了 --no-peak-stretch，则明确设置 use_peak_stretch=False
+    # 否则设置为 None，让 stretch_method 参数决定
+    use_peak = False if args.no_peak_stretch else None
+
     detector.process_fits_file(fits_file,
-                              use_peak_stretch=not args.no_peak_stretch,
+                              use_peak_stretch=use_peak,
                               detection_threshold=args.threshold,
                               reference_fits=args.reference,
                               aligned_fits=args.aligned,
-                              remove_bright_lines=args.remove_lines)
+                              remove_bright_lines=args.remove_lines,
+                              stretch_method=args.stretch_method,
+                              percentile_low=args.percentile_low)
 
 
 if __name__ == "__main__":

@@ -369,7 +369,7 @@ class AlignedFITSComparator:
 
         return reference_file, aligned_file
 
-    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True):
+    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.5):
         """
         对difference.fits执行signal_blob_detector检测
 
@@ -379,6 +379,8 @@ class AlignedFITSComparator:
             reference_file: 参考图像（模板）FITS文件路径
             aligned_file: 对齐图像（下载）FITS文件路径
             remove_bright_lines: 是否去除亮线，默认True
+            stretch_method: 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸
+            percentile_low: 百分位数起点，默认99.5
 
         Returns:
             dict: 检测结果信息
@@ -408,6 +410,11 @@ class AlignedFITSComparator:
             if remove_bright_lines:
                 cmd.append('--remove-lines')
 
+            # 添加拉伸方法参数
+            cmd.extend(['--stretch-method', stretch_method])
+            if stretch_method == 'percentile':
+                cmd.extend(['--percentile-low', str(percentile_low)])
+
             # 添加参考图像和对齐图像参数
             if reference_file and os.path.exists(reference_file):
                 cmd.extend(['--reference', reference_file])
@@ -422,6 +429,8 @@ class AlignedFITSComparator:
                 cwd=output_directory,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',  # 遇到无法解码的字符时替换为?
                 timeout=300  # 5分钟超时
             )
 
@@ -444,7 +453,7 @@ class AlignedFITSComparator:
             self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
             return {'success': False, 'error': str(e)}
 
-    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True):
+    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.5):
         """
         处理已对齐FITS文件的差异比较
 
@@ -452,6 +461,8 @@ class AlignedFITSComparator:
             input_directory (str): 输入目录路径
             output_directory (str): 输出目录路径
             remove_bright_lines (bool): 是否去除亮线，默认True
+            stretch_method (str): 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸
+            percentile_low (float): 百分位数起点，默认99.5
 
         Returns:
             dict: 处理结果信息
@@ -603,7 +614,9 @@ class AlignedFITSComparator:
             diff_fits_path, output_directory,
             reference_file=reference_file,
             aligned_file=aligned_file,
-            remove_bright_lines=remove_bright_lines
+            remove_bright_lines=remove_bright_lines,
+            stretch_method=stretch_method,
+            percentile_low=percentile_low
         )
 
         # 返回处理结果
