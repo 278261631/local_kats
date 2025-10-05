@@ -228,66 +228,87 @@ class SignalBlobDetector:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask_cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel)
-        
+
         # 查找轮廓
         contours, _ = cv2.findContours(mask_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         print(f"\n检测到 {len(contours)} 个候选区域")
-        
+
+        # 估计背景噪声水平（用于计算SNR）
+        # 使用整个图像的背景区域（排除掩码区域）
+        background_mask = (mask_cleaned == 0)
+        if np.sum(background_mask) > 0:
+            background_values = original_data[background_mask]
+            background_median = np.median(background_values)
+            background_mad = np.median(np.abs(background_values - background_median))
+            background_sigma = 1.4826 * background_mad
+        else:
+            background_median = np.median(original_data)
+            background_sigma = np.std(original_data)
+
+        print(f"背景噪声: median={background_median:.6f}, sigma={background_sigma:.6f}")
+
         # 过滤轮廓
         blobs = []
         for contour in contours:
             area = cv2.contourArea(contour)
-            
+
             # 面积过滤
             if area < self.min_area or area > self.max_area:
                 continue
-            
+
             # 计算圆度
             perimeter = cv2.arcLength(contour, True)
             if perimeter == 0:
                 continue
             circularity = 4 * np.pi * area / (perimeter * perimeter)
-            
+
             # 圆度过滤
             if circularity < self.min_circularity:
                 continue
-            
+
             # 计算中心和半径
             M = cv2.moments(contour)
             if M['m00'] == 0:
                 continue
-            
+
             cx = M['m10'] / M['m00']
             cy = M['m01'] / M['m00']
-            
-            # 计算该区域的平均信号强度
+
+            # 计算该区域的信号强度
             mask_region = np.zeros(original_data.shape, dtype=np.uint8)
             cv2.drawContours(mask_region, [contour], -1, 255, -1)
             signal_values = original_data[mask_region > 0]
             mean_signal = np.mean(signal_values)
             max_signal = np.max(signal_values)
-            
+
+            # 计算SNR（信噪比）
+            # SNR = (信号 - 背景) / 背景噪声
+            snr = (mean_signal - background_median) / (background_sigma + 1e-10)
+            max_snr = (max_signal - background_median) / (background_sigma + 1e-10)
+
             blobs.append({
                 'center': (cx, cy),
                 'area': area,
                 'circularity': circularity,
                 'mean_signal': mean_signal,
                 'max_signal': max_signal,
+                'snr': snr,
+                'max_snr': max_snr,
                 'contour': contour
             })
-        
-        # 按平均信号强度排序
-        blobs.sort(key=lambda x: x['mean_signal'], reverse=True)
-        
+
+        # 按SNR排序（初步排序）
+        blobs.sort(key=lambda x: x['snr'], reverse=True)
+
         print(f"过滤后剩余 {len(blobs)} 个斑点")
-        
+
         return blobs
     
     def sort_blobs(self, blobs, image_shape):
         """
         对斑点进行排序
-        规则：圆度 > 亮度 > 靠近图像中心
+        规则：SNR（信噪比）权重最高 > 圆度 > 靠近图像中心
         """
         if not blobs:
             return blobs
@@ -301,9 +322,9 @@ class SignalBlobDetector:
             distance = np.sqrt((cx - img_center_x)**2 + (cy - img_center_y)**2)
             blob['distance_to_center'] = distance
 
-        # 排序：圆度降序（大的在前），亮度降序（大的在前），距离升序（近的在前）
+        # 排序：SNR降序（大的在前），圆度降序（大的在前），距离升序（近的在前）
         sorted_blobs = sorted(blobs,
-                             key=lambda b: (-b['circularity'], -b['max_signal'], b['distance_to_center']))
+                             key=lambda b: (-b.get('snr', 0), -b['circularity'], b['distance_to_center']))
 
         return sorted_blobs
 
@@ -313,25 +334,29 @@ class SignalBlobDetector:
             print("\n未检测到任何斑点")
             return
 
-        print(f"\n检测到的斑点详细信息（已排序：圆度>亮度>靠近中心）:")
-        print(f"{'序号':<6} {'X坐标':<10} {'Y坐标':<10} {'面积':<10} {'圆度':<10} {'最大信号':<12} {'平均信号':<12} {'距中心':<10}")
-        print("-" * 90)
+        print(f"\n检测到的斑点详细信息（已排序：SNR>圆度>靠近中心）:")
+        print(f"{'序号':<6} {'X坐标':<10} {'Y坐标':<10} {'面积':<10} {'圆度':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12} {'距中心':<10}")
+        print("-" * 110)
 
         for i, blob in enumerate(blobs, 1):
             cx, cy = blob['center']
             dist = blob.get('distance_to_center', 0)
+            snr = blob.get('snr', 0)
+            max_snr = blob.get('max_snr', 0)
             print(f"{i:<6} {cx:<10.2f} {cy:<10.2f} {blob['area']:<10.1f} "
-                  f"{blob['circularity']:<10.3f} {blob['max_signal']:<12.6f} {blob['mean_signal']:<12.6f} {dist:<10.1f}")
+                  f"{blob['circularity']:<10.3f} {snr:<10.2f} {max_snr:<10.2f} {blob['mean_signal']:<12.6f} {dist:<10.1f}")
 
         # 统计信息
         areas = [b['area'] for b in blobs]
         signals = [b['mean_signal'] for b in blobs]
         circularities = [b['circularity'] for b in blobs]
+        snrs = [b.get('snr', 0) for b in blobs]
 
         print(f"\n统计信息:")
         print(f"  - 总数: {len(blobs)}")
         print(f"  - 面积: {np.mean(areas):.2f} ± {np.std(areas):.2f} (范围: {np.min(areas):.2f} - {np.max(areas):.2f})")
         print(f"  - 圆度: {np.mean(circularities):.3f} ± {np.std(circularities):.3f} (范围: {np.min(circularities):.3f} - {np.max(circularities):.3f})")
+        print(f"  - SNR: {np.mean(snrs):.2f} ± {np.std(snrs):.2f} (范围: {np.min(snrs):.2f} - {np.max(snrs):.2f})")
         print(f"  - 平均信号: {np.mean(signals):.6f} ± {np.std(signals):.6f}")
         print(f"  - 信号范围: {np.min(signals):.6f} - {np.max(signals):.6f}")
     
@@ -610,18 +635,11 @@ class SignalBlobDetector:
         peak_value = threshold_info.get('peak_value', 0)
         param_str = f"thr{threshold:.2f}_peak{peak_value:.3f}_area{self.min_area:.0f}-{self.max_area:.0f}_circ{self.min_circularity:.2f}"
 
-        # 保存拉伸后的图像
+        # 保存拉伸后的图像（已经是去除亮线后的数据）
         stretched_uint8 = (np.clip(stretched_data, 0, 1) * 255).astype(np.uint8)
         stretched_output = os.path.join(output_folder, f"{base_name}_stretched_{param_str}.png")
         cv2.imwrite(stretched_output, stretched_uint8)
-        print(f"保存拉伸图像: {stretched_output}")
-
-        # 去除亮线处理
-        print("执行亮线去除...")
-        stretched_no_lines = self.remove_bright_lines(stretched_uint8)
-        stretched_no_lines_output = os.path.join(output_folder, f"{base_name}_stretched_no_lines_{param_str}.png")
-        cv2.imwrite(stretched_no_lines_output, stretched_no_lines)
-        print(f"保存去除亮线后的图像: {stretched_no_lines_output}")
+        print(f"保存拉伸图像（已去除亮线）: {stretched_output}")
 
         # 保存掩码
         mask_output = os.path.join(output_folder, f"{base_name}_mask_{param_str}.png")
@@ -667,14 +685,17 @@ class SignalBlobDetector:
                 f.write(f"信号像素数: {threshold_info['signal_pixels']}\n")
             f.write("\n")
 
-            f.write(f"检测到 {len(blobs)} 个斑点\n\n")
-            f.write(f"{'序号':<6} {'X坐标':<12} {'Y坐标':<12} {'面积':<12} {'圆度':<12} {'平均信号':<14} {'最大信号':<14}\n")
-            f.write("-" * 90 + "\n")
+            f.write(f"检测到 {len(blobs)} 个斑点（按SNR排序）\n\n")
+            f.write(f"{'序号':<6} {'X坐标':<12} {'Y坐标':<12} {'面积':<12} {'圆度':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14}\n")
+            f.write("-" * 120 + "\n")
 
             for i, blob in enumerate(blobs, 1):
                 cx, cy = blob['center']
+                snr = blob.get('snr', 0)
+                max_snr = blob.get('max_snr', 0)
                 f.write(f"{i:<6} {cx:<12.4f} {cy:<12.4f} {blob['area']:<12.2f} "
-                       f"{blob['circularity']:<12.4f} {blob['mean_signal']:<14.8f} {blob['max_signal']:<14.8f}\n")
+                       f"{blob['circularity']:<12.4f} {snr:<12.2f} {max_snr:<12.2f} "
+                       f"{blob['mean_signal']:<14.8f} {blob['max_signal']:<14.8f}\n")
 
         print(f"保存分析报告: {txt_output}")
     
@@ -762,8 +783,9 @@ class SignalBlobDetector:
         # 打印信息
         self.print_blob_info(blobs)
 
-        # 绘制结果
-        result_image = self.draw_blobs(stretched_data, blobs, mask)
+        # 绘制结果（使用去除亮线后的数据）
+        display_data = stretched_data_no_lines if use_peak_stretch else stretched_data
+        result_image = self.draw_blobs(display_data, blobs, mask)
 
         # 保存结果
         if output_dir is None:
@@ -771,7 +793,9 @@ class SignalBlobDetector:
 
         base_name = os.path.splitext(os.path.basename(fits_path))[0]
 
-        self.save_results(data, stretched_data, mask, result_image, blobs,
+        # 保存时传递去除亮线后的数据
+        save_stretched_data = stretched_data_no_lines if use_peak_stretch else stretched_data
+        self.save_results(data, save_stretched_data, mask, result_image, blobs,
                          output_dir, base_name, threshold_info,
                          reference_data=reference_data, aligned_data=aligned_data,
                          header=header)
