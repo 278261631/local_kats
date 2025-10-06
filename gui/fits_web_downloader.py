@@ -99,7 +99,10 @@ class FitsWebDownloaderGUI:
     def _create_scan_widgets(self):
         """创建扫描和下载界面"""
         # URL构建器区域
-        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process)
+        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process, self._open_batch_output_directory)
+
+        # 保存批量处理的输出根目录
+        self.last_batch_output_root = None
 
         # 扫描状态标签
         scan_status_frame = ttk.Frame(self.scan_frame)
@@ -1089,6 +1092,28 @@ class FitsWebDownloaderGUI:
         """获取diff输出根目录的回调函数"""
         return self.diff_output_dir_var.get().strip()
 
+    def _open_batch_output_directory(self):
+        """打开批量处理的输出根目录"""
+        if not self.last_batch_output_root or not os.path.exists(self.last_batch_output_root):
+            messagebox.showwarning("警告", "没有可用的批量输出目录")
+            return
+
+        try:
+            import subprocess
+            import platform
+
+            if platform.system() == 'Windows':
+                os.startfile(self.last_batch_output_root)
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.run(['open', self.last_batch_output_root])
+            else:  # Linux
+                subprocess.run(['xdg-open', self.last_batch_output_root])
+
+            self._log(f"已打开批量输出目录: {self.last_batch_output_root}")
+        except Exception as e:
+            self._log(f"打开批量输出目录失败: {str(e)}")
+            messagebox.showerror("错误", f"打开目录失败: {str(e)}")
+
     def _batch_process(self):
         """批量下载并执行diff操作"""
         selected_files = self._get_selected_files()
@@ -1143,7 +1168,14 @@ class FitsWebDownloaderGUI:
 
             self._log(f"下载目录: {actual_download_dir}")
             self._log(f"模板目录: {self.template_dir_var.get().strip()}")
-            self._log(f"输出目录: {self.diff_output_dir_var.get().strip()}")
+
+            # 保存批量输出根目录（日期级别的目录）
+            from datetime import datetime
+            base_output_dir = self.diff_output_dir_var.get().strip()
+            current_date = datetime.now().strftime("%Y%m%d")
+            self.last_batch_output_root = os.path.join(base_output_dir, current_date)
+
+            self._log(f"输出根目录: {self.last_batch_output_root}")
 
             # 步骤1: 下载文件（启用ASTAP处理）
             self._log("\n步骤1: 下载文件（启用ASTAP处理）")
@@ -1302,7 +1334,10 @@ class FitsWebDownloaderGUI:
 
                     self._log(f"  使用模板: {os.path.basename(template_file)}")
 
-                    # 获取输出目录
+                    # 设置当前处理的文件（让输出目录名称包含文件名）
+                    self.fits_viewer.selected_file_path = download_file
+
+                    # 获取输出目录（会使用download_file的文件名）
                     output_dir = self.fits_viewer._get_diff_output_directory()
 
                     # 调用fits_viewer的diff功能（使用界面配置的参数）
@@ -1344,6 +1379,10 @@ class FitsWebDownloaderGUI:
             self._log("=" * 60)
 
             self.root.after(0, lambda: self.status_label.config(text=f"批量处理完成 (成功:{success_count} 失败:{fail_count})"))
+
+            # 启用打开输出目录按钮
+            if self.last_batch_output_root and os.path.exists(self.last_batch_output_root):
+                self.root.after(0, lambda: self.url_builder.set_open_batch_output_button_state("normal"))
 
         except Exception as e:
             error_msg = f"批量处理失败: {str(e)}"
