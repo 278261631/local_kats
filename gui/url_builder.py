@@ -176,11 +176,12 @@ class RegionScanner:
 class URLBuilderFrame:
     """URL构建器界面组件"""
 
-    def __init__(self, parent_frame, config_manager: ConfigManager, on_url_change: Optional[Callable] = None, on_scan_fits: Optional[Callable] = None):
+    def __init__(self, parent_frame, config_manager: ConfigManager, on_url_change: Optional[Callable] = None, on_scan_fits: Optional[Callable] = None, on_batch_process: Optional[Callable] = None):
         self.parent_frame = parent_frame
         self.config_manager = config_manager
         self.on_url_change = on_url_change  # URL变化时的回调函数
         self.on_scan_fits = on_scan_fits  # 扫描FITS文件时的回调函数
+        self.on_batch_process = on_batch_process  # 批量处理时的回调函数
 
         self.logger = logging.getLogger(__name__)
 
@@ -287,6 +288,10 @@ class URLBuilderFrame:
         # 扫描FITS文件按钮
         self.scan_fits_button = ttk.Button(row1, text="扫描FITS文件", command=self._on_scan_fits_clicked)
         self.scan_fits_button.pack(side=tk.LEFT, padx=(15, 0))
+
+        # 批量处理按钮
+        self.batch_process_button = ttk.Button(row1, text="批量下载并Diff", command=self._on_batch_process_clicked, state="disabled")
+        self.batch_process_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # 第二行：URL模板选择
         row2 = ttk.Frame(main_frame)
@@ -667,6 +672,11 @@ class URLBuilderFrame:
         if self.on_scan_fits:
             self.on_scan_fits()
 
+    def _on_batch_process_clicked(self):
+        """批量处理按钮点击事件"""
+        if self.on_batch_process:
+            self.on_batch_process()
+
     def set_scan_button_state(self, state: str):
         """设置扫描按钮状态"""
         if hasattr(self, 'scan_fits_button'):
@@ -676,6 +686,11 @@ class URLBuilderFrame:
         """设置扫描按钮文本"""
         if hasattr(self, 'scan_fits_button'):
             self.scan_fits_button.config(text=text)
+
+    def set_batch_button_state(self, state: str):
+        """设置批量处理按钮状态"""
+        if hasattr(self, 'batch_process_button'):
+            self.batch_process_button.config(state=state)
 
 
 

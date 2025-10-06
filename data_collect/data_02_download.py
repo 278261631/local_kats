@@ -132,8 +132,10 @@ class FitsDownloader:
                                 print(f"ASTAP处理成功: {filename}")
                             else:
                                 print(f"ASTAP处理失败: {filename}")
+                                print(f"  请检查日志获取详细的失败原因和执行的命令")
                         except Exception as e:
                             print(f"ASTAP处理出错 {filename}: {str(e)}")
+                            print(f"  异常详情: {type(e).__name__}")
 
                     return f"下载成功: {filename}"
                 else:

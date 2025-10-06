@@ -99,7 +99,7 @@ class FitsWebDownloaderGUI:
     def _create_scan_widgets(self):
         """创建扫描和下载界面"""
         # URL构建器区域
-        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan)
+        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process)
 
         # 扫描状态标签
         scan_status_frame = ttk.Frame(self.scan_frame)
@@ -358,7 +358,11 @@ class FitsWebDownloaderGUI:
             # 更新界面
             self.root.after(0, self._update_file_list)
             self._log(f"扫描完成，找到 {len(fits_files)} 个FITS文件")
-            
+
+            # 如果找到文件，启用批量处理按钮
+            if len(fits_files) > 0:
+                self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
+
         except Exception as e:
             error_msg = f"扫描失败: {str(e)}"
             self._log(error_msg)
@@ -1084,6 +1088,273 @@ class FitsWebDownloaderGUI:
     def _get_diff_output_dir(self):
         """获取diff输出根目录的回调函数"""
         return self.diff_output_dir_var.get().strip()
+
+    def _batch_process(self):
+        """批量下载并执行diff操作"""
+        selected_files = self._get_selected_files()
+        if not selected_files:
+            messagebox.showwarning("警告", "请选择要处理的文件")
+            return
+
+        # 检查必要的目录配置
+        base_download_dir = self.download_dir_var.get().strip()
+        template_dir = self.template_dir_var.get().strip()
+        diff_output_dir = self.diff_output_dir_var.get().strip()
+
+        if not base_download_dir:
+            messagebox.showwarning("警告", "请配置下载根目录")
+            return
+
+        if not template_dir:
+            messagebox.showwarning("警告", "请配置模板文件目录")
+            return
+
+        if not diff_output_dir:
+            messagebox.showwarning("警告", "请配置Diff输出根目录")
+            return
+
+        # 禁用按钮
+        self.url_builder.set_batch_button_state("disabled")
+        self.url_builder.set_scan_button_state("disabled")
+        self.download_button.config(state="disabled")
+
+        # 在新线程中执行批量处理
+        thread = threading.Thread(target=self._batch_process_thread, args=(selected_files,))
+        thread.daemon = True
+        thread.start()
+
+    def _batch_process_thread(self, selected_files):
+        """批量处理线程"""
+        try:
+            self._log("=" * 60)
+            self._log("开始批量处理")
+            self._log("=" * 60)
+
+            # 获取当前选择的参数来构建子目录
+            selections = self.url_builder.get_current_selections()
+            tel_name = selections.get('telescope_name', 'Unknown')
+            date = selections.get('date', 'Unknown')
+            k_number = selections.get('k_number', 'Unknown')
+
+            # 构建下载目录
+            base_download_dir = self.download_dir_var.get().strip()
+            actual_download_dir = os.path.join(base_download_dir, tel_name, date, k_number)
+            os.makedirs(actual_download_dir, exist_ok=True)
+
+            self._log(f"下载目录: {actual_download_dir}")
+            self._log(f"模板目录: {self.template_dir_var.get().strip()}")
+            self._log(f"输出目录: {self.diff_output_dir_var.get().strip()}")
+
+            # 步骤1: 下载文件（启用ASTAP处理）
+            self._log("\n步骤1: 下载文件（启用ASTAP处理）")
+            self._log("-" * 60)
+            self.root.after(0, lambda: self.status_label.config(text="正在下载并处理ASTAP..."))
+
+            # 创建下载器（强制启用ASTAP）
+            self.downloader = FitsDownloader(
+                max_workers=self.max_workers_var.get(),
+                retry_times=self.retry_times_var.get(),
+                timeout=self.timeout_var.get(),
+                enable_astap=True,  # 批量处理时强制启用ASTAP
+                astap_config_path="config/url_config.json"
+            )
+
+            # 检查ASTAP处理器是否成功初始化
+            if self.downloader.astap_processor:
+                self._log("✓ ASTAP处理器已启用")
+            else:
+                self._log("✗ 警告: ASTAP处理器未启用，WCS对齐可能失败")
+                self._log("  请检查ASTAP是否正确安装和配置")
+
+            # 准备URL列表
+            urls = [url for filename, url in selected_files]
+
+            # 执行下载
+            self._log(f"开始下载 {len(urls)} 个文件...")
+            self._download_with_progress(urls, actual_download_dir)
+            self._log("下载完成")
+
+            # 步骤1.5: 检查WCS信息并准备文件列表
+            self._log("\n步骤1.5: 检查WCS信息")
+            self._log("-" * 60)
+
+            # 获取下载的文件列表
+            downloaded_files = []
+            for filename, url in selected_files:
+                file_path = os.path.join(actual_download_dir, filename)
+                if os.path.exists(file_path):
+                    downloaded_files.append(file_path)
+                else:
+                    self._log(f"警告: 文件未找到 {filename}")
+
+            self._log(f"找到 {len(downloaded_files)} 个已下载的文件")
+
+            # 检查每个文件的WCS信息
+            files_with_wcs = []
+            files_without_wcs = []
+
+            for file_path in downloaded_files:
+                filename = os.path.basename(file_path)
+                try:
+                    # 检查是否有WCS信息
+                    from astropy.io import fits as astropy_fits
+                    with astropy_fits.open(file_path) as hdul:
+                        header = hdul[0].header
+                        has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
+
+                    if has_wcs:
+                        files_with_wcs.append(file_path)
+                        self._log(f"  {filename}: ✓ 已有WCS信息")
+                    else:
+                        files_without_wcs.append(file_path)
+                        self._log(f"  {filename}: ✗ 缺少WCS信息")
+                except Exception as e:
+                    files_without_wcs.append(file_path)
+                    self._log(f"  {filename}: 检查WCS时出错: {str(e)}")
+
+            self._log(f"WCS检查完成: {len(files_with_wcs)} 个有WCS, {len(files_without_wcs)} 个无WCS")
+
+            # 对没有WCS信息的文件执行ASTAP处理
+            if files_without_wcs:
+                self._log(f"\n对 {len(files_without_wcs)} 个没有WCS信息的文件执行ASTAP处理...")
+
+                if self.fits_viewer.astap_processor:
+                    self.root.after(0, lambda: self.status_label.config(text="正在添加WCS信息..."))
+
+                    for file_path in files_without_wcs:
+                        filename = os.path.basename(file_path)
+                        try:
+                            self._log(f"  {filename}: 执行ASTAP处理...")
+                            success = self.fits_viewer.astap_processor.process_fits_file(file_path)
+
+                            if success:
+                                # ASTAP处理成功，重新检查WCS
+                                from astropy.io import fits as astropy_fits
+                                with astropy_fits.open(file_path) as hdul:
+                                    header = hdul[0].header
+                                    has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
+
+                                if has_wcs:
+                                    files_with_wcs.append(file_path)
+                                    self._log(f"    ✓ ASTAP处理成功，已添加WCS信息")
+                                else:
+                                    self._log(f"    ✗ ASTAP处理完成但未添加WCS信息")
+                            else:
+                                self._log(f"    ✗ ASTAP处理失败")
+                        except Exception as e:
+                            self._log(f"    ✗ ASTAP处理出错: {str(e)}")
+
+                    self._log(f"ASTAP处理完成，现在共有 {len(files_with_wcs)} 个文件包含WCS信息")
+                else:
+                    self._log("警告: ASTAP处理器不可用，无法添加WCS信息")
+
+            if not files_with_wcs:
+                self._log("没有包含WCS信息的文件，批量处理结束")
+                return
+
+            # 步骤2: 执行Diff操作（只处理有WCS信息的文件）
+            self._log("\n步骤2: 执行Diff操作")
+            self._log("-" * 60)
+            self.root.after(0, lambda: self.status_label.config(text="正在执行Diff..."))
+
+            # 对每个有WCS信息的文件执行diff
+            success_count = 0
+            fail_count = 0
+
+            template_dir = self.template_dir_var.get().strip()
+
+            # 获取fits_viewer的配置参数
+            noise_methods = []
+            if self.fits_viewer.outlier_var.get():
+                noise_methods.append('outlier')
+            if self.fits_viewer.hot_cold_var.get():
+                noise_methods.append('hot_cold')
+            if self.fits_viewer.adaptive_median_var.get():
+                noise_methods.append('adaptive_median')
+
+            alignment_method = self.fits_viewer.alignment_var.get()
+            remove_bright_lines = self.fits_viewer.remove_lines_var.get()
+            stretch_method = self.fits_viewer.stretch_method_var.get()
+            fast_mode = self.fits_viewer.fast_mode_var.get()
+
+            # 获取百分位数参数
+            percentile_low = 99.95
+            if stretch_method == 'percentile':
+                try:
+                    percentile_low = float(self.fits_viewer.percentile_var.get())
+                except:
+                    percentile_low = 99.95
+
+            self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}")
+
+            for i, download_file in enumerate(files_with_wcs, 1):
+                filename = os.path.basename(download_file)
+                self._log(f"\n[{i}/{len(files_with_wcs)}] 处理: {filename}")
+
+                try:
+                    # 使用diff_orb的模板查找方法（与diff按钮相同）
+                    template_file = self.fits_viewer.diff_orb.find_template_file(download_file, template_dir)
+
+                    if not template_file:
+                        fail_count += 1
+                        self._log(f"  ✗ 未找到匹配的模板文件")
+                        continue
+
+                    self._log(f"  使用模板: {os.path.basename(template_file)}")
+
+                    # 获取输出目录
+                    output_dir = self.fits_viewer._get_diff_output_directory()
+
+                    # 调用fits_viewer的diff功能（使用界面配置的参数）
+                    # 这里直接调用process_diff，与diff按钮的逻辑一致
+                    result = self.fits_viewer.diff_orb.process_diff(
+                        download_file,
+                        template_file,
+                        output_dir,
+                        noise_methods=noise_methods,
+                        alignment_method=alignment_method,
+                        remove_bright_lines=remove_bright_lines,
+                        stretch_method=stretch_method,
+                        percentile_low=percentile_low,
+                        fast_mode=fast_mode
+                    )
+
+                    if result and result.get('success'):
+                        success_count += 1
+                        new_spots = result.get('new_bright_spots', 0)
+                        self._log(f"  ✓ 成功 - 检测到 {new_spots} 个新亮点")
+
+                        # 记录输出目录
+                        result_output_dir = result.get('output_directory')
+                        if result_output_dir:
+                            self._log(f"  输出目录: {result_output_dir}")
+                    else:
+                        fail_count += 1
+                        self._log(f"  ✗ 失败")
+
+                except Exception as e:
+                    fail_count += 1
+                    self._log(f"  ✗ 错误: {str(e)}")
+
+            # 完成
+            self._log("\n" + "=" * 60)
+            self._log("批量处理完成")
+            self._log(f"成功: {success_count} 个")
+            self._log(f"失败: {fail_count} 个")
+            self._log("=" * 60)
+
+            self.root.after(0, lambda: self.status_label.config(text=f"批量处理完成 (成功:{success_count} 失败:{fail_count})"))
+
+        except Exception as e:
+            error_msg = f"批量处理失败: {str(e)}"
+            self._log(error_msg)
+            self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
+        finally:
+            # 重新启用按钮
+            self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
+            self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
+            self.root.after(0, lambda: self.download_button.config(state="normal"))
+            self.root.after(0, lambda: self.status_label.config(text="就绪"))
 
     def _get_url_selections(self):
         """获取URL选择参数的回调函数"""

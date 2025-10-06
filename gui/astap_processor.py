@@ -213,31 +213,44 @@ class ASTAPProcessor:
             filename = os.path.basename(fits_file_path)
             k_full = self.extract_k_full_from_filename(filename)
             if not k_full:
-                self.logger.error(f"无法从文件名提取天区编号: {filename}")
+                self.logger.error(f"无法从文件名提取天区编号")
+                self.logger.error(f"  文件名: {filename}")
+                self.logger.error(f"  期望格式: 包含K###-#格式的天区编号（如K054-1）")
                 return False
-            
+
+            self.logger.info(f"提取到天区编号: {k_full}")
+
             # 2. 获取坐标
             coordinates = self.get_coordinates_for_region(k_full)
             if not coordinates:
                 self.logger.error(f"无法获取天区 {k_full} 的坐标")
+                self.logger.error(f"  配置文件: {self.config_path}")
+                self.logger.error(f"  请检查配置文件中是否包含天区 {k_full} 的坐标信息")
                 return False
-            
+
             ra, dec = coordinates
-            
+            self.logger.info(f"获取到坐标: RA={ra}h, DEC={dec}°")
+
             # 3. 生成ASTAP命令
             command = self.generate_astap_command(fits_file_path, ra, dec)
             if not command:
                 self.logger.error("生成ASTAP命令失败")
+                self.logger.error(f"  ASTAP路径: {self.astap_path}")
+                self.logger.error(f"  请检查ASTAP是否正确安装")
                 return False
-            
+
+            self.logger.info(f"生成的ASTAP命令: {command}")
+
             # 4. 执行ASTAP命令
             success = self.execute_astap_command(command)
-            
+
             if success:
                 self.logger.info(f"FITS文件处理完成: {fits_file_path}")
             else:
                 self.logger.error(f"FITS文件处理失败: {fits_file_path}")
-            
+                self.logger.error(f"  执行的命令: {command}")
+                self.logger.error(f"  请检查上面的错误信息获取失败原因")
+
             return success
             
         except Exception as e:
