@@ -193,6 +193,12 @@ class FitsImageViewer:
             rb.pack(side=tk.LEFT, padx=(5, 0))
             # 可以考虑添加tooltip功能
 
+        # 快速模式开关
+        self.fast_mode_var = tk.BooleanVar(value=False)  # 默认关闭快速模式
+        self.fast_mode_checkbox = ttk.Checkbutton(toolbar_frame2, text="快速模式（减少中间文件）",
+                                                  variable=self.fast_mode_var)
+        self.fast_mode_checkbox.pack(side=tk.LEFT, padx=(10, 0))
+
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
@@ -954,12 +960,17 @@ class FitsImageViewer:
                     self.logger.warning(f"百分位数输入无效，使用默认值99.95%: {e}")
                     percentile_low = 99.95
 
+            # 获取快速模式选项
+            fast_mode = self.fast_mode_var.get()
+            self.logger.info(f"快速模式: {'是' if fast_mode else '否'}")
+
             # 执行diff操作
             result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir,
                                               noise_methods=noise_methods, alignment_method=alignment_method,
                                               remove_bright_lines=remove_bright_lines,
                                               stretch_method=stretch_method,
-                                              percentile_low=percentile_low)
+                                              percentile_low=percentile_low,
+                                              fast_mode=fast_mode)
 
             if result and result.get('success'):
                 # 显示结果摘要

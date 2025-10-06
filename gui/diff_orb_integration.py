@@ -141,7 +141,7 @@ class DiffOrbIntegration:
             self.logger.error(f"查找模板文件时出错: {str(e)}")
             return None
     
-    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95) -> Optional[Dict]:
+    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95, fast_mode: bool = False) -> Optional[Dict]:
         """
         执行diff操作
 
@@ -154,6 +154,7 @@ class DiffOrbIntegration:
             remove_bright_lines (bool): 是否去除亮线，默认True
             stretch_method (str): 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸
             percentile_low (float): 百分位数起点，默认99.95
+            fast_mode (bool): 快速模式，减少中间文件输出，默认False
 
         Returns:
             Optional[Dict]: 处理结果字典，包含输出文件路径等信息
@@ -216,17 +217,22 @@ class DiffOrbIntegration:
                 output_dir,  # 输出目录（同一目录）
                 remove_bright_lines=remove_bright_lines,  # 传递去除亮线参数
                 stretch_method=stretch_method,  # 传递拉伸方法参数
-                percentile_low=percentile_low  # 传递百分位数参数
+                percentile_low=percentile_low,  # 传递百分位数参数
+                fast_mode=fast_mode  # 传递快速模式参数
             )
             
             if result:
                 self.logger.info(f"diff操作成功完成")
                 self.logger.info(f"  对齐成功: {result.get('alignment_success', False)}")
                 self.logger.info(f"  检测到新亮点: {result.get('new_bright_spots', 0)} 个")
-                
+
+                # 快速模式：删除中间文件
+                if fast_mode:
+                    self._cleanup_intermediate_files(output_dir, template_file, download_file)
+
                 # 收集输出文件信息
                 output_files = self._collect_output_files(output_dir)
-                
+
                 return {
                     'success': True,
                     'alignment_success': result.get('alignment_success', False),
@@ -234,7 +240,8 @@ class DiffOrbIntegration:
                     'output_directory': output_dir,
                     'output_files': output_files,
                     'reference_file': template_file,
-                    'compared_file': download_file
+                    'compared_file': download_file,
+                    'fast_mode': fast_mode
                 }
             else:
                 self.logger.error("diff操作失败")
@@ -244,6 +251,56 @@ class DiffOrbIntegration:
             self.logger.error(f"执行diff操作时出错: {str(e)}")
             return None
     
+    def _cleanup_intermediate_files(self, output_dir: str, template_file: str, download_file: str):
+        """
+        快速模式：删除中间文件
+
+        Args:
+            output_dir: 输出目录
+            template_file: 模板文件路径
+            download_file: 下载文件路径
+        """
+        self.logger.info("快速模式：清理中间文件...")
+
+        template_basename = os.path.splitext(os.path.basename(template_file))[0]
+        download_basename = os.path.splitext(os.path.basename(download_file))[0]
+
+        # 定义要删除的文件后缀
+        suffixes_to_remove = [
+            '_adaptive_median_filtered.fits',
+            '_adaptive_median_noise.fits',
+            '_noise_cleaned.fits',
+            '_noise_cleaned_aligned.fits',
+            '_aligned.fits',
+            '_simple_repaired.fits'
+        ]
+
+        deleted_count = 0
+
+        # 删除模板文件的中间文件
+        for suffix in suffixes_to_remove:
+            file_path = os.path.join(output_dir, f"{template_basename}{suffix}")
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    self.logger.debug(f"  已删除: {os.path.basename(file_path)}")
+                    deleted_count += 1
+                except Exception as e:
+                    self.logger.warning(f"  无法删除 {os.path.basename(file_path)}: {e}")
+
+        # 删除下载文件的中间文件
+        for suffix in suffixes_to_remove:
+            file_path = os.path.join(output_dir, f"{download_basename}{suffix}")
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    self.logger.debug(f"  已删除: {os.path.basename(file_path)}")
+                    deleted_count += 1
+                except Exception as e:
+                    self.logger.warning(f"  无法删除 {os.path.basename(file_path)}: {e}")
+
+        self.logger.info(f"快速模式：已删除 {deleted_count} 个中间文件")
+
     def _collect_output_files(self, output_dir: str) -> Dict[str, str]:
         """收集输出目录中的文件"""
         output_files = {}

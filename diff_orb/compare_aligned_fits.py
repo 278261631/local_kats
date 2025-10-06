@@ -453,7 +453,7 @@ class AlignedFITSComparator:
             self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
             return {'success': False, 'error': str(e)}
 
-    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95):
+    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False):
         """
         处理已对齐FITS文件的差异比较
 
@@ -463,6 +463,7 @@ class AlignedFITSComparator:
             remove_bright_lines (bool): 是否去除亮线，默认True
             stretch_method (str): 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸
             percentile_low (float): 百分位数起点，默认99.95
+            fast_mode (bool): 快速模式，减少中间文件输出，默认False
 
         Returns:
             dict: 处理结果信息
@@ -516,97 +517,114 @@ class AlignedFITSComparator:
         diff_fits_path = os.path.join(output_directory, f"{base_name}_difference.fits")
         self.save_fits_result(diff_image, diff_fits_path)
 
-        # 保存二值化差异图像（FITS）
-        binary_fits_path = os.path.join(output_directory, f"{base_name}_binary_diff.fits")
-        self.save_fits_result(binary_diff.astype(np.float32), binary_fits_path)
+        # 初始化文件路径变量（快速模式下可能不会创建这些文件）
+        binary_fits_path = None
+        marked_fits_path = None
+        overlap_mask_fits_path = None
+        ref_jpg_path = None
+        aligned_jpg_path = None
+        diff_jpg_path = None
+        binary_jpg_path = None
+        overlap_mask_jpg_path = None
+        marked_jpg_path = None
+        spots_txt_path = None
 
-        # 保存标记图像（FITS）
-        marked_fits_path = os.path.join(output_directory, f"{base_name}_marked.fits")
-        # 将RGB图像转换为灰度用于FITS保存
-        marked_gray = cv2.cvtColor(marked_image, cv2.COLOR_RGB2GRAY)
-        self.save_fits_result(marked_gray.astype(np.float32), marked_fits_path)
+        # 快速模式：跳过大部分中间文件保存
+        if not fast_mode:
+            # 保存二值化差异图像（FITS）
+            binary_fits_path = os.path.join(output_directory, f"{base_name}_binary_diff.fits")
+            self.save_fits_result(binary_diff.astype(np.float32), binary_fits_path)
 
-        # 保存重叠掩码（FITS）
-        overlap_mask_fits_path = os.path.join(output_directory, f"{base_name}_overlap_mask.fits")
-        self.save_fits_result(overlap_mask.astype(np.float32), overlap_mask_fits_path)
+            # 保存标记图像（FITS）
+            marked_fits_path = os.path.join(output_directory, f"{base_name}_marked.fits")
+            # 将RGB图像转换为灰度用于FITS保存
+            marked_gray = cv2.cvtColor(marked_image, cv2.COLOR_RGB2GRAY)
+            self.save_fits_result(marked_gray.astype(np.float32), marked_fits_path)
+
+            # 保存重叠掩码（FITS）
+            overlap_mask_fits_path = os.path.join(output_directory, f"{base_name}_overlap_mask.fits")
+            self.save_fits_result(overlap_mask.astype(np.float32), overlap_mask_fits_path)
 
         # 计算重叠区域边界框用于调试可视化
         self.logger.info("计算对齐区域边界框...")
         overlap_bbox = self.get_overlap_bounding_box(overlap_mask)
 
-        # 保存JPG格式结果
-        self.logger.info("保存JPG格式结果（包含对齐区域调试信息）...")
+        if not fast_mode:
+            # 保存JPG格式结果
+            self.logger.info("保存JPG格式结果（包含对齐区域调试信息）...")
 
-        # 保存参考图像（JPG）- 带对齐区域方框
-        ref_jpg_path = os.path.join(output_directory, f"{base_name}_reference.jpg")
-        self.save_jpg_result(self.normalize_image(ref_data), ref_jpg_path,
-                           "参考图像（非重叠区域已设为黑色）", 'gray',
-                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
+            # 保存参考图像（JPG）- 带对齐区域方框
+            ref_jpg_path = os.path.join(output_directory, f"{base_name}_reference.jpg")
+            self.save_jpg_result(self.normalize_image(ref_data), ref_jpg_path,
+                               "参考图像（非重叠区域已设为黑色）", 'gray',
+                               overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存对齐图像（JPG）- 带对齐区域方框
-        aligned_jpg_path = os.path.join(output_directory, f"{base_name}_aligned.jpg")
-        self.save_jpg_result(self.normalize_image(aligned_data), aligned_jpg_path,
-                           "对齐图像（非重叠区域已设为黑色）", 'gray',
-                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
+            # 保存对齐图像（JPG）- 带对齐区域方框
+            aligned_jpg_path = os.path.join(output_directory, f"{base_name}_aligned.jpg")
+            self.save_jpg_result(self.normalize_image(aligned_data), aligned_jpg_path,
+                               "对齐图像（非重叠区域已设为黑色）", 'gray',
+                               overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存差异图像（JPG）- 带对齐区域方框
-        diff_jpg_path = os.path.join(output_directory, f"{base_name}_difference.jpg")
-        self.save_jpg_result(diff_image, diff_jpg_path,
-                           "差异图像（仅重叠区域）", 'hot',
-                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
+            # 保存差异图像（JPG）- 带对齐区域方框
+            diff_jpg_path = os.path.join(output_directory, f"{base_name}_difference.jpg")
+            self.save_jpg_result(diff_image, diff_jpg_path,
+                               "差异图像（仅重叠区域）", 'hot',
+                               overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存二值化差异图像（JPG）- 带对齐区域方框
-        binary_jpg_path = os.path.join(output_directory, f"{base_name}_binary_diff.jpg")
-        self.save_jpg_result(binary_diff, binary_jpg_path,
-                           "二值化差异图像（仅重叠区域）", 'gray',
-                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
+            # 保存二值化差异图像（JPG）- 带对齐区域方框
+            binary_jpg_path = os.path.join(output_directory, f"{base_name}_binary_diff.jpg")
+            self.save_jpg_result(binary_diff, binary_jpg_path,
+                               "二值化差异图像（仅重叠区域）", 'gray',
+                               overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存重叠掩码（JPG）- 带对齐区域方框
-        overlap_mask_jpg_path = os.path.join(output_directory, f"{base_name}_overlap_mask.jpg")
-        self.save_jpg_result(overlap_mask, overlap_mask_jpg_path,
-                           "重叠区域掩码（白色=重叠，黑色=非重叠）", 'gray',
-                           overlap_bbox=overlap_bbox, draw_alignment_box=True)
+            # 保存重叠掩码（JPG）- 带对齐区域方框
+            overlap_mask_jpg_path = os.path.join(output_directory, f"{base_name}_overlap_mask.jpg")
+            self.save_jpg_result(overlap_mask, overlap_mask_jpg_path,
+                               "重叠区域掩码（白色=重叠，黑色=非重叠）", 'gray',
+                               overlap_bbox=overlap_bbox, draw_alignment_box=True)
 
-        # 保存标记图像（JPG）- 带对齐区域方框
-        marked_jpg_path = os.path.join(output_directory, f"{base_name}_marked.jpg")
-        fig, ax = plt.subplots(figsize=(10, 8))
-        ax.imshow(marked_image, origin='lower')
-        ax.set_title(f"标记新亮点图像 (共{len(bright_spots)}个)")
-        ax.axis('off')
+            # 保存标记图像（JPG）- 带对齐区域方框
+            marked_jpg_path = os.path.join(output_directory, f"{base_name}_marked.jpg")
+            fig, ax = plt.subplots(figsize=(10, 8))
+            ax.imshow(marked_image, origin='lower')
+            ax.set_title(f"标记新亮点图像 (共{len(bright_spots)}个)")
+            ax.axis('off')
 
-        # 在标记图像上也绘制对齐区域方框
-        if overlap_bbox is not None:
-            x_min, y_min, x_max, y_max = overlap_bbox
-            width = x_max - x_min
-            height = y_max - y_min
-            from matplotlib.patches import Rectangle
-            rect = Rectangle((x_min, y_min), width, height,
-                           linewidth=2, edgecolor='lime', facecolor='none',
-                           linestyle='--', label='Alignment Region')
-            ax.add_patch(rect)
-            ax.legend(loc='upper right', fontsize=9)
+            # 在标记图像上也绘制对齐区域方框
+            if overlap_bbox is not None:
+                x_min, y_min, x_max, y_max = overlap_bbox
+                width = x_max - x_min
+                height = y_max - y_min
+                from matplotlib.patches import Rectangle
+                rect = Rectangle((x_min, y_min), width, height,
+                               linewidth=2, edgecolor='lime', facecolor='none',
+                               linestyle='--', label='Alignment Region')
+                ax.add_patch(rect)
+                ax.legend(loc='upper right', fontsize=9)
 
-        plt.tight_layout()
-        plt.savefig(marked_jpg_path, dpi=150, bbox_inches='tight')
-        plt.close()
+            plt.tight_layout()
+            plt.savefig(marked_jpg_path, dpi=150, bbox_inches='tight')
+            plt.close()
 
-        # 保存亮点详情
-        spots_txt_path = os.path.join(output_directory, f"{base_name}_bright_spots.txt")
-        with open(spots_txt_path, 'w', encoding='utf-8') as f:
-            f.write(f"已对齐FITS文件差异检测结果\n")
-            f.write(f"处理时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"参考文件: {os.path.basename(reference_file)}\n")
-            f.write(f"对齐文件: {os.path.basename(aligned_file)}\n")
-            f.write(f"检测到新亮点数量: {len(bright_spots)}\n\n")
+            # 保存亮点详情
+            spots_txt_path = os.path.join(output_directory, f"{base_name}_bright_spots.txt")
+            with open(spots_txt_path, 'w', encoding='utf-8') as f:
+                f.write(f"已对齐FITS文件差异检测结果\n")
+                f.write(f"处理时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"参考文件: {os.path.basename(reference_file)}\n")
+                f.write(f"对齐文件: {os.path.basename(aligned_file)}\n")
+                f.write(f"检测到新亮点数量: {len(bright_spots)}\n\n")
 
-            if bright_spots:
-                f.write("新亮点详情:\n")
-                f.write("-" * 50 + "\n")
-                for i, spot in enumerate(bright_spots):
-                    f.write(f"亮点 #{i+1}:\n")
-                    f.write(f"  位置: {spot['position']}\n")
-                    f.write(f"  面积: {spot['area']:.1f} 像素\n")
-                    f.write("\n")
+                if bright_spots:
+                    f.write("新亮点详情:\n")
+                    f.write("-" * 50 + "\n")
+                    for i, spot in enumerate(bright_spots):
+                        f.write(f"亮点 #{i+1}:\n")
+                        f.write(f"  位置: {spot['position']}\n")
+                        f.write(f"  面积: {spot['area']:.1f} 像素\n")
+                        f.write("\n")
+        else:
+            self.logger.info("快速模式：跳过中间文件保存")
 
         # 执行signal_blob_detector检测
         self.logger.info("执行signal_blob_detector检测...")
@@ -619,7 +637,45 @@ class AlignedFITSComparator:
             percentile_low=percentile_low
         )
 
+        # 快速模式：检测完成后删除差异FITS文件
+        if fast_mode and os.path.exists(diff_fits_path):
+            try:
+                os.remove(diff_fits_path)
+                self.logger.info(f"快速模式：已删除中间文件 {os.path.basename(diff_fits_path)}")
+                diff_fits_path = None  # 标记为已删除
+            except Exception as e:
+                self.logger.warning(f"快速模式：删除中间文件失败: {e}")
+
         # 返回处理结果
+        output_files = {
+            'fits': {},
+            'jpg': {}
+        }
+
+        # 只包含实际存在的文件
+        if diff_fits_path:  # 快速模式下可能已被删除
+            output_files['fits']['difference'] = diff_fits_path
+        if binary_fits_path:
+            output_files['fits']['binary_diff'] = binary_fits_path
+        if marked_fits_path:
+            output_files['fits']['marked'] = marked_fits_path
+        if overlap_mask_fits_path:
+            output_files['fits']['overlap_mask'] = overlap_mask_fits_path
+        if ref_jpg_path:
+            output_files['jpg']['reference'] = ref_jpg_path
+        if aligned_jpg_path:
+            output_files['jpg']['aligned'] = aligned_jpg_path
+        if diff_jpg_path:
+            output_files['jpg']['difference'] = diff_jpg_path
+        if binary_jpg_path:
+            output_files['jpg']['binary_diff'] = binary_jpg_path
+        if marked_jpg_path:
+            output_files['jpg']['marked'] = marked_jpg_path
+        if overlap_mask_jpg_path:
+            output_files['jpg']['overlap_mask'] = overlap_mask_jpg_path
+        if spots_txt_path:
+            output_files['text'] = spots_txt_path
+
         result = {
             'success': True,
             'reference_file': reference_file,
@@ -628,23 +684,8 @@ class AlignedFITSComparator:
             'new_bright_spots': len(bright_spots),
             'bright_spots_details': bright_spots,
             'blob_detection': blob_detection_result,
-            'output_files': {
-                'fits': {
-                    'difference': diff_fits_path,
-                    'binary_diff': binary_fits_path,
-                    'marked': marked_fits_path,
-                    'overlap_mask': overlap_mask_fits_path
-                },
-                'jpg': {
-                    'reference': ref_jpg_path,
-                    'aligned': aligned_jpg_path,
-                    'difference': diff_jpg_path,
-                    'binary_diff': binary_jpg_path,
-                    'marked': marked_jpg_path,
-                    'overlap_mask': overlap_mask_jpg_path
-                },
-                'text': spots_txt_path
-            }
+            'output_files': output_files,
+            'fast_mode': fast_mode
         }
 
         return result
