@@ -139,14 +139,14 @@ class SignalBlobDetector:
 
         return stretched, peak_value, end_value
 
-    def percentile_stretch(self, data, low_percentile=99.5, use_max=True):
+    def percentile_stretch(self, data, low_percentile=99.95, use_max=True):
         """
         基于百分位数的拉伸策略
         使用指定百分位数作为起点，最大值作为终点
 
         Args:
             data: 输入数据
-            low_percentile: 低百分位数，默认99.5
+            low_percentile: 低百分位数，默认99.95
             use_max: 是否使用最大值作为终点，默认True
         """
         print(f"\n基于百分位数的拉伸 ({low_percentile}%-最大值):")
@@ -355,7 +355,7 @@ class SignalBlobDetector:
     def sort_blobs(self, blobs, image_shape):
         """
         对斑点进行排序
-        规则：SNR（信噪比）权重最高 > 圆度 > 靠近图像中心
+        规则：面积和圆度的综合得分作为第一判断依据
         """
         if not blobs:
             return blobs
@@ -363,15 +363,33 @@ class SignalBlobDetector:
         # 计算图像中心
         img_center_y, img_center_x = image_shape[0] / 2, image_shape[1] / 2
 
-        # 为每个斑点计算到中心的距离
+        # 为每个斑点计算综合得分
         for blob in blobs:
             cx, cy = blob['center']
             distance = np.sqrt((cx - img_center_x)**2 + (cy - img_center_y)**2)
             blob['distance_to_center'] = distance
 
-        # 排序：SNR降序（大的在前），圆度降序（大的在前），距离升序（近的在前）
-        sorted_blobs = sorted(blobs,
-                             key=lambda b: (-b.get('snr', 0), -b['circularity'], b['distance_to_center']))
+            # 计算面积和圆度的综合得分（非线性）
+            # 面积归一化：假设合理面积范围是 min_area 到 max_area
+            area_normalized = (blob['area'] - self.min_area) / (self.max_area - self.min_area + 1e-10)
+            area_normalized = np.clip(area_normalized, 0, 1)
+
+            # 圆度已经是0-1范围
+            circularity = blob['circularity']
+
+            # 非线性综合得分：使用指数形式，让高圆度+大面积的得分显著更高
+            # 方案：面积 × 圆度^3
+            # 圆度的3次方：让圆度差异被放大
+            # - 圆度0.9: 0.9^3 = 0.729
+            # - 圆度0.95: 0.95^3 = 0.857
+            # - 圆度0.99: 0.99^3 = 0.970
+            # 乘以面积：让面积大的目标得分更高
+
+            # 综合得分：面积 × 圆度^3
+            blob['quality_score'] = blob['area'] * (circularity ** 3)
+
+        # 排序：综合得分降序（大的在前）
+        sorted_blobs = sorted(blobs, key=lambda b: -b['quality_score'])
 
         return sorted_blobs
 
@@ -381,19 +399,20 @@ class SignalBlobDetector:
             print("\n未检测到任何斑点")
             return
 
-        print(f"\n检测到的斑点详细信息（已排序：SNR>圆度>靠近中心）:")
-        print(f"{'序号':<6} {'X坐标':<10} {'Y坐标':<10} {'面积':<10} {'圆度':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12} {'距中心':<10}")
+        print(f"\n检测到的斑点详细信息（已排序：综合得分=面积+圆度）:")
+        print(f"{'序号':<6} {'综合得分':<10} {'面积':<10} {'圆度':<10} {'X坐标':<10} {'Y坐标':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12}")
         print("-" * 110)
 
         for i, blob in enumerate(blobs, 1):
             cx, cy = blob['center']
-            dist = blob.get('distance_to_center', 0)
+            quality_score = blob.get('quality_score', 0)
             snr = blob.get('snr', 0)
             max_snr = blob.get('max_snr', 0)
-            print(f"{i:<6} {cx:<10.2f} {cy:<10.2f} {blob['area']:<10.1f} "
-                  f"{blob['circularity']:<10.3f} {snr:<10.2f} {max_snr:<10.2f} {blob['mean_signal']:<12.6f} {dist:<10.1f}")
+            print(f"{i:<6} {quality_score:<10.3f} {blob['area']:<10.1f} {blob['circularity']:<10.3f} "
+                  f"{cx:<10.2f} {cy:<10.2f} {snr:<10.2f} {max_snr:<10.2f} {blob['mean_signal']:<12.6f}")
 
         # 统计信息
+        quality_scores = [b.get('quality_score', 0) for b in blobs]
         areas = [b['area'] for b in blobs]
         signals = [b['mean_signal'] for b in blobs]
         circularities = [b['circularity'] for b in blobs]
@@ -401,6 +420,7 @@ class SignalBlobDetector:
 
         print(f"\n统计信息:")
         print(f"  - 总数: {len(blobs)}")
+        print(f"  - 综合得分: {np.mean(quality_scores):.3f} ± {np.std(quality_scores):.3f} (范围: {np.min(quality_scores):.3f} - {np.max(quality_scores):.3f})")
         print(f"  - 面积: {np.mean(areas):.2f} ± {np.std(areas):.2f} (范围: {np.min(areas):.2f} - {np.max(areas):.2f})")
         print(f"  - 圆度: {np.mean(circularities):.3f} ± {np.std(circularities):.3f} (范围: {np.min(circularities):.3f} - {np.max(circularities):.3f})")
         print(f"  - SNR: {np.mean(snrs):.2f} ± {np.std(snrs):.2f} (范围: {np.min(snrs):.2f} - {np.max(snrs):.2f})")
@@ -739,23 +759,24 @@ class SignalBlobDetector:
                 f.write(f"信号像素数: {threshold_info['signal_pixels']}\n")
             f.write("\n")
 
-            f.write(f"检测到 {len(blobs)} 个斑点（按SNR排序）\n\n")
-            f.write(f"{'序号':<6} {'X坐标':<12} {'Y坐标':<12} {'面积':<12} {'圆度':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14}\n")
-            f.write("-" * 120 + "\n")
+            f.write(f"检测到 {len(blobs)} 个斑点（按综合得分排序：面积+圆度）\n\n")
+            f.write(f"{'序号':<6} {'综合得分':<12} {'面积':<12} {'圆度':<12} {'X坐标':<12} {'Y坐标':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14}\n")
+            f.write("-" * 130 + "\n")
 
             for i, blob in enumerate(blobs, 1):
                 cx, cy = blob['center']
+                quality_score = blob.get('quality_score', 0)
                 snr = blob.get('snr', 0)
                 max_snr = blob.get('max_snr', 0)
-                f.write(f"{i:<6} {cx:<12.4f} {cy:<12.4f} {blob['area']:<12.2f} "
-                       f"{blob['circularity']:<12.4f} {snr:<12.2f} {max_snr:<12.2f} "
+                f.write(f"{i:<6} {quality_score:<12.4f} {blob['area']:<12.2f} {blob['circularity']:<12.4f} "
+                       f"{cx:<12.4f} {cy:<12.4f} {snr:<12.2f} {max_snr:<12.2f} "
                        f"{blob['mean_signal']:<14.8f} {blob['max_signal']:<14.8f}\n")
 
         print(f"保存分析报告: {txt_output}")
     
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.5,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
-                         stretch_method='percentile', percentile_low=99.5):
+                         stretch_method='percentile', percentile_low=99.95):
         """
         处理 FITS 文件的完整流程
 
@@ -768,7 +789,7 @@ class SignalBlobDetector:
             aligned_fits: 对齐图像（下载）FITS文件路径
             remove_bright_lines: 是否去除亮线，默认True
             stretch_method: 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸（默认）
-            percentile_low: 百分位数起点，默认99.5，终点使用最大值
+            percentile_low: 百分位数起点，默认99.95，终点使用最大值
         """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
@@ -885,8 +906,8 @@ def main():
     parser.add_argument('--stretch-method', type=str, default='percentile',
                        choices=['peak', 'percentile'],
                        help='拉伸方法: peak=峰值拉伸, percentile=百分位数拉伸(默认)')
-    parser.add_argument('--percentile-low', type=float, default=99.5,
-                       help='百分位数拉伸的低百分位数，默认99.5，终点使用最大值')
+    parser.add_argument('--percentile-low', type=float, default=99.95,
+                       help='百分位数拉伸的低百分位数，默认99.95，终点使用最大值')
     parser.add_argument('--no-peak-stretch', action='store_true',
                        help='禁用基于峰值的拉伸（已废弃，使用--stretch-method）')
     parser.add_argument('--remove-lines', action='store_true',

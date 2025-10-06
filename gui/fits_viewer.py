@@ -157,7 +157,7 @@ class FitsImageViewer:
         percentile_label = ttk.Label(noise_frame, text="百分位:")
         percentile_label.pack(side=tk.LEFT, padx=(10, 2))
 
-        self.percentile_var = tk.StringVar(value="99.5")  # 默认99.5%
+        self.percentile_var = tk.StringVar(value="99.95")  # 默认99.95%
         self.percentile_entry = ttk.Entry(noise_frame, textvariable=self.percentile_var, width=6)
         self.percentile_entry.pack(side=tk.LEFT, padx=(0, 2))
 
@@ -943,7 +943,7 @@ class FitsImageViewer:
             self.logger.info(f"拉伸方法: {stretch_method}")
 
             # 获取百分位数参数
-            percentile_low = 99.5  # 默认值
+            percentile_low = 99.95  # 默认值
             if stretch_method == 'percentile':
                 try:
                     percentile_low = float(self.percentile_var.get())
@@ -951,8 +951,8 @@ class FitsImageViewer:
                         raise ValueError("百分位数必须在0-100之间")
                     self.logger.info(f"百分位数: {percentile_low}%")
                 except ValueError as e:
-                    self.logger.warning(f"百分位数输入无效，使用默认值99.5%: {e}")
-                    percentile_low = 99.5
+                    self.logger.warning(f"百分位数输入无效，使用默认值99.95%: {e}")
+                    percentile_low = 99.95
 
             # 执行diff操作
             result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir,

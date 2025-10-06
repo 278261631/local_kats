@@ -141,7 +141,7 @@ class DiffOrbIntegration:
             self.logger.error(f"查找模板文件时出错: {str(e)}")
             return None
     
-    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.5) -> Optional[Dict]:
+    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95) -> Optional[Dict]:
         """
         执行diff操作
 
@@ -153,7 +153,7 @@ class DiffOrbIntegration:
             alignment_method (str): 对齐方式，可选值：['rigid', 'wcs']
             remove_bright_lines (bool): 是否去除亮线，默认True
             stretch_method (str): 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸
-            percentile_low (float): 百分位数起点，默认99.5
+            percentile_low (float): 百分位数起点，默认99.95
 
         Returns:
             Optional[Dict]: 处理结果字典，包含输出文件路径等信息
