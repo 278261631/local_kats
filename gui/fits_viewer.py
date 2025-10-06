@@ -142,28 +142,6 @@ class FitsImageViewer:
                                                      variable=self.remove_lines_var)
         self.remove_lines_checkbox.pack(side=tk.LEFT, padx=(5, 0))
 
-        # 拉伸方法选择
-        self.stretch_method_var = tk.StringVar(value="percentile")  # 默认百分位数拉伸
-        stretch_methods = [
-            ("峰值", "peak"),
-            ("百分位数", "percentile")
-        ]
-        for text, value in stretch_methods:
-            rb = ttk.Radiobutton(noise_frame, text=text,
-                               variable=self.stretch_method_var, value=value)
-            rb.pack(side=tk.LEFT, padx=(5, 0))
-
-        # 百分位数输入框
-        percentile_label = ttk.Label(noise_frame, text="百分位:")
-        percentile_label.pack(side=tk.LEFT, padx=(10, 2))
-
-        self.percentile_var = tk.StringVar(value="99.95")  # 默认99.95%
-        self.percentile_entry = ttk.Entry(noise_frame, textvariable=self.percentile_var, width=6)
-        self.percentile_entry.pack(side=tk.LEFT, padx=(0, 2))
-
-        percentile_unit = ttk.Label(noise_frame, text="%")
-        percentile_unit.pack(side=tk.LEFT, padx=(0, 5))
-
         # 图像统计信息标签（放在第一行右侧）
         self.stats_label = ttk.Label(toolbar_frame1, text="")
         self.stats_label.pack(side=tk.RIGHT)
@@ -193,12 +171,6 @@ class FitsImageViewer:
             rb.pack(side=tk.LEFT, padx=(5, 0))
             # 可以考虑添加tooltip功能
 
-        # 快速模式开关
-        self.fast_mode_var = tk.BooleanVar(value=False)  # 默认关闭快速模式
-        self.fast_mode_checkbox = ttk.Checkbutton(toolbar_frame2, text="快速模式（减少中间文件）",
-                                                  variable=self.fast_mode_var)
-        self.fast_mode_checkbox.pack(side=tk.LEFT, padx=(10, 0))
-
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
@@ -208,6 +180,40 @@ class FitsImageViewer:
         self.astap_button = ttk.Button(toolbar_frame2, text="执行ASTAP",
                                      command=self._execute_astap, state="disabled")
         self.astap_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 第三行工具栏
+        toolbar_frame3 = ttk.Frame(toolbar_container)
+        toolbar_frame3.pack(fill=tk.X, pady=(2, 0))
+
+        # 快速模式开关
+        self.fast_mode_var = tk.BooleanVar(value=True)  # 默认开启快速模式
+        self.fast_mode_checkbox = ttk.Checkbutton(toolbar_frame3, text="快速模式（减少中间文件）",
+                                                  variable=self.fast_mode_var)
+        self.fast_mode_checkbox.pack(side=tk.LEFT, padx=(0, 0))
+
+        # 拉伸方法选择
+        ttk.Label(toolbar_frame3, text="拉伸方法:").pack(side=tk.LEFT, padx=(20, 2))
+
+        self.stretch_method_var = tk.StringVar(value="percentile")  # 默认百分位数拉伸
+        stretch_methods = [
+            ("峰值", "peak"),
+            ("百分位数", "percentile")
+        ]
+        for text, value in stretch_methods:
+            rb = ttk.Radiobutton(toolbar_frame3, text=text,
+                               variable=self.stretch_method_var, value=value)
+            rb.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 百分位数输入框
+        percentile_label = ttk.Label(toolbar_frame3, text="百分位:")
+        percentile_label.pack(side=tk.LEFT, padx=(10, 2))
+
+        self.percentile_var = tk.StringVar(value="99.95")  # 默认99.95%
+        self.percentile_entry = ttk.Entry(toolbar_frame3, textvariable=self.percentile_var, width=6)
+        self.percentile_entry.pack(side=tk.LEFT, padx=(0, 2))
+
+        percentile_unit = ttk.Label(toolbar_frame3, text="%")
+        percentile_unit.pack(side=tk.LEFT, padx=(0, 5))
 
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
