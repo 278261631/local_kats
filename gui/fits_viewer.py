@@ -979,77 +979,36 @@ class FitsImageViewer:
                                               fast_mode=fast_mode)
 
             if result and result.get('success'):
-                # 显示结果摘要
+                # 记录结果摘要到日志
                 summary = self.diff_orb.get_diff_summary(result)
-                messagebox.showinfo("Diff操作完成", summary)
+                self.logger.info("=" * 60)
+                self.logger.info("Diff操作完成")
+                self.logger.info("=" * 60)
+                for line in summary.split('\n'):
+                    if line.strip():
+                        self.logger.info(line)
+                self.logger.info("=" * 60)
 
-                # 自动查看差异图像（不询问）
-                # 尝试加载差异图像
-                output_files = result.get('output_files', {})
-                self.logger.info(f"可用的输出文件: {list(output_files.keys())}")
+                # 尝试显示第一个检测目标的cutout图片
+                cutout_displayed = False
+                output_dir = result.get('output_directory')
+                if output_dir:
+                    cutout_displayed = self._display_first_detection_cutouts(output_dir)
 
-                # 按优先级尝试加载文件
-                files_to_try = [
-                    ('difference_fits', '差异FITS文件'),
-                    ('marked_fits', '标记FITS文件'),
-                    ('aligned_fits', '对齐FITS文件'),
-                    ('reference_fits', '参考FITS文件')
-                ]
+                # 根据是否显示了cutout图片决定后续操作
+                if cutout_displayed:
+                    self.logger.info("已显示cutout图片")
+                else:
+                    self.logger.info("未找到cutout图片，不显示其他文件")
 
-                # 如果没有difference_fits，尝试显示差异图像的PNG版本
-                if 'difference_fits' not in output_files:
-                    # 查找差异相关的PNG文件
-                    output_dir = result.get('output_directory')
-                    if output_dir and os.path.exists(output_dir):
-                        diff_pngs = list(Path(output_dir).glob("*difference*.png"))
-                        if diff_pngs:
-                            # 显示差异PNG文件的信息
-                            png_file = str(diff_pngs[0])
-                            messagebox.showinfo("差异图像",
-                                f"生成了差异图像文件:\n{os.path.basename(png_file)}\n\n"
-                                f"注意：diff_orb生成的是PNG格式的差异图像，\n"
-                                f"将显示对齐后的FITS文件供参考。")
-                            self.logger.info(f"找到差异PNG文件: {os.path.basename(png_file)}")
-
-                            # 尝试打开PNG文件所在目录
-                            try:
-                                self._open_directory_in_explorer(output_dir)
-                            except:
-                                pass
-
-                loaded = False
-                for file_key, file_desc in files_to_try:
-                    file_path = output_files.get(file_key)
-                    if file_path and os.path.exists(file_path):
-                        self.logger.info(f"加载{file_desc}: {os.path.basename(file_path)}")
-                        if self.load_fits_file(file_path):
-                            loaded = True
-                            break
-                        else:
-                            self.logger.warning(f"加载{file_desc}失败")
-
-                if not loaded:
-                    # 如果都没有成功加载，尝试直接扫描输出目录
-                    output_dir = result.get('output_directory')
-                    if output_dir and os.path.exists(output_dir):
-                        fits_files = list(Path(output_dir).glob("*.fits"))
-                        if fits_files:
-                            # 加载第一个找到的FITS文件
-                            first_fits = str(fits_files[0])
-                            self.logger.info(f"尝试加载目录中的FITS文件: {os.path.basename(first_fits)}")
-                            if self.load_fits_file(first_fits):
-                                loaded = True
-
-                    if not loaded:
-                        messagebox.showwarning("警告", "没有找到可以显示的结果文件")
-
-                # 自动打开输出目录（不询问）
+                # 自动打开输出目录
                 try:
                     self._open_directory_in_explorer(output_dir)
                     self.logger.info(f"已自动打开结果目录: {output_dir}")
                 except Exception as e:
                     self.logger.warning(f"打开结果目录失败: {str(e)}")
             else:
+                self.logger.error("Diff操作失败")
                 messagebox.showerror("错误", "Diff操作失败")
 
         except Exception as e:
@@ -1259,6 +1218,115 @@ class FitsImageViewer:
             self.logger.info(f"已更新目录树颜色标识: {len(with_wcs_files)}个绿色, {len(without_wcs_files)}个橙色")
 
         except Exception as e:
-            self.logger.error(f"更新目录树颜色失败: {str(e)}")
+            self.logger.error(f"更新目录树颜色时出错: {e}")
+
+    def _display_first_detection_cutouts(self, output_dir):
+        """
+        显示第一个检测目标的cutout图片
+
+        Args:
+            output_dir: 输出目录路径
+
+        Returns:
+            bool: 是否成功显示了cutout图片
+        """
+        try:
+            # 查找detection目录
+            detection_dirs = list(Path(output_dir).glob("detection_*"))
+            if not detection_dirs:
+                self.logger.info("未找到detection目录")
+                return False
+
+            # 使用最新的detection目录
+            detection_dir = sorted(detection_dirs, key=lambda x: x.stat().st_mtime, reverse=True)[0]
+            self.logger.info(f"找到detection目录: {detection_dir.name}")
+
+            # 查找cutouts文件夹
+            cutouts_dir = detection_dir / "cutouts"
+            if not cutouts_dir.exists():
+                self.logger.info("未找到cutouts文件夹")
+                return False
+
+            # 查找第一个目标的图片（按文件名排序）
+            reference_files = sorted(cutouts_dir.glob("*_1_reference.png"))
+            aligned_files = sorted(cutouts_dir.glob("*_2_aligned.png"))
+            detection_files = sorted(cutouts_dir.glob("*_3_detection.png"))
+
+            if not (reference_files and aligned_files and detection_files):
+                self.logger.info("未找到完整的cutout图片")
+                return False
+
+            # 使用第一个目标的图片
+            reference_img = str(reference_files[0])
+            aligned_img = str(aligned_files[0])
+            detection_img = str(detection_files[0])
+
+            self.logger.info(f"显示第一个检测目标的cutout图片:")
+            self.logger.info(f"  Reference: {os.path.basename(reference_img)}")
+            self.logger.info(f"  Aligned: {os.path.basename(aligned_img)}")
+            self.logger.info(f"  Detection: {os.path.basename(detection_img)}")
+
+            # 在主界面显示三张图片
+            self._show_cutouts_in_main_display(reference_img, aligned_img, detection_img)
+
+            return True  # 成功显示
+
+        except Exception as e:
+            self.logger.error(f"显示cutout图片时出错: {e}")
+            return False
+
+    def _show_cutouts_in_main_display(self, reference_img, aligned_img, detection_img):
+        """
+        在主界面显示三张cutout图片
+
+        Args:
+            reference_img: 参考图像路径
+            aligned_img: 对齐图像路径
+            detection_img: 检测图像路径
+        """
+        from PIL import Image
+
+        try:
+            # 清空当前图像
+            self.figure.clear()
+
+            # 创建1行3列的子图
+            axes = self.figure.subplots(1, 3)
+
+            # 图片信息
+            images_info = [
+                (reference_img, "Reference (模板图像)", axes[0]),
+                (aligned_img, "Aligned (对齐图像)", axes[1]),
+                (detection_img, "Detection (检测结果)", axes[2])
+            ]
+
+            # 加载并显示每张图片
+            for img_path, title, ax in images_info:
+                try:
+                    # 加载图片
+                    img = Image.open(img_path)
+                    img_array = np.array(img)
+
+                    # 显示图片
+                    ax.imshow(img_array, cmap='gray' if len(img_array.shape) == 2 else None)
+                    ax.set_title(title, fontsize=10, fontweight='bold')
+                    ax.axis('off')  # 隐藏坐标轴
+
+                except Exception as e:
+                    ax.text(0.5, 0.5, f"加载失败:\n{str(e)}",
+                           ha='center', va='center', transform=ax.transAxes)
+                    ax.set_title(title, fontsize=10, fontweight='bold')
+                    ax.axis('off')
+
+            # 调整子图间距
+            self.figure.tight_layout()
+
+            # 刷新画布
+            self.canvas.draw()
+
+            self.logger.info("已在主界面显示cutout图片")
+
+        except Exception as e:
+            self.logger.error(f"在主界面显示cutout图片时出错: {e}")
 
 
