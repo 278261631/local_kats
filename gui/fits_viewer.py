@@ -318,6 +318,13 @@ class FitsImageViewer:
         save_btn = ttk.Button(control_frame, text="保存图像", command=self._save_image)
         save_btn.pack(side=tk.LEFT, padx=(5, 0))
 
+        # 打开输出目录按钮
+        self.last_output_dir = None  # 保存最后一次的输出目录
+        self.open_output_dir_btn = ttk.Button(control_frame, text="打开输出目录",
+                                              command=self._open_last_output_directory,
+                                              state="disabled")
+        self.open_output_dir_btn.pack(side=tk.LEFT, padx=(5, 0))
+
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""
         if not self.first_refresh_done:
@@ -836,6 +843,18 @@ class FitsImageViewer:
             self.logger.error(f"打开目录失败: {str(e)}")
             messagebox.showerror("错误", f"打开目录失败: {str(e)}")
 
+    def _open_last_output_directory(self):
+        """打开最后一次diff操作的输出目录"""
+        if self.last_output_dir and os.path.exists(self.last_output_dir):
+            try:
+                self._open_directory_in_explorer(self.last_output_dir)
+                self.logger.info(f"已打开输出目录: {self.last_output_dir}")
+            except Exception as e:
+                self.logger.error(f"打开输出目录失败: {str(e)}")
+                messagebox.showerror("错误", f"打开输出目录失败: {str(e)}")
+        else:
+            messagebox.showwarning("警告", "没有可用的输出目录")
+
     def _open_directory_in_explorer(self, directory):
         """在文件管理器中打开目录"""
         try:
@@ -1001,12 +1020,10 @@ class FitsImageViewer:
                 else:
                     self.logger.info("未找到cutout图片，不显示其他文件")
 
-                # 自动打开输出目录
-                try:
-                    self._open_directory_in_explorer(output_dir)
-                    self.logger.info(f"已自动打开结果目录: {output_dir}")
-                except Exception as e:
-                    self.logger.warning(f"打开结果目录失败: {str(e)}")
+                # 保存输出目录路径并启用按钮
+                self.last_output_dir = output_dir
+                self.open_output_dir_btn.config(state="normal")
+                self.logger.info(f"输出目录: {output_dir} (点击'打开输出目录'按钮查看)")
             else:
                 self.logger.error("Diff操作失败")
                 messagebox.showerror("错误", "Diff操作失败")
