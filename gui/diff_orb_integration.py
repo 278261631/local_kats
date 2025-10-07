@@ -253,7 +253,7 @@ class DiffOrbIntegration:
     
     def _cleanup_intermediate_files(self, output_dir: str, template_file: str, download_file: str):
         """
-        快速模式：删除中间文件
+        快速模式：删除中间文件（保留noise_cleaned_aligned.fits）
 
         Args:
             output_dir: 输出目录
@@ -265,17 +265,18 @@ class DiffOrbIntegration:
         template_basename = os.path.splitext(os.path.basename(template_file))[0]
         download_basename = os.path.splitext(os.path.basename(download_file))[0]
 
-        # 定义要删除的文件后缀
+        # 定义要删除的文件后缀（不包含noise_cleaned_aligned.fits）
         suffixes_to_remove = [
             '_adaptive_median_filtered.fits',
             '_adaptive_median_noise.fits',
             '_noise_cleaned.fits',
-            '_noise_cleaned_aligned.fits',
+            # '_noise_cleaned_aligned.fits',  # 保留此文件
             '_aligned.fits',
             '_simple_repaired.fits'
         ]
 
         deleted_count = 0
+        kept_count = 0
 
         # 删除模板文件的中间文件
         for suffix in suffixes_to_remove:
@@ -299,7 +300,14 @@ class DiffOrbIntegration:
                 except Exception as e:
                     self.logger.warning(f"  无法删除 {os.path.basename(file_path)}: {e}")
 
-        self.logger.info(f"快速模式：已删除 {deleted_count} 个中间文件")
+        # 检查保留的noise_cleaned_aligned.fits文件
+        for basename in [template_basename, download_basename]:
+            kept_file = os.path.join(output_dir, f"{basename}_noise_cleaned_aligned.fits")
+            if os.path.exists(kept_file):
+                self.logger.debug(f"  已保留: {os.path.basename(kept_file)}")
+                kept_count += 1
+
+        self.logger.info(f"快速模式：已删除 {deleted_count} 个中间文件，保留 {kept_count} 个noise_cleaned_aligned.fits文件")
 
     def _collect_output_files(self, output_dir: str) -> Dict[str, str]:
         """收集输出目录中的文件"""

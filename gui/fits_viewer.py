@@ -1554,18 +1554,18 @@ class FitsImageViewer:
                     info['system_name'] = path_parts[detection_index - 4]  # 系统名
                     self.logger.info(f"系统名: {info['system_name']}")
 
-            # 尝试从detection目录中找到对应的FITS文件来获取RA/DEC
+            # 从像素坐标和WCS信息计算RA/DEC
             detection_dir = Path(detection_img).parent.parent
             self.logger.info(f"Detection目录: {detection_dir}")
 
-            # 查找detection结果文件 - 尝试多个位置
-            result_files = []
+            # 1. 首先从detection结果文件中获取像素坐标
+            pixel_x = None
+            pixel_y = None
 
-            # 在detection目录查找
+            result_files = []
             result_files.extend(list(detection_dir.glob("detection_result_*.txt")))
             result_files.extend(list(detection_dir.glob("*result*.txt")))
 
-            # 在detection目录的父目录查找
             parent_dir = detection_dir.parent
             result_files.extend(list(parent_dir.glob("detection_result_*.txt")))
             result_files.extend(list(parent_dir.glob("*result*.txt")))
@@ -1573,7 +1573,6 @@ class FitsImageViewer:
             self.logger.info(f"找到结果文件: {len(result_files)} 个")
 
             if result_files:
-                # 读取结果文件获取RA/DEC
                 result_file = result_files[0]
                 self.logger.info(f"读取结果文件: {result_file}")
 
@@ -1582,39 +1581,48 @@ class FitsImageViewer:
                         content = f.read()
                         self.logger.info(f"结果文件内容前500字符:\n{content[:500]}")
 
-                        # 查找对应blob的RA/DEC
+                        # 查找对应blob的像素坐标
                         if blob_num:
-                            # 尝试多种格式
+                            # 尝试多种格式提取像素坐标
+                            # 格式示例: Blob #0: 位置=(123.45, 678.90)
                             patterns = [
-                                rf'Blob\s*#?\s*{blob_num}\s*:.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
-                                rf'目标\s*#?\s*{blob_num}\s*:.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
-                                rf'#{blob_num}.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
-                                rf'blob[_\s]*{blob_num}.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
-                                # 尝试匹配任何RA/DEC（如果只有一个目标）
-                                rf'RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)'
+                                rf'Blob\s*#?\s*{blob_num}\s*:.*?位置[=:\s]*\(?\s*([\d.]+)\s*,\s*([\d.]+)\s*\)?',
+                                rf'目标\s*#?\s*{blob_num}\s*:.*?位置[=:\s]*\(?\s*([\d.]+)\s*,\s*([\d.]+)\s*\)?',
+                                rf'#{blob_num}.*?位置[=:\s]*\(?\s*([\d.]+)\s*,\s*([\d.]+)\s*\)?',
+                                rf'blob[_\s]*{blob_num}.*?[Pp]osition[=:\s]*\(?\s*([\d.]+)\s*,\s*([\d.]+)\s*\)?',
+                                rf'Blob\s*#?\s*{blob_num}\s*:.*?\(?\s*([\d.]+)\s*,\s*([\d.]+)\s*\)?',
                             ]
 
                             for i, pattern in enumerate(patterns):
                                 coord_match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
                                 if coord_match:
-                                    info['ra'] = f"{float(coord_match.group(1)):.6f}"
-                                    info['dec'] = f"{float(coord_match.group(2)):.6f}"
-                                    self.logger.info(f"从结果文件找到坐标(模式{i}): RA={info['ra']}, Dec={info['dec']}")
+                                    pixel_x = float(coord_match.group(1))
+                                    pixel_y = float(coord_match.group(2))
+                                    self.logger.info(f"从结果文件找到像素坐标(模式{i}): x={pixel_x}, y={pixel_y}")
                                     break
-                        else:
-                            # 如果没有blob编号，尝试匹配任何RA/DEC
-                            pattern = rf'RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)'
-                            coord_match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
-                            if coord_match:
-                                info['ra'] = f"{float(coord_match.group(1)):.6f}"
-                                info['dec'] = f"{float(coord_match.group(2)):.6f}"
-                                self.logger.info(f"从结果文件找到坐标: RA={info['ra']}, Dec={info['dec']}")
+
+                        # 如果没找到像素坐标，尝试直接查找RA/DEC（备用方案）
+                        if pixel_x is None or pixel_y is None:
+                            if blob_num:
+                                patterns = [
+                                    rf'Blob\s*#?\s*{blob_num}\s*:.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
+                                    rf'目标\s*#?\s*{blob_num}\s*:.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
+                                ]
+
+                                for pattern in patterns:
+                                    coord_match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
+                                    if coord_match:
+                                        info['ra'] = f"{float(coord_match.group(1)):.6f}"
+                                        info['dec'] = f"{float(coord_match.group(2)):.6f}"
+                                        self.logger.info(f"从结果文件直接找到RA/DEC: RA={info['ra']}, Dec={info['dec']}")
+                                        break
+
                 except Exception as e:
                     self.logger.error(f"读取结果文件出错: {e}")
 
-            # 如果没有找到RA/DEC，尝试从原始FITS文件获取
-            if not info['ra'] or not info['dec']:
-                self.logger.info("尝试从FITS文件获取坐标")
+            # 2. 如果找到了像素坐标，从FITS文件的WCS信息计算RA/DEC
+            if (pixel_x is not None and pixel_y is not None) and (not info['ra'] or not info['dec']):
+                self.logger.info(f"尝试使用像素坐标 ({pixel_x}, {pixel_y}) 和WCS信息计算RA/DEC")
 
                 # 查找多个位置的FITS文件
                 fits_files = []
@@ -1642,6 +1650,74 @@ class FitsImageViewer:
                             with fits.open(fits_file) as hdul:
                                 header = hdul[0].header
 
+                                # 尝试使用WCS转换像素坐标到天球坐标
+                                try:
+                                    from astropy.wcs import WCS
+                                    wcs = WCS(header)
+
+                                    # 将像素坐标转换为天球坐标（FITS使用1-based索引）
+                                    sky_coords = wcs.pixel_to_world(pixel_x, pixel_y)
+
+                                    info['ra'] = f"{sky_coords.ra.degree:.6f}"
+                                    info['dec'] = f"{sky_coords.dec.degree:.6f}"
+                                    self.logger.info(f"使用WCS计算得到坐标: RA={info['ra']}, Dec={info['dec']}")
+                                    break
+
+                                except Exception as wcs_error:
+                                    self.logger.warning(f"WCS转换失败: {wcs_error}")
+
+                                    # 如果WCS转换失败，尝试使用简单的线性转换
+                                    # 检查是否有基本的WCS关键字
+                                    if all(key in header for key in ['CRVAL1', 'CRVAL2', 'CRPIX1', 'CRPIX2', 'CD1_1', 'CD2_2']):
+                                        try:
+                                            crval1 = header['CRVAL1']  # 参考点RA
+                                            crval2 = header['CRVAL2']  # 参考点DEC
+                                            crpix1 = header['CRPIX1']  # 参考像素X
+                                            crpix2 = header['CRPIX2']  # 参考像素Y
+                                            cd1_1 = header['CD1_1']    # 像素到度的转换矩阵
+                                            cd2_2 = header['CD2_2']
+
+                                            # 简单线性转换
+                                            delta_x = pixel_x - crpix1
+                                            delta_y = pixel_y - crpix2
+
+                                            ra = crval1 + delta_x * cd1_1
+                                            dec = crval2 + delta_y * cd2_2
+
+                                            info['ra'] = f"{ra:.6f}"
+                                            info['dec'] = f"{dec:.6f}"
+                                            self.logger.info(f"使用简单线性转换计算得到坐标: RA={info['ra']}, Dec={info['dec']}")
+                                            break
+
+                                        except Exception as linear_error:
+                                            self.logger.warning(f"简单线性转换失败: {linear_error}")
+
+                        except Exception as e:
+                            self.logger.error(f"读取FITS文件失败 {fits_file}: {e}")
+
+            # 3. 如果还是没有找到RA/DEC，尝试从FITS header直接读取
+            if not info['ra'] or not info['dec']:
+                self.logger.info("尝试从FITS header直接读取RA/DEC")
+
+                # 查找FITS文件
+                fits_files = []
+                fits_files.extend(list(detection_dir.glob("*.fits")))
+                fits_files.extend(list(detection_dir.glob("*.fit")))
+
+                parent_dir = detection_dir.parent
+                fits_files.extend(list(parent_dir.glob("*.fits")))
+                fits_files.extend(list(parent_dir.glob("*.fit")))
+
+                if parent_dir.parent.exists():
+                    fits_files.extend(list(parent_dir.parent.glob("*.fits")))
+                    fits_files.extend(list(parent_dir.parent.glob("*.fit")))
+
+                if fits_files:
+                    for fits_file in fits_files:
+                        try:
+                            with fits.open(fits_file) as hdul:
+                                header = hdul[0].header
+
                                 # 尝试多种RA/DEC关键字
                                 ra_keys = ['CRVAL1', 'RA', 'OBJCTRA', 'TELRA']
                                 dec_keys = ['CRVAL2', 'DEC', 'OBJCTDEC', 'TELDEC']
@@ -1652,19 +1728,16 @@ class FitsImageViewer:
                                 for key in ra_keys:
                                     if key in header:
                                         ra_val = header[key]
-                                        self.logger.info(f"找到RA关键字 {key}: {ra_val}")
                                         break
 
                                 for key in dec_keys:
                                     if key in header:
                                         dec_val = header[key]
-                                        self.logger.info(f"找到DEC关键字 {key}: {dec_val}")
                                         break
 
                                 if ra_val is not None and dec_val is not None:
-                                    # 如果是字符串格式（如 "12:34:56.7"），需要转换
+                                    # 如果是字符串格式，需要转换
                                     if isinstance(ra_val, str):
-                                        # 尝试解析HMS格式
                                         try:
                                             from astropy.coordinates import Angle
                                             import astropy.units as u
@@ -1674,7 +1747,6 @@ class FitsImageViewer:
                                             pass
 
                                     if isinstance(dec_val, str):
-                                        # 尝试解析DMS格式
                                         try:
                                             from astropy.coordinates import Angle
                                             import astropy.units as u
