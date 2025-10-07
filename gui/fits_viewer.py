@@ -1441,8 +1441,15 @@ class FitsImageViewer:
             self.prev_cutout_button.config(state="normal")
             self.next_cutout_button.config(state="normal")
 
+        # 提取文件信息（使用左侧选中的文件名）
+        selected_filename = ""
+        if self.selected_file_path:
+            selected_filename = os.path.basename(self.selected_file_path)
+
+        file_info = self._extract_file_info(reference_img, aligned_img, detection_img, selected_filename)
+
         # 在主界面显示图片
-        self._show_cutouts_in_main_display(reference_img, aligned_img, detection_img)
+        self._show_cutouts_in_main_display(reference_img, aligned_img, detection_img, file_info)
 
     def _show_next_cutout(self):
         """显示下一组cutout图片"""
@@ -1462,7 +1469,238 @@ class FitsImageViewer:
         prev_index = (self._current_cutout_index - 1) % self._total_cutouts
         self._display_cutout_by_index(prev_index)
 
-    def _show_cutouts_in_main_display(self, reference_img, aligned_img, detection_img):
+    def _extract_file_info(self, reference_img, aligned_img, detection_img, selected_filename=""):
+        """
+        从文件路径和FITS文件中提取信息
+
+        Args:
+            reference_img: 参考图像路径
+            aligned_img: 对齐图像路径
+            detection_img: 检测图像路径
+            selected_filename: 左侧选中的文件名
+
+        Returns:
+            dict: 包含文件信息的字典
+        """
+        from astropy.io import fits
+        import re
+
+        info = {
+            'filename': '',
+            'system_name': '',
+            'region': '',
+            'ra': '',
+            'dec': ''
+        }
+
+        try:
+            # 打印路径用于调试
+            self.logger.info(f"提取文件信息，路径: {detection_img}")
+            self.logger.info(f"选中的文件名: {selected_filename}")
+
+            # 使用左侧选中的文件名
+            if selected_filename:
+                info['filename'] = selected_filename
+                self.logger.info(f"使用选中的文件名: {selected_filename}")
+            else:
+                # 如果没有选中文件，从detection文件名提取blob编号
+                detection_basename = os.path.basename(detection_img)
+                self.logger.info(f"Detection文件名: {detection_basename}")
+
+                # 提取blob编号 - 尝试多种格式
+                blob_match = re.search(r'blob[_\s]*(\d+)', detection_basename, re.IGNORECASE)
+                if blob_match:
+                    blob_num = blob_match.group(1)
+                    info['filename'] = f"目标 #{blob_num}"
+                    self.logger.info(f"找到Blob编号: {blob_num}")
+                else:
+                    # 如果没找到blob编号，使用文件名
+                    info['filename'] = os.path.splitext(detection_basename)[0]
+                    self.logger.info(f"未找到Blob编号，使用文件名: {info['filename']}")
+
+            # 保存blob编号用于后续查找RA/DEC
+            detection_basename = os.path.basename(detection_img)
+            blob_match = re.search(r'blob[_\s]*(\d+)', detection_basename, re.IGNORECASE)
+            blob_num = blob_match.group(1) if blob_match else None
+
+            # 尝试从路径中提取系统名和天区
+            # 路径格式: .../diff_output/系统名/日期/天区/文件名/detection_xxx/cutouts/...
+            path_parts = Path(detection_img).parts
+            self.logger.info(f"路径部分: {path_parts}")
+
+            # 查找detection目录的位置
+            detection_index = -1
+            for i, part in enumerate(path_parts):
+                if part.startswith('detection_'):
+                    detection_index = i
+                    self.logger.info(f"找到detection目录在索引 {i}: {part}")
+                    break
+
+            if detection_index >= 0:
+                # detection_xxx 的上一级是文件名目录
+                # 再上一级是天区
+                # 再上一级是日期
+                # 再上一级是系统名
+                if detection_index >= 1:
+                    # 文件名目录（detection的父目录）
+                    file_dir = path_parts[detection_index - 1]
+                    self.logger.info(f"文件目录: {file_dir}")
+
+                if detection_index >= 2:
+                    info['region'] = path_parts[detection_index - 2]  # 天区
+                    self.logger.info(f"天区: {info['region']}")
+
+                if detection_index >= 4:
+                    info['system_name'] = path_parts[detection_index - 4]  # 系统名
+                    self.logger.info(f"系统名: {info['system_name']}")
+
+            # 尝试从detection目录中找到对应的FITS文件来获取RA/DEC
+            detection_dir = Path(detection_img).parent.parent
+            self.logger.info(f"Detection目录: {detection_dir}")
+
+            # 查找detection结果文件 - 尝试多个位置
+            result_files = []
+
+            # 在detection目录查找
+            result_files.extend(list(detection_dir.glob("detection_result_*.txt")))
+            result_files.extend(list(detection_dir.glob("*result*.txt")))
+
+            # 在detection目录的父目录查找
+            parent_dir = detection_dir.parent
+            result_files.extend(list(parent_dir.glob("detection_result_*.txt")))
+            result_files.extend(list(parent_dir.glob("*result*.txt")))
+
+            self.logger.info(f"找到结果文件: {len(result_files)} 个")
+
+            if result_files:
+                # 读取结果文件获取RA/DEC
+                result_file = result_files[0]
+                self.logger.info(f"读取结果文件: {result_file}")
+
+                try:
+                    with open(result_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        self.logger.info(f"结果文件内容前500字符:\n{content[:500]}")
+
+                        # 查找对应blob的RA/DEC
+                        if blob_num:
+                            # 尝试多种格式
+                            patterns = [
+                                rf'Blob\s*#?\s*{blob_num}\s*:.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
+                                rf'目标\s*#?\s*{blob_num}\s*:.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
+                                rf'#{blob_num}.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
+                                rf'blob[_\s]*{blob_num}.*?RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)',
+                                # 尝试匹配任何RA/DEC（如果只有一个目标）
+                                rf'RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)'
+                            ]
+
+                            for i, pattern in enumerate(patterns):
+                                coord_match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
+                                if coord_match:
+                                    info['ra'] = f"{float(coord_match.group(1)):.6f}"
+                                    info['dec'] = f"{float(coord_match.group(2)):.6f}"
+                                    self.logger.info(f"从结果文件找到坐标(模式{i}): RA={info['ra']}, Dec={info['dec']}")
+                                    break
+                        else:
+                            # 如果没有blob编号，尝试匹配任何RA/DEC
+                            pattern = rf'RA[=:\s]+([\d.]+).*?Dec[=:\s]+([-\d.]+)'
+                            coord_match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
+                            if coord_match:
+                                info['ra'] = f"{float(coord_match.group(1)):.6f}"
+                                info['dec'] = f"{float(coord_match.group(2)):.6f}"
+                                self.logger.info(f"从结果文件找到坐标: RA={info['ra']}, Dec={info['dec']}")
+                except Exception as e:
+                    self.logger.error(f"读取结果文件出错: {e}")
+
+            # 如果没有找到RA/DEC，尝试从原始FITS文件获取
+            if not info['ra'] or not info['dec']:
+                self.logger.info("尝试从FITS文件获取坐标")
+
+                # 查找多个位置的FITS文件
+                fits_files = []
+
+                # 在detection目录查找
+                fits_files.extend(list(detection_dir.glob("*.fits")))
+                fits_files.extend(list(detection_dir.glob("*.fit")))
+
+                # 在父目录查找
+                parent_dir = detection_dir.parent
+                fits_files.extend(list(parent_dir.glob("*.fits")))
+                fits_files.extend(list(parent_dir.glob("*.fit")))
+
+                # 在父目录的父目录查找（可能是原始下载目录）
+                if parent_dir.parent.exists():
+                    fits_files.extend(list(parent_dir.parent.glob("*.fits")))
+                    fits_files.extend(list(parent_dir.parent.glob("*.fit")))
+
+                self.logger.info(f"找到FITS文件: {len(fits_files)} 个")
+
+                if fits_files:
+                    for fits_file in fits_files:
+                        try:
+                            self.logger.info(f"尝试读取FITS文件: {fits_file}")
+                            with fits.open(fits_file) as hdul:
+                                header = hdul[0].header
+
+                                # 尝试多种RA/DEC关键字
+                                ra_keys = ['CRVAL1', 'RA', 'OBJCTRA', 'TELRA']
+                                dec_keys = ['CRVAL2', 'DEC', 'OBJCTDEC', 'TELDEC']
+
+                                ra_val = None
+                                dec_val = None
+
+                                for key in ra_keys:
+                                    if key in header:
+                                        ra_val = header[key]
+                                        self.logger.info(f"找到RA关键字 {key}: {ra_val}")
+                                        break
+
+                                for key in dec_keys:
+                                    if key in header:
+                                        dec_val = header[key]
+                                        self.logger.info(f"找到DEC关键字 {key}: {dec_val}")
+                                        break
+
+                                if ra_val is not None and dec_val is not None:
+                                    # 如果是字符串格式（如 "12:34:56.7"），需要转换
+                                    if isinstance(ra_val, str):
+                                        # 尝试解析HMS格式
+                                        try:
+                                            from astropy.coordinates import Angle
+                                            import astropy.units as u
+                                            ra_angle = Angle(ra_val, unit=u.hourangle)
+                                            ra_val = ra_angle.degree
+                                        except:
+                                            pass
+
+                                    if isinstance(dec_val, str):
+                                        # 尝试解析DMS格式
+                                        try:
+                                            from astropy.coordinates import Angle
+                                            import astropy.units as u
+                                            dec_angle = Angle(dec_val, unit=u.degree)
+                                            dec_val = dec_angle.degree
+                                        except:
+                                            pass
+
+                                    info['ra'] = f"{float(ra_val):.6f}"
+                                    info['dec'] = f"{float(dec_val):.6f}"
+                                    self.logger.info(f"从FITS header找到坐标: RA={info['ra']}, Dec={info['dec']}")
+                                    break
+
+                        except Exception as e:
+                            self.logger.error(f"读取FITS文件失败 {fits_file}: {e}")
+
+            self.logger.info(f"最终提取的信息: {info}")
+
+        except Exception as e:
+            self.logger.error(f"提取文件信息失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
+        return info
+
+    def _show_cutouts_in_main_display(self, reference_img, aligned_img, detection_img, file_info=None):
         """
         在主界面显示三张cutout图片
 
@@ -1470,6 +1708,7 @@ class FitsImageViewer:
             reference_img: 参考图像路径
             aligned_img: 对齐图像路径
             detection_img: 检测图像路径
+            file_info: 文件信息字典（可选）
         """
         from PIL import Image
 
@@ -1487,10 +1726,39 @@ class FitsImageViewer:
             # 清空当前图像
             self.figure.clear()
 
-            # 创建主标题，显示当前索引和总数
-            if hasattr(self, '_current_cutout_index') and hasattr(self, '_total_cutouts'):
-                title_text = f"检测结果 {self._current_cutout_index + 1} / {self._total_cutouts}"
-                self.figure.suptitle(title_text, fontsize=12, fontweight='bold')
+            # 创建主标题，显示文件信息
+            if file_info:
+                title_lines = []
+
+                # 第一行：检测结果编号
+                if hasattr(self, '_current_cutout_index') and hasattr(self, '_total_cutouts'):
+                    title_lines.append(f"检测结果 {self._current_cutout_index + 1} / {self._total_cutouts}")
+
+                # 第二行：系统名、天区、文件名
+                info_parts = []
+                if file_info.get('system_name'):
+                    info_parts.append(f"系统: {file_info['system_name']}")
+                if file_info.get('region'):
+                    info_parts.append(f"天区: {file_info['region']}")
+                if file_info.get('filename'):
+                    info_parts.append(file_info['filename'])
+
+                if info_parts:
+                    title_lines.append(" | ".join(info_parts))
+
+                # 第三行：RA/DEC（始终显示，即使没有值）
+                ra_text = file_info.get('ra') if file_info.get('ra') else "N/A"
+                dec_text = file_info.get('dec') if file_info.get('dec') else "N/A"
+                title_lines.append(f"RA: {ra_text}°  Dec: {dec_text}°")
+
+                # 组合标题
+                title_text = "\n".join(title_lines)
+                self.figure.suptitle(title_text, fontsize=10, fontweight='bold')
+            else:
+                # 如果没有文件信息，只显示基本标题
+                if hasattr(self, '_current_cutout_index') and hasattr(self, '_total_cutouts'):
+                    title_text = f"检测结果 {self._current_cutout_index + 1} / {self._total_cutouts}"
+                    self.figure.suptitle(title_text, fontsize=12, fontweight='bold')
 
             # 创建1行3列的子图
             axes = self.figure.subplots(1, 3)
