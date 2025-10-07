@@ -215,6 +215,20 @@ class FitsImageViewer:
         percentile_unit = ttk.Label(toolbar_frame3, text="%")
         percentile_unit.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 检测结果导航按钮
+        ttk.Label(toolbar_frame3, text="  |  ").pack(side=tk.LEFT, padx=(10, 5))
+
+        self.prev_cutout_button = ttk.Button(toolbar_frame3, text="◀ 上一组",
+                                            command=self._show_previous_cutout, state="disabled")
+        self.prev_cutout_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.cutout_count_label = ttk.Label(toolbar_frame3, text="0/0", foreground="blue")
+        self.cutout_count_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.next_cutout_button = ttk.Button(toolbar_frame3, text="下一组 ▶",
+                                            command=self._show_next_cutout, state="disabled")
+        self.next_cutout_button.pack(side=tk.LEFT, padx=(0, 0))
+
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
             self.astap_button.config(state="disabled", text="ASTAP不可用")
@@ -1362,7 +1376,7 @@ class FitsImageViewer:
                 self.logger.info("未找到cutouts文件夹")
                 return False
 
-            # 查找第一个目标的图片（按文件名排序）
+            # 查找所有目标的图片（按文件名排序）
             reference_files = sorted(cutouts_dir.glob("*_1_reference.png"))
             aligned_files = sorted(cutouts_dir.glob("*_2_aligned.png"))
             detection_files = sorted(cutouts_dir.glob("*_3_detection.png"))
@@ -1371,24 +1385,82 @@ class FitsImageViewer:
                 self.logger.info("未找到完整的cutout图片")
                 return False
 
-            # 使用第一个目标的图片
-            reference_img = str(reference_files[0])
-            aligned_img = str(aligned_files[0])
-            detection_img = str(detection_files[0])
+            # 保存所有图片列表和当前索引
+            self._all_cutout_sets = []
+            for ref, aligned, det in zip(reference_files, aligned_files, detection_files):
+                self._all_cutout_sets.append({
+                    'reference': str(ref),
+                    'aligned': str(aligned),
+                    'detection': str(det)
+                })
 
-            self.logger.info(f"显示第一个检测目标的cutout图片:")
-            self.logger.info(f"  Reference: {os.path.basename(reference_img)}")
-            self.logger.info(f"  Aligned: {os.path.basename(aligned_img)}")
-            self.logger.info(f"  Detection: {os.path.basename(detection_img)}")
+            self._current_cutout_index = 0
+            self._total_cutouts = len(self._all_cutout_sets)
 
-            # 在主界面显示三张图片
-            self._show_cutouts_in_main_display(reference_img, aligned_img, detection_img)
+            self.logger.info(f"找到 {self._total_cutouts} 组检测结果")
+
+            # 显示第一组图片
+            self._display_cutout_by_index(0)
 
             return True  # 成功显示
 
         except Exception as e:
             self.logger.error(f"显示cutout图片时出错: {e}")
             return False
+
+    def _display_cutout_by_index(self, index):
+        """
+        显示指定索引的cutout图片
+
+        Args:
+            index: 图片组索引
+        """
+        if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+            return
+
+        if index < 0 or index >= len(self._all_cutout_sets):
+            return
+
+        self._current_cutout_index = index
+        cutout_set = self._all_cutout_sets[index]
+
+        reference_img = cutout_set['reference']
+        aligned_img = cutout_set['aligned']
+        detection_img = cutout_set['detection']
+
+        self.logger.info(f"显示第 {index + 1}/{self._total_cutouts} 组检测结果:")
+        self.logger.info(f"  Reference: {os.path.basename(reference_img)}")
+        self.logger.info(f"  Aligned: {os.path.basename(aligned_img)}")
+        self.logger.info(f"  Detection: {os.path.basename(detection_img)}")
+
+        # 更新计数标签
+        self.cutout_count_label.config(text=f"{index + 1}/{self._total_cutouts}")
+
+        # 启用导航按钮
+        if self._total_cutouts > 1:
+            self.prev_cutout_button.config(state="normal")
+            self.next_cutout_button.config(state="normal")
+
+        # 在主界面显示图片
+        self._show_cutouts_in_main_display(reference_img, aligned_img, detection_img)
+
+    def _show_next_cutout(self):
+        """显示下一组cutout图片"""
+        if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+            messagebox.showinfo("提示", "没有可显示的检测结果")
+            return
+
+        next_index = (self._current_cutout_index + 1) % self._total_cutouts
+        self._display_cutout_by_index(next_index)
+
+    def _show_previous_cutout(self):
+        """显示上一组cutout图片"""
+        if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+            messagebox.showinfo("提示", "没有可显示的检测结果")
+            return
+
+        prev_index = (self._current_cutout_index - 1) % self._total_cutouts
+        self._display_cutout_by_index(prev_index)
 
     def _show_cutouts_in_main_display(self, reference_img, aligned_img, detection_img):
         """
@@ -1407,8 +1479,18 @@ class FitsImageViewer:
                 self.parent_frame.after_cancel(self._blink_animation_id)
                 self._blink_animation_id = None
 
+            # 断开之前的点击事件（如果存在）
+            if hasattr(self, '_click_connection_id') and self._click_connection_id:
+                self.canvas.mpl_disconnect(self._click_connection_id)
+                self._click_connection_id = None
+
             # 清空当前图像
             self.figure.clear()
+
+            # 创建主标题，显示当前索引和总数
+            if hasattr(self, '_current_cutout_index') and hasattr(self, '_total_cutouts'):
+                title_text = f"检测结果 {self._current_cutout_index + 1} / {self._total_cutouts}"
+                self.figure.suptitle(title_text, fontsize=12, fontweight='bold')
 
             # 创建1行3列的子图
             axes = self.figure.subplots(1, 3)
@@ -1510,7 +1592,7 @@ class FitsImageViewer:
 
                     # 更新标题显示当前图像
                     if self._click_index == 0:
-                        self._click_ax.set_title("Aligned (对齐图像)", fontsize=10, fontweight='bold')
+                        self._click_ax.set_title("Aligned (点击切换)", fontsize=10, fontweight='bold')
                     else:
                         self._click_ax.set_title("Reference (模板图像)", fontsize=10, fontweight='bold')
 
@@ -1520,7 +1602,7 @@ class FitsImageViewer:
             except Exception as e:
                 self.logger.error(f"点击切换失败: {e}")
 
-        # 绑定点击事件到canvas
-        self.canvas.mpl_connect('button_press_event', on_click)
+        # 绑定点击事件到canvas，并保存连接ID
+        self._click_connection_id = self.canvas.mpl_connect('button_press_event', on_click)
 
 
