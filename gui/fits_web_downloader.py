@@ -670,7 +670,7 @@ class FitsWebDownloaderGUI:
             # 保存到配置
             self.config_manager.update_last_selected(diff_output_directory=directory)
             self._log(f"diff输出根目录已设置: {directory}")
-            self._log(f"diff结果将保存到: {directory}/YYYYMMDD/文件名相关目录/")
+            self._log(f"diff结果将保存到: {directory}/系统名/日期/天区/文件名/")
             
     def _get_selected_files(self):
         """获取选中的文件"""
@@ -1169,13 +1169,15 @@ class FitsWebDownloaderGUI:
             self._log(f"下载目录: {actual_download_dir}")
             self._log(f"模板目录: {self.template_dir_var.get().strip()}")
 
-            # 保存批量输出根目录（日期级别的目录）
+            # 保存批量输出根目录（系统名/日期/天区级别的目录）
             from datetime import datetime
             base_output_dir = self.diff_output_dir_var.get().strip()
             current_date = datetime.now().strftime("%Y%m%d")
-            self.last_batch_output_root = os.path.join(base_output_dir, current_date)
+            # 使用与download目录相同的结构：系统名/日期/天区
+            self.last_batch_output_root = os.path.join(base_output_dir, tel_name, date, k_number)
 
             self._log(f"输出根目录: {self.last_batch_output_root}")
+            self._log(f"目录结构: {tel_name}/{date}/{k_number}")
 
             # 步骤1: 下载文件（启用ASTAP处理）
             self._log("\n步骤1: 下载文件（启用ASTAP处理）")

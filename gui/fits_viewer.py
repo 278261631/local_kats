@@ -1038,6 +1038,7 @@ class FitsImageViewer:
     def _get_diff_output_directory(self) -> str:
         """获取diff操作的输出目录"""
         from datetime import datetime
+        import re
 
         # 获取配置的根目录
         base_output_dir = ""
@@ -1051,27 +1052,64 @@ class FitsImageViewer:
             else:
                 base_output_dir = os.path.expanduser("~/diff_results")
 
-        # 生成当前日期相关的目录
-        current_date = datetime.now().strftime("%Y%m%d")
+        # 尝试从文件路径或URL选择中获取系统名、日期、天区信息
+        system_name = "Unknown"
+        date_str = datetime.now().strftime("%Y%m%d")
+        sky_region = "Unknown"
 
-        # 从选中文件名生成子目录名
+        # 方法1: 从URL选择回调获取信息（优先）
+        if self.get_url_selections_callback:
+            try:
+                selections = self.get_url_selections_callback()
+                if selections:
+                    system_name = selections.get('telescope_name', 'Unknown')
+                    date_str = selections.get('date', date_str)
+                    sky_region = selections.get('k_number', 'Unknown')
+                    self.logger.info(f"从URL选择获取: 系统={system_name}, 日期={date_str}, 天区={sky_region}")
+            except Exception as e:
+                self.logger.warning(f"从URL选择获取信息失败: {e}")
+
+        # 方法2: 从文件路径解析（如果方法1失败或信息不完整）
+        if self.selected_file_path and (system_name == "Unknown" or sky_region == "Unknown"):
+            try:
+                # 文件路径格式: .../系统名/日期/天区/文件名
+                # 例如: E:/fix_data/GY5/20250922/K096/xxx.fit
+                path_parts = self.selected_file_path.replace('\\', '/').split('/')
+
+                # 从路径中查找符合模式的部分
+                for i, part in enumerate(path_parts):
+                    # 查找日期格式 (YYYYMMDD)
+                    if re.match(r'^\d{8}$', part) and i > 0:
+                        if system_name == "Unknown":
+                            system_name = path_parts[i-1]  # 日期前一级是系统名
+                        date_str = part
+                        if i + 1 < len(path_parts):
+                            # 查找天区格式 (K开头+数字)
+                            next_part = path_parts[i+1]
+                            if re.match(r'^K\d{3}', next_part):
+                                sky_region = next_part
+                        break
+
+                self.logger.info(f"从文件路径解析: 系统={system_name}, 日期={date_str}, 天区={sky_region}")
+            except Exception as e:
+                self.logger.warning(f"从文件路径解析信息失败: {e}")
+
+        # 从选中文件名生成子目录名（不带时间戳，避免重复执行）
         if self.selected_file_path:
             filename = os.path.basename(self.selected_file_path)
             name_without_ext = os.path.splitext(filename)[0]
-            # 生成时间戳确保唯一性
-            timestamp = datetime.now().strftime("%H%M%S")
-            subdir_name = f"{name_without_ext}_{timestamp}"
+            subdir_name = name_without_ext
         else:
-            timestamp = datetime.now().strftime("%H%M%S")
-            subdir_name = f"diff_result_{timestamp}"
+            subdir_name = "diff_result"
 
-        # 构建完整输出目录：根目录/YYYYMMDD/文件名_时间戳/
-        output_dir = os.path.join(base_output_dir, current_date, subdir_name)
+        # 构建完整输出目录：根目录/系统名/日期/天区/文件名/
+        output_dir = os.path.join(base_output_dir, system_name, date_str, sky_region, subdir_name)
 
         # 创建目录
         os.makedirs(output_dir, exist_ok=True)
 
         self.logger.info(f"diff输出目录: {output_dir}")
+        self.logger.info(f"目录结构: {system_name}/{date_str}/{sky_region}/{subdir_name}")
         return output_dir
     
     def get_header_info(self) -> Optional[str]:
