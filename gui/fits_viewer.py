@@ -283,47 +283,55 @@ class FitsImageViewer:
         right_frame = ttk.Frame(parent)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # 创建图像显示区域
-        self.figure = Figure(figsize=(8, 6), dpi=100)
+        # 创建图像显示区域 - 减小高度以确保控制按钮可见
+        self.figure = Figure(figsize=(8, 5), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.figure, right_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
-        # 创建控制面板
-        control_frame = ttk.Frame(right_frame)
-        control_frame.pack(fill=tk.X, pady=(5, 0))
-        
+        # 创建控制面板容器
+        control_container = ttk.Frame(right_frame)
+        control_container.pack(fill=tk.X, pady=(5, 0))
+
+        # 第一行控制面板：显示模式和颜色映射
+        control_frame1 = ttk.Frame(control_container)
+        control_frame1.pack(fill=tk.X, pady=(0, 2))
+
         # 显示模式选择
-        ttk.Label(control_frame, text="显示模式:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(control_frame1, text="显示模式:").pack(side=tk.LEFT, padx=(0, 5))
         self.display_mode = tk.StringVar(value="linear")
-        mode_combo = ttk.Combobox(control_frame, textvariable=self.display_mode, 
-                                 values=["linear", "log", "sqrt", "asinh"], 
+        mode_combo = ttk.Combobox(control_frame1, textvariable=self.display_mode,
+                                 values=["linear", "log", "sqrt", "asinh"],
                                  state="readonly", width=10)
         mode_combo.pack(side=tk.LEFT, padx=(0, 10))
         mode_combo.bind('<<ComboboxSelected>>', self._on_display_mode_change)
-        
+
         # 颜色映射选择
-        ttk.Label(control_frame, text="颜色映射:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(control_frame1, text="颜色映射:").pack(side=tk.LEFT, padx=(0, 5))
         self.colormap = tk.StringVar(value="gray")
-        cmap_combo = ttk.Combobox(control_frame, textvariable=self.colormap,
+        cmap_combo = ttk.Combobox(control_frame1, textvariable=self.colormap,
                                  values=["gray", "viridis", "plasma", "inferno", "hot", "cool"],
                                  state="readonly", width=10)
         cmap_combo.pack(side=tk.LEFT, padx=(0, 10))
         cmap_combo.bind('<<ComboboxSelected>>', self._on_colormap_change)
-        
+
+        # 第二行控制面板：操作按钮
+        control_frame2 = ttk.Frame(control_container)
+        control_frame2.pack(fill=tk.X)
+
         # 刷新按钮
-        refresh_btn = ttk.Button(control_frame, text="刷新显示", command=self._refresh_display)
-        refresh_btn.pack(side=tk.LEFT, padx=(10, 0))
+        refresh_btn = ttk.Button(control_frame2, text="刷新显示", command=self._refresh_display)
+        refresh_btn.pack(side=tk.LEFT, padx=(0, 5))
 
         # 保存按钮
-        save_btn = ttk.Button(control_frame, text="保存图像", command=self._save_image)
-        save_btn.pack(side=tk.LEFT, padx=(5, 0))
+        save_btn = ttk.Button(control_frame2, text="保存图像", command=self._save_image)
+        save_btn.pack(side=tk.LEFT, padx=(0, 5))
 
         # 打开输出目录按钮
         self.last_output_dir = None  # 保存最后一次的输出目录
-        self.open_output_dir_btn = ttk.Button(control_frame, text="打开输出目录",
+        self.open_output_dir_btn = ttk.Button(control_frame2, text="打开输出目录",
                                               command=self._open_last_output_directory,
                                               state="disabled")
-        self.open_output_dir_btn.pack(side=tk.LEFT, padx=(5, 0))
+        self.open_output_dir_btn.pack(side=tk.LEFT, padx=(0, 0))
 
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""
