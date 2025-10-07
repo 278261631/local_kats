@@ -1402,36 +1402,55 @@ class FitsImageViewer:
         from PIL import Image
 
         try:
+            # 停止之前的动画（如果存在）
+            if hasattr(self, '_blink_animation_id') and self._blink_animation_id:
+                self.parent_frame.after_cancel(self._blink_animation_id)
+                self._blink_animation_id = None
+
             # 清空当前图像
             self.figure.clear()
 
             # 创建1行3列的子图
             axes = self.figure.subplots(1, 3)
 
-            # 图片信息
-            images_info = [
-                (reference_img, "Reference (模板图像)", axes[0]),
-                (aligned_img, "Aligned (对齐图像)", axes[1]),
-                (detection_img, "Detection (检测结果)", axes[2])
-            ]
+            # 加载reference和aligned图像数据
+            ref_img = Image.open(reference_img)
+            ref_array = np.array(ref_img)
 
-            # 加载并显示每张图片
-            for img_path, title, ax in images_info:
-                try:
-                    # 加载图片
-                    img = Image.open(img_path)
-                    img_array = np.array(img)
+            aligned_img_obj = Image.open(aligned_img)
+            aligned_array = np.array(aligned_img_obj)
 
-                    # 显示图片
-                    ax.imshow(img_array, cmap='gray' if len(img_array.shape) == 2 else None)
-                    ax.set_title(title, fontsize=10, fontweight='bold')
-                    ax.axis('off')  # 隐藏坐标轴
+            detection_img_obj = Image.open(detection_img)
+            detection_array = np.array(detection_img_obj)
 
-                except Exception as e:
-                    ax.text(0.5, 0.5, f"加载失败:\n{str(e)}",
-                           ha='center', va='center', transform=ax.transAxes)
-                    ax.set_title(title, fontsize=10, fontweight='bold')
-                    ax.axis('off')
+            # 保存图像数据供动画使用
+            self._blink_images = [ref_array, aligned_array]
+            self._blink_index = 0
+
+            # 显示第一张图片（reference）
+            self._blink_ax = axes[0]
+            self._blink_im = self._blink_ax.imshow(
+                ref_array,
+                cmap='gray' if len(ref_array.shape) == 2 else None
+            )
+            self._blink_ax.set_title("Reference ⇄ Aligned (闪烁)", fontsize=10, fontweight='bold')
+            self._blink_ax.axis('off')
+
+            # 显示aligned图像（可点击切换）
+            self._click_ax = axes[1]
+            self._click_images = [aligned_array, ref_array]
+            self._click_index = 0
+            self._click_im = self._click_ax.imshow(
+                aligned_array,
+                cmap='gray' if len(aligned_array.shape) == 2 else None
+            )
+            self._click_ax.set_title("Aligned (点击切换)", fontsize=10, fontweight='bold')
+            self._click_ax.axis('off')
+
+            # 显示detection图像
+            axes[2].imshow(detection_array, cmap='gray' if len(detection_array.shape) == 2 else None)
+            axes[2].set_title("Detection (检测结果)", fontsize=10, fontweight='bold')
+            axes[2].axis('off')
 
             # 调整子图间距
             self.figure.tight_layout()
@@ -1439,9 +1458,69 @@ class FitsImageViewer:
             # 刷新画布
             self.canvas.draw()
 
-            self.logger.info("已在主界面显示cutout图片")
+            # 绑定点击事件
+            self._setup_click_toggle()
+
+            # 启动闪烁动画
+            self._start_blink_animation()
 
         except Exception as e:
-            self.logger.error(f"在主界面显示cutout图片时出错: {e}")
+            self.logger.error(f"显示cutout图片时出错: {e}")
+
+    def _start_blink_animation(self):
+        """启动闪烁动画"""
+        def update_blink():
+            try:
+                # 切换图像索引
+                self._blink_index = 1 - self._blink_index
+
+                # 更新图像数据
+                self._blink_im.set_data(self._blink_images[self._blink_index])
+
+                # 更新标题显示当前图像
+                if self._blink_index == 0:
+                    self._blink_ax.set_title("Reference (模板图像)", fontsize=10, fontweight='bold')
+                else:
+                    self._blink_ax.set_title("Aligned (对齐图像)", fontsize=10, fontweight='bold')
+
+                # 刷新画布
+                self.canvas.draw_idle()
+
+                # 继续下一次更新
+                self._blink_animation_id = self.parent_frame.after(500, update_blink)
+
+            except Exception as e:
+                self.logger.error(f"闪烁动画更新失败: {e}")
+                self._blink_animation_id = None
+
+        # 启动第一次更新
+        self._blink_animation_id = self.parent_frame.after(500, update_blink)
+
+    def _setup_click_toggle(self):
+        """设置点击切换功能"""
+        def on_click(event):
+            try:
+                # 检查点击是否在aligned图像的子图区域内
+                if event.inaxes == self._click_ax:
+                    # 切换图像索引
+                    self._click_index = 1 - self._click_index
+
+                    # 更新图像数据
+                    self._click_im.set_data(self._click_images[self._click_index])
+
+                    # 更新标题显示当前图像
+                    if self._click_index == 0:
+                        self._click_ax.set_title("Aligned (对齐图像)", fontsize=10, fontweight='bold')
+                    else:
+                        self._click_ax.set_title("Reference (模板图像)", fontsize=10, fontweight='bold')
+
+                    # 刷新画布
+                    self.canvas.draw_idle()
+
+            except Exception as e:
+                self.logger.error(f"点击切换失败: {e}")
+
+        # 绑定点击事件到canvas
+        self.canvas.mpl_connect('button_press_event', on_click)
 
 

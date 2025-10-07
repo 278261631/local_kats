@@ -663,15 +663,35 @@ class SignalBlobDetector:
             result_path = os.path.join(cutouts_folder, f"{file_prefix}_3_detection.png")
             cv2.imwrite(result_path, result_cutout)
 
-            # 生成GIF动画
+            # 生成GIF动画（只包含reference和aligned，不包含detection）
             try:
                 images = []
-                for img_path in [ref_path, aligned_path, result_path]:
+                for img_path in [ref_path, aligned_path]:
+                    # 读取图像
                     img = Image.open(img_path)
                     # 确保尺寸一致
                     if img.size != (cutout_size, cutout_size):
                         img = img.resize((cutout_size, cutout_size), Image.LANCZOS)
-                    images.append(img)
+
+                    # 转换为RGB模式以便绘制彩色圆圈
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+
+                    # 转换为numpy数组以便使用OpenCV绘制
+                    img_array = np.array(img)
+
+                    # 在图像中央画空心绿色圆圈
+                    center_x = cutout_size // 2
+                    center_y = cutout_size // 2
+                    radius = min(cutout_size // 4, 20)  # 圆圈半径，不超过20像素
+                    color = (0, 255, 0)  # 绿色 (RGB)
+                    thickness = 1  # 线条粗细为1像素（细线）
+
+                    cv2.circle(img_array, (center_x, center_y), radius, color, thickness)
+
+                    # 转换回PIL图像
+                    img_with_circle = Image.fromarray(img_array)
+                    images.append(img_with_circle)
 
                 gif_path = os.path.join(cutouts_folder, f"{file_prefix}_animation.gif")
                 images[0].save(
