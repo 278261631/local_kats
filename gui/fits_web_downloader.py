@@ -1342,6 +1342,13 @@ class FitsWebDownloaderGUI:
                     # 获取输出目录（会使用download_file的文件名）
                     output_dir = self.fits_viewer._get_diff_output_directory()
 
+                    # 检查输出目录中是否已存在detection目录（避免重复执行）
+                    detection_dirs = [d for d in os.listdir(output_dir) if d.startswith('detection_') and os.path.isdir(os.path.join(output_dir, d))]
+                    if detection_dirs:
+                        self._log(f"  ⊙ 已存在处理结果，跳过")
+                        success_count += 1  # 计入成功数（因为已有结果）
+                        continue
+
                     # 调用fits_viewer的diff功能（使用界面配置的参数）
                     # 这里直接调用process_diff，与diff按钮的逻辑一致
                     result = self.fits_viewer.diff_orb.process_diff(

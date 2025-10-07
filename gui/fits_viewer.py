@@ -948,6 +948,30 @@ class FitsImageViewer:
             # 获取输出目录
             output_dir = self._get_diff_output_directory()
 
+            # 检查输出目录中是否已存在detection目录（避免重复执行）
+            detection_dirs = [d for d in os.listdir(output_dir) if d.startswith('detection_') and os.path.isdir(os.path.join(output_dir, d))]
+            if detection_dirs:
+                self.logger.info("=" * 60)
+                self.logger.info(f"检测到已有处理结果: {detection_dirs[0]}")
+                self.logger.info(f"输出目录: {output_dir}")
+                self.logger.info("跳过diff操作，直接显示已有结果")
+                self.logger.info("=" * 60)
+
+                # 直接显示已有结果，不弹窗询问
+                self.last_output_dir = output_dir
+                self.open_output_dir_btn.config(state="normal")
+
+                # 尝试显示第一个检测目标的cutout图片
+                cutout_displayed = self._display_first_detection_cutouts(output_dir)
+                if cutout_displayed:
+                    self.logger.info("已显示已有的cutout图片")
+                else:
+                    self.logger.info("未找到cutout图片")
+
+                self.logger.info(f"输出目录: {output_dir} (点击'打开输出目录'按钮查看)")
+                self.diff_button.config(state="normal", text="执行Diff")
+                return
+
             # 获取选择的降噪方式
             noise_methods = []
             if self.outlier_var.get():
@@ -1052,24 +1076,37 @@ class FitsImageViewer:
             else:
                 base_output_dir = os.path.expanduser("~/diff_results")
 
-        # 尝试从文件路径或URL选择中获取系统名、日期、天区信息
+        # 尝试从文件名、文件路径或URL选择中获取系统名、日期、天区信息
         system_name = "Unknown"
         date_str = datetime.now().strftime("%Y%m%d")
         sky_region = "Unknown"
 
-        # 方法1: 从URL选择回调获取信息（优先）
-        if self.get_url_selections_callback:
+        # 方法1: 从文件名解析（最优先，文件名包含最准确的信息）
+        if self.selected_file_path:
             try:
-                selections = self.get_url_selections_callback()
-                if selections:
-                    system_name = selections.get('telescope_name', 'Unknown')
-                    date_str = selections.get('date', date_str)
-                    sky_region = selections.get('k_number', 'Unknown')
-                    self.logger.info(f"从URL选择获取: 系统={system_name}, 日期={date_str}, 天区={sky_region}")
-            except Exception as e:
-                self.logger.warning(f"从URL选择获取信息失败: {e}")
+                filename = os.path.basename(self.selected_file_path)
+                # 文件名格式: GY3_K073-2_No Filter_60S_Bin2_UTC20250719_171814_-12.8C_.fit
+                # 提取系统名 (GY开头+数字)
+                system_match = re.search(r'(GY\d+)', filename, re.IGNORECASE)
+                if system_match:
+                    system_name = system_match.group(1).upper()
 
-        # 方法2: 从文件路径解析（如果方法1失败或信息不完整）
+                # 提取天区 (K开头+数字)
+                sky_match = re.search(r'(K\d{3})', filename, re.IGNORECASE)
+                if sky_match:
+                    sky_region = sky_match.group(1).upper()
+
+                # 提取日期 (UTC后面的日期)
+                date_match = re.search(r'UTC(\d{8})', filename)
+                if date_match:
+                    date_str = date_match.group(1)
+
+                if system_name != "Unknown" or sky_region != "Unknown":
+                    self.logger.info(f"从文件名解析: 系统={system_name}, 日期={date_str}, 天区={sky_region}")
+            except Exception as e:
+                self.logger.warning(f"从文件名解析信息失败: {e}")
+
+        # 方法2: 从文件路径解析（如果方法1未获取完整信息）
         if self.selected_file_path and (system_name == "Unknown" or sky_region == "Unknown"):
             try:
                 # 文件路径格式: .../系统名/日期/天区/文件名
@@ -1093,6 +1130,21 @@ class FitsImageViewer:
                 self.logger.info(f"从文件路径解析: 系统={system_name}, 日期={date_str}, 天区={sky_region}")
             except Exception as e:
                 self.logger.warning(f"从文件路径解析信息失败: {e}")
+
+        # 方法3: 从URL选择回调获取信息（最后备选）
+        if (system_name == "Unknown" or sky_region == "Unknown") and self.get_url_selections_callback:
+            try:
+                selections = self.get_url_selections_callback()
+                if selections:
+                    if system_name == "Unknown":
+                        system_name = selections.get('telescope_name', 'Unknown')
+                    if date_str == datetime.now().strftime("%Y%m%d"):
+                        date_str = selections.get('date', date_str)
+                    if sky_region == "Unknown":
+                        sky_region = selections.get('k_number', 'Unknown')
+                    self.logger.info(f"从URL选择补充: 系统={system_name}, 日期={date_str}, 天区={sky_region}")
+            except Exception as e:
+                self.logger.warning(f"从URL选择获取信息失败: {e}")
 
         # 从选中文件名生成子目录名（不带时间戳，避免重复执行）
         if self.selected_file_path:
