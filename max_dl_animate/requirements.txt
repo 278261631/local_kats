@@ -1,0 +1,4 @@
+pywin32>=305
+astropy>=5.0
+numpy>=1.20
+
