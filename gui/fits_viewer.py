@@ -229,6 +229,25 @@ class FitsImageViewer:
                                             command=self._show_next_cutout, state="disabled")
         self.next_cutout_button.pack(side=tk.LEFT, padx=(0, 0))
 
+        # 坐标显示区域（第四行工具栏）
+        toolbar_frame4 = ttk.Frame(toolbar_container)
+        toolbar_frame4.pack(fill=tk.X, pady=2)
+
+        # 度数格式
+        ttk.Label(toolbar_frame4, text="度数:").pack(side=tk.LEFT, padx=(5, 2))
+        self.coord_deg_entry = ttk.Entry(toolbar_frame4, width=35)
+        self.coord_deg_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # HMS:DMS格式
+        ttk.Label(toolbar_frame4, text="HMS:DMS:").pack(side=tk.LEFT, padx=(5, 2))
+        self.coord_hms_entry = ttk.Entry(toolbar_frame4, width=35)
+        self.coord_hms_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 合并格式
+        ttk.Label(toolbar_frame4, text="合并:").pack(side=tk.LEFT, padx=(5, 2))
+        self.coord_compact_entry = ttk.Entry(toolbar_frame4, width=25)
+        self.coord_compact_entry.pack(side=tk.LEFT, padx=(0, 5))
+
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
             self.astap_button.config(state="disabled", text="ASTAP不可用")
@@ -1448,6 +1467,9 @@ class FitsImageViewer:
 
         file_info = self._extract_file_info(reference_img, aligned_img, detection_img, selected_filename)
 
+        # 更新坐标显示框
+        self._update_coordinate_display(file_info)
+
         # 在主界面显示图片
         self._show_cutouts_in_main_display(reference_img, aligned_img, detection_img, file_info)
 
@@ -1459,6 +1481,84 @@ class FitsImageViewer:
 
         next_index = (self._current_cutout_index + 1) % self._total_cutouts
         self._display_cutout_by_index(next_index)
+
+    def _update_coordinate_display(self, file_info):
+        """
+        更新坐标显示框
+
+        Args:
+            file_info: 文件信息字典
+        """
+        # 清空所有文本框
+        self.coord_deg_entry.delete(0, tk.END)
+        self.coord_hms_entry.delete(0, tk.END)
+        self.coord_compact_entry.delete(0, tk.END)
+
+        if not file_info:
+            self.logger.warning("file_info为空")
+            return
+
+        self.logger.info(f"更新坐标显示，file_info内容: {file_info}")
+
+        # 度数格式
+        if file_info.get('ra') and file_info.get('dec'):
+            deg_text = f"RA: {file_info['ra']}°  Dec: {file_info['dec']}°"
+            self.coord_deg_entry.insert(0, deg_text)
+            self.logger.info(f"度数格式: {deg_text}")
+        else:
+            self.logger.warning(f"度数格式缺失: ra={file_info.get('ra')}, dec={file_info.get('dec')}")
+
+        # HMS:DMS格式（时分秒分开）
+        if file_info.get('ra_hms') and file_info.get('dec_dms'):
+            hms_text = f"{file_info['ra_hms']}  {file_info['dec_dms']}"
+            self.coord_hms_entry.insert(0, hms_text)
+            self.logger.info(f"HMS:DMS格式: {hms_text}")
+        else:
+            self.logger.warning(f"HMS:DMS格式缺失: ra_hms={file_info.get('ra_hms')}, dec_dms={file_info.get('dec_dms')}")
+
+            # 如果有度数但没有HMS/DMS，尝试在这里计算
+            if file_info.get('ra') and file_info.get('dec'):
+                try:
+                    from astropy.coordinates import Angle
+                    import astropy.units as u
+
+                    ra_deg = float(file_info['ra'])
+                    dec_deg = float(file_info['dec'])
+
+                    ra_angle = Angle(ra_deg, unit=u.degree)
+                    dec_angle = Angle(dec_deg, unit=u.degree)
+
+                    ra_hms = ra_angle.to_string(unit=u.hourangle, sep=':', precision=2)
+                    dec_dms = dec_angle.to_string(unit=u.degree, sep=':', precision=2)
+
+                    hms_text = f"{ra_hms}  {dec_dms}"
+                    self.coord_hms_entry.insert(0, hms_text)
+                    self.logger.info(f"补充计算HMS:DMS格式: {hms_text}")
+
+                    # 同时计算合并格式
+                    ra_h, ra_m, ra_s = ra_angle.hms
+                    dec_sign_val, dec_d, dec_m, dec_s = dec_angle.signed_dms
+
+                    ra_compact = f"{int(ra_h):02d}{int(ra_m):02d}{ra_s:05.2f}"
+                    dec_sign = '+' if dec_sign_val >= 0 else '-'
+                    dec_compact = f"{dec_sign}{abs(int(dec_d)):02d}{int(dec_m):02d}{abs(dec_s):05.2f}"
+
+                    compact_text = f"{ra_compact}  {dec_compact}"
+                    self.coord_compact_entry.insert(0, compact_text)
+                    self.logger.info(f"补充计算合并格式: {compact_text}")
+
+                    return  # 已经补充计算完成，直接返回
+
+                except Exception as e:
+                    self.logger.error(f"补充计算HMS/DMS格式失败: {e}")
+
+        # 合并小数格式
+        if file_info.get('ra_compact') and file_info.get('dec_compact'):
+            compact_text = f"{file_info['ra_compact']}  {file_info['dec_compact']}"
+            self.coord_compact_entry.insert(0, compact_text)
+            self.logger.info(f"合并格式: {compact_text}")
+        else:
+            self.logger.warning(f"合并格式缺失: ra_compact={file_info.get('ra_compact')}, dec_compact={file_info.get('dec_compact')}")
 
     def _show_previous_cutout(self):
         """显示上一组cutout图片"""
@@ -1612,8 +1712,33 @@ class FitsImageViewer:
                                 for pattern in patterns:
                                     coord_match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
                                     if coord_match:
-                                        info['ra'] = f"{float(coord_match.group(1)):.6f}"
-                                        info['dec'] = f"{float(coord_match.group(2)):.6f}"
+                                        ra_deg = float(coord_match.group(1))
+                                        dec_deg = float(coord_match.group(2))
+                                        info['ra'] = f"{ra_deg:.6f}"
+                                        info['dec'] = f"{dec_deg:.6f}"
+
+                                        # 计算HMS/DMS格式
+                                        from astropy.coordinates import Angle
+                                        import astropy.units as u
+
+                                        ra_angle = Angle(ra_deg, unit=u.degree)
+                                        dec_angle = Angle(dec_deg, unit=u.degree)
+
+                                        ra_hms = ra_angle.to_string(unit=u.hourangle, sep=':', precision=2)
+                                        dec_dms = dec_angle.to_string(unit=u.degree, sep=':', precision=2)
+
+                                        ra_h, ra_m, ra_s = ra_angle.hms
+                                        dec_sign_val, dec_d, dec_m, dec_s = dec_angle.signed_dms
+
+                                        ra_compact = f"{int(ra_h):02d}{int(ra_m):02d}{ra_s:05.2f}"
+                                        dec_sign = '+' if dec_sign_val >= 0 else '-'
+                                        dec_compact = f"{dec_sign}{abs(int(dec_d)):02d}{int(dec_m):02d}{abs(dec_s):05.2f}"
+
+                                        info['ra_hms'] = ra_hms
+                                        info['dec_dms'] = dec_dms
+                                        info['ra_compact'] = ra_compact
+                                        info['dec_compact'] = dec_compact
+
                                         self.logger.info(f"从结果文件直接找到RA/DEC: RA={info['ra']}, Dec={info['dec']}")
                                         break
 
@@ -1658,9 +1783,40 @@ class FitsImageViewer:
                                     # 将像素坐标转换为天球坐标（FITS使用1-based索引）
                                     sky_coords = wcs.pixel_to_world(pixel_x, pixel_y)
 
-                                    info['ra'] = f"{sky_coords.ra.degree:.6f}"
-                                    info['dec'] = f"{sky_coords.dec.degree:.6f}"
+                                    # 保存度数格式
+                                    ra_deg = sky_coords.ra.degree
+                                    dec_deg = sky_coords.dec.degree
+                                    info['ra'] = f"{ra_deg:.6f}"
+                                    info['dec'] = f"{dec_deg:.6f}"
+
+                                    # 计算HMS/DMS格式
+                                    from astropy.coordinates import Angle
+                                    import astropy.units as u
+
+                                    ra_angle = Angle(ra_deg, unit=u.degree)
+                                    dec_angle = Angle(dec_deg, unit=u.degree)
+
+                                    # HMS格式 (RA用小时)
+                                    ra_hms = ra_angle.to_string(unit=u.hourangle, sep=':', precision=2)
+                                    # DMS格式 (DEC用度)
+                                    dec_dms = dec_angle.to_string(unit=u.degree, sep=':', precision=2)
+
+                                    # 合并小数格式 (HHMMSS.SS, DDMMSS.SS)
+                                    ra_h, ra_m, ra_s = ra_angle.hms
+                                    dec_sign_val, dec_d, dec_m, dec_s = dec_angle.signed_dms
+
+                                    ra_compact = f"{int(ra_h):02d}{int(ra_m):02d}{ra_s:05.2f}"
+                                    dec_sign = '+' if dec_sign_val >= 0 else '-'
+                                    dec_compact = f"{dec_sign}{abs(int(dec_d)):02d}{int(dec_m):02d}{abs(dec_s):05.2f}"
+
+                                    info['ra_hms'] = ra_hms
+                                    info['dec_dms'] = dec_dms
+                                    info['ra_compact'] = ra_compact
+                                    info['dec_compact'] = dec_compact
+
                                     self.logger.info(f"使用WCS计算得到坐标: RA={info['ra']}, Dec={info['dec']}")
+                                    self.logger.info(f"  HMS格式: {ra_hms}, DMS格式: {dec_dms}")
+                                    self.logger.info(f"  合并格式: {ra_compact}, {dec_compact}")
                                     break
 
                                 except Exception as wcs_error:
@@ -1686,6 +1842,29 @@ class FitsImageViewer:
 
                                             info['ra'] = f"{ra:.6f}"
                                             info['dec'] = f"{dec:.6f}"
+
+                                            # 计算HMS/DMS格式
+                                            from astropy.coordinates import Angle
+                                            import astropy.units as u
+
+                                            ra_angle = Angle(ra, unit=u.degree)
+                                            dec_angle = Angle(dec, unit=u.degree)
+
+                                            ra_hms = ra_angle.to_string(unit=u.hourangle, sep=':', precision=2)
+                                            dec_dms = dec_angle.to_string(unit=u.degree, sep=':', precision=2)
+
+                                            ra_h, ra_m, ra_s = ra_angle.hms
+                                            dec_sign_val, dec_d, dec_m, dec_s = dec_angle.signed_dms
+
+                                            ra_compact = f"{int(ra_h):02d}{int(ra_m):02d}{ra_s:05.2f}"
+                                            dec_sign = '+' if dec_sign_val >= 0 else '-'
+                                            dec_compact = f"{dec_sign}{abs(int(dec_d)):02d}{int(dec_m):02d}{abs(dec_s):05.2f}"
+
+                                            info['ra_hms'] = ra_hms
+                                            info['dec_dms'] = dec_dms
+                                            info['ra_compact'] = ra_compact
+                                            info['dec_compact'] = dec_compact
+
                                             self.logger.info(f"使用简单线性转换计算得到坐标: RA={info['ra']}, Dec={info['dec']}")
                                             break
 
@@ -1757,6 +1936,32 @@ class FitsImageViewer:
 
                                     info['ra'] = f"{float(ra_val):.6f}"
                                     info['dec'] = f"{float(dec_val):.6f}"
+
+                                    # 计算HMS/DMS格式
+                                    try:
+                                        from astropy.coordinates import Angle
+                                        import astropy.units as u
+
+                                        ra_angle = Angle(float(ra_val), unit=u.degree)
+                                        dec_angle = Angle(float(dec_val), unit=u.degree)
+
+                                        ra_hms = ra_angle.to_string(unit=u.hourangle, sep=':', precision=2)
+                                        dec_dms = dec_angle.to_string(unit=u.degree, sep=':', precision=2)
+
+                                        ra_h, ra_m, ra_s = ra_angle.hms
+                                        dec_sign_val, dec_d, dec_m, dec_s = dec_angle.signed_dms
+
+                                        ra_compact = f"{int(ra_h):02d}{int(ra_m):02d}{ra_s:05.2f}"
+                                        dec_sign = '+' if dec_sign_val >= 0 else '-'
+                                        dec_compact = f"{dec_sign}{abs(int(dec_d)):02d}{int(dec_m):02d}{abs(dec_s):05.2f}"
+
+                                        info['ra_hms'] = ra_hms
+                                        info['dec_dms'] = dec_dms
+                                        info['ra_compact'] = ra_compact
+                                        info['dec_compact'] = dec_compact
+                                    except Exception as format_error:
+                                        self.logger.warning(f"格式转换失败: {format_error}")
+
                                     self.logger.info(f"从FITS header找到坐标: RA={info['ra']}, Dec={info['dec']}")
                                     break
 
