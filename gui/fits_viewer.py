@@ -307,6 +307,7 @@ class FitsImageViewer:
         # 绑定选择事件
         self.directory_tree.bind('<<TreeviewSelect>>', self._on_tree_select)
         self.directory_tree.bind('<Double-1>', self._on_tree_double_click)
+        self.directory_tree.bind('<<TreeviewOpen>>', self._on_tree_open)
 
         # 不在这里初始化目录树，等待首次刷新
 
@@ -376,6 +377,11 @@ class FitsImageViewer:
     def _refresh_directory_tree(self):
         """刷新目录树"""
         try:
+            # 配置标签样式
+            self.directory_tree.tag_configure("wcs_green", foreground="green")
+            self.directory_tree.tag_configure("wcs_orange", foreground="orange")
+            self.directory_tree.tag_configure("diff_blue", foreground="blue")
+
             # 清空现有树
             for item in self.directory_tree.get_children():
                 self.directory_tree.delete(item)
@@ -797,6 +803,160 @@ class FitsImageViewer:
             # 双击目录节点，打开文件管理器
             directory = values[0]
             self._open_directory_in_explorer(directory)
+
+    def _on_tree_open(self, event):
+        """目录树展开事件"""
+        self.logger.info("触发目录树展开事件")
+
+        # 获取被展开的节点
+        # TreeviewOpen事件中，需要从focus获取当前节点
+        item = self.directory_tree.focus()
+
+        if not item:
+            self.logger.warning("展开事件：无法获取焦点节点")
+            return
+
+        text = self.directory_tree.item(item, "text")
+        values = self.directory_tree.item(item, "values")
+        tags = self.directory_tree.item(item, "tags")
+
+        self.logger.info(f"展开节点: text={text}, tags={tags}")
+
+        # 检查是否是天区目录（有region标签）
+        if "region" in tags:
+            if values:
+                region_dir = values[0]
+                self.logger.info(f"展开天区目录: {region_dir}")
+                # 扫描该目录下的文件，标记已有diff结果的文件
+                self._mark_files_with_diff_results(item, region_dir)
+            else:
+                self.logger.warning(f"天区目录没有values: {text}")
+        else:
+            self.logger.debug(f"不是天区目录，跳过: text={text}, tags={tags}")
+
+    def _mark_files_with_diff_results(self, parent_item, region_dir):
+        """
+        标记已有diff结果的文件为蓝色
+
+        Args:
+            parent_item: 父节点（天区目录节点）
+            region_dir: 天区目录路径
+        """
+        try:
+            self.logger.info(f"扫描天区目录中的diff结果: {region_dir}")
+
+            # 获取该天区目录下的所有子节点（文件）
+            children = self.directory_tree.get_children(parent_item)
+            self.logger.info(f"找到 {len(children)} 个子节点")
+
+            marked_count = 0
+
+            for child in children:
+                child_text = self.directory_tree.item(child, "text")
+                child_tags = self.directory_tree.item(child, "tags")
+                child_values = self.directory_tree.item(child, "values")
+
+                self.logger.info(f"检查节点: text={child_text}, tags={child_tags}, has_values={bool(child_values)}")
+
+                # 只处理文件节点（fits_file标签）
+                if "fits_file" in child_tags and child_values:
+                    file_path = child_values[0]
+                    filename = os.path.basename(file_path)
+
+                    self.logger.info(f"检查文件: {filename}")
+                    self.logger.info(f"  文件路径: {file_path}")
+
+                    # 检查是否有对应的diff输出目录
+                    # 输出目录在output目录下，而不是download目录
+                    # 路径结构: E:/fix_data/output/系统名/日期/天区/文件名/detection_xxx
+
+                    # 构建输出目录路径
+                    # region_dir格式: E:/fix_data/download/GY5/20251002/K054
+                    # 输出目录格式: E:/fix_data/output/GY5/20251002/K054/文件名/detection_xxx
+
+                    self.logger.info(f"  原始region_dir: {region_dir}")
+
+                    # 获取配置的输出目录
+                    base_output_dir = None
+                    if self.get_diff_output_dir_callback:
+                        base_output_dir = self.get_diff_output_dir_callback()
+
+                    if not base_output_dir or not os.path.exists(base_output_dir):
+                        self.logger.warning(f"  输出目录未配置或不存在，跳过")
+                        continue
+
+                    self.logger.info(f"  输出根目录: {base_output_dir}")
+
+                    # 从region_dir提取相对路径部分（系统名/日期/天区）
+                    # 例如: E:/fix_data/download/GY5/20251002/K054 -> GY5/20251002/K054
+                    download_dir = None
+                    if self.get_download_dir_callback:
+                        download_dir = self.get_download_dir_callback()
+
+                    if download_dir:
+                        # 标准化路径
+                        normalized_region_dir = os.path.normpath(region_dir)
+                        normalized_download_dir = os.path.normpath(download_dir)
+
+                        # 获取相对路径
+                        try:
+                            relative_path = os.path.relpath(normalized_region_dir, normalized_download_dir)
+                            self.logger.info(f"  相对路径: {relative_path}")
+
+                            # 构建输出目录路径
+                            output_region_dir = os.path.join(base_output_dir, relative_path)
+                        except ValueError:
+                            # 如果路径不在同一驱动器，使用备用方法
+                            self.logger.warning(f"  无法计算相对路径，使用备用方法")
+                            continue
+                    else:
+                        self.logger.warning(f"  下载目录未配置，跳过")
+                        continue
+
+                    self.logger.info(f"  输出天区目录: {output_region_dir}")
+
+                    file_basename = os.path.splitext(filename)[0]
+                    potential_output_dir = os.path.join(output_region_dir, file_basename)
+
+                    self.logger.info(f"  检查输出目录: {potential_output_dir}")
+                    self.logger.info(f"  目录是否存在: {os.path.exists(potential_output_dir)}")
+
+                    # 检查是否存在detection目录
+                    has_diff_result = False
+                    if os.path.exists(potential_output_dir) and os.path.isdir(potential_output_dir):
+                        self.logger.info(f"  输出目录存在，查找detection子目录...")
+                        # 查找detection_开头的目录
+                        try:
+                            items = os.listdir(potential_output_dir)
+                            self.logger.info(f"  输出目录内容: {items}")
+
+                            for item_name in items:
+                                item_path = os.path.join(potential_output_dir, item_name)
+                                if os.path.isdir(item_path) and item_name.startswith('detection_'):
+                                    has_diff_result = True
+                                    self.logger.info(f"  ✓ 找到diff结果: {filename} -> {item_name}")
+                                    break
+                        except Exception as list_error:
+                            self.logger.error(f"  列出目录内容失败: {list_error}")
+                    else:
+                        self.logger.debug(f"  输出目录不存在")
+
+                    # 如果有diff结果，标记为蓝色
+                    if has_diff_result:
+                        current_tags = list(child_tags)
+                        # 移除其他颜色标记
+                        current_tags = [t for t in current_tags if t not in ["wcs_green", "wcs_orange", "diff_blue"]]
+                        current_tags.append("diff_blue")
+                        self.directory_tree.item(child, tags=current_tags)
+                        marked_count += 1
+                        self.logger.info(f"  ✓ 已标记为蓝色: {filename}")
+
+            self.logger.info(f"完成天区目录diff结果扫描: {region_dir}，标记了 {marked_count} 个文件")
+
+        except Exception as e:
+            self.logger.error(f"标记diff结果文件时出错: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def _display_selected_image(self):
         """显示选中的图像"""
@@ -1332,6 +1492,7 @@ class FitsImageViewer:
             # 配置标签样式
             self.directory_tree.tag_configure("wcs_green", foreground="green")
             self.directory_tree.tag_configure("wcs_orange", foreground="orange")
+            self.directory_tree.tag_configure("diff_blue", foreground="blue")
 
             # 遍历目录树，找到对应的文件节点并更新颜色
             def update_node_colors(parent_item):
