@@ -21,6 +21,7 @@ from fits_viewer import FitsImageViewer
 from data_collect.data_02_download import FitsDownloader
 from config_manager import ConfigManager
 from url_builder import URLBuilderFrame
+from batch_status_widget import BatchStatusWidget
 
 # 尝试导入ASTAP处理器
 try:
@@ -76,23 +77,28 @@ class FitsWebDownloaderGUI:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # 创建笔记本控件（标签页）
-        notebook = ttk.Notebook(main_frame)
-        notebook.pack(fill=tk.BOTH, expand=True)
-        
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
         # 创建扫描和下载标签页
-        self.scan_frame = ttk.Frame(notebook)
-        notebook.add(self.scan_frame, text="扫描和下载")
-        
+        self.scan_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.scan_frame, text="扫描和下载")
+
+        # 创建批量处理状态标签页
+        self.batch_status_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.batch_status_frame, text="批量处理状态")
+
         # 创建图像查看标签页
-        self.viewer_frame = ttk.Frame(notebook)
-        notebook.add(self.viewer_frame, text="图像查看")
-        
+        self.viewer_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.viewer_frame, text="图像查看")
+
         # 创建日志标签页
-        self.log_frame = ttk.Frame(notebook)
-        notebook.add(self.log_frame, text="日志")
-        
+        self.log_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.log_frame, text="日志")
+
         # 初始化各个标签页
         self._create_scan_widgets()
+        self._create_batch_status_widgets()
         self._create_viewer_widgets()
         self._create_log_widgets()
         
@@ -110,7 +116,7 @@ class FitsWebDownloaderGUI:
 
         self.scan_status_label = ttk.Label(scan_status_frame, text="就绪")
         self.scan_status_label.pack(side=tk.LEFT)
-        
+
         # 文件列表区域
         list_frame = ttk.LabelFrame(self.scan_frame, text="FITS文件列表", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -288,6 +294,45 @@ class FitsWebDownloaderGUI:
         
         ttk.Button(log_control_frame, text="清除日志", command=self._clear_log).pack(side=tk.LEFT)
         ttk.Button(log_control_frame, text="保存日志", command=self._save_log).pack(side=tk.LEFT, padx=(10, 0))
+
+    def _create_batch_status_widgets(self):
+        """创建批量处理状态界面"""
+        # 标题和说明
+        title_frame = ttk.Frame(self.batch_status_frame)
+        title_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        title_label = ttk.Label(title_frame, text="批量处理状态", font=("Arial", 14, "bold"))
+        title_label.pack(side=tk.LEFT)
+
+        info_label = ttk.Label(title_frame, text="实时显示批量处理过程中每个文件的状态", foreground="gray")
+        info_label.pack(side=tk.LEFT, padx=(20, 0))
+
+        # 进度信息框架
+        progress_frame = ttk.LabelFrame(self.batch_status_frame, text="处理进度", padding=10)
+        progress_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        # 当前状态标签
+        self.batch_progress_label = ttk.Label(progress_frame, text="等待开始批量处理...", font=("Arial", 10))
+        self.batch_progress_label.pack(anchor=tk.W)
+
+        # 统计信息标签
+        self.batch_stats_label = ttk.Label(progress_frame, text="", foreground="blue")
+        self.batch_stats_label.pack(anchor=tk.W, pady=(5, 0))
+
+        # 批量处理状态显示组件
+        status_frame = ttk.LabelFrame(self.batch_status_frame, text="文件状态列表", padding=10)
+        status_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        self.batch_status_widget = BatchStatusWidget(status_frame)
+        self.batch_status_widget.create_widget()
+
+        # 控制按钮
+        control_frame = ttk.Frame(self.batch_status_frame)
+        control_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        ttk.Button(control_frame, text="清空状态", command=self._clear_batch_status).pack(side=tk.LEFT)
+        ttk.Button(control_frame, text="显示统计", command=self._show_batch_statistics).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(control_frame, text="导出报告", command=self._export_batch_report).pack(side=tk.LEFT, padx=(10, 0))
 
     def _load_config(self):
         """加载配置"""
@@ -1102,6 +1147,106 @@ class FitsWebDownloaderGUI:
             except Exception as e:
                 messagebox.showerror("错误", f"保存日志失败:\n{str(e)}")
 
+    def _clear_batch_status(self):
+        """清空批量处理状态"""
+        self.batch_status_widget.clear()
+        self.batch_progress_label.config(text="等待开始批量处理...")
+        self.batch_stats_label.config(text="")
+        self._log("批量处理状态已清空")
+
+    def _show_batch_statistics(self):
+        """显示批量处理统计信息"""
+        stats = self.batch_status_widget.get_statistics()
+
+        stats_text = f"""批量处理统计信息
+
+总文件数: {stats['total']}
+
+下载统计:
+  - 下载成功: {stats['download_success']}
+  - 下载失败: {stats['download_failed']}
+  - 跳过下载: {stats['download_skipped']}
+
+WCS统计:
+  - 有WCS: {stats['wcs_found']}
+  - 缺WCS: {stats['wcs_missing']}
+
+ASTAP统计:
+  - ASTAP成功: {stats['astap_success']}
+  - ASTAP失败: {stats['astap_failed']}
+
+Diff统计:
+  - Diff成功: {stats['diff_success']}
+  - Diff失败: {stats['diff_failed']}
+  - 跳过Diff: {stats['diff_skipped']}
+"""
+
+        messagebox.showinfo("批量处理统计", stats_text)
+        self._log("显示批量处理统计信息")
+
+    def _export_batch_report(self):
+        """导出批量处理报告"""
+        stats = self.batch_status_widget.get_statistics()
+
+        if stats['total'] == 0:
+            messagebox.showwarning("警告", "没有可导出的批量处理数据")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="导出批量处理报告",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+
+        if file_path:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write("=" * 60 + "\n")
+                    f.write("批量处理报告\n")
+                    f.write("=" * 60 + "\n\n")
+
+                    f.write(f"总文件数: {stats['total']}\n\n")
+
+                    f.write("下载统计:\n")
+                    f.write(f"  - 下载成功: {stats['download_success']}\n")
+                    f.write(f"  - 下载失败: {stats['download_failed']}\n")
+                    f.write(f"  - 跳过下载: {stats['download_skipped']}\n\n")
+
+                    f.write("WCS统计:\n")
+                    f.write(f"  - 有WCS: {stats['wcs_found']}\n")
+                    f.write(f"  - 缺WCS: {stats['wcs_missing']}\n\n")
+
+                    f.write("ASTAP统计:\n")
+                    f.write(f"  - ASTAP成功: {stats['astap_success']}\n")
+                    f.write(f"  - ASTAP失败: {stats['astap_failed']}\n\n")
+
+                    f.write("Diff统计:\n")
+                    f.write(f"  - Diff成功: {stats['diff_success']}\n")
+                    f.write(f"  - Diff失败: {stats['diff_failed']}\n")
+                    f.write(f"  - 跳过Diff: {stats['diff_skipped']}\n\n")
+
+                    f.write("=" * 60 + "\n")
+                    f.write("文件详细状态:\n")
+                    f.write("=" * 60 + "\n\n")
+
+                    # 获取所有文件状态
+                    for filename in self.batch_status_widget.file_labels.keys():
+                        status_info = self.batch_status_widget.get_status(filename)
+                        if status_info:
+                            status_text = status_info.get('text', '')
+                            extra_info = status_info.get('extra_info', '')
+                            f.write(f"{filename}\n")
+                            f.write(f"  状态: {status_text}")
+                            if extra_info:
+                                f.write(f" - {extra_info}")
+                            f.write("\n\n")
+
+                messagebox.showinfo("成功", f"批量处理报告已导出到:\n{file_path}")
+                self._log(f"批量处理报告已导出: {file_path}")
+            except Exception as e:
+                messagebox.showerror("错误", f"导出报告失败:\n{str(e)}")
+                self._log(f"导出报告失败: {str(e)}", "ERROR")
+
     def get_error_logger_callback(self):
         """
         获取错误日志记录器的GUI回调函数
@@ -1203,6 +1348,19 @@ class FitsWebDownloaderGUI:
             self._log("开始批量处理")
             self._log("=" * 60)
 
+            # 切换到批量处理状态标签页
+            self.root.after(0, lambda: self.notebook.select(1))  # 索引1是批量处理状态标签页
+
+            # 清空并初始化批量状态组件
+            self.root.after(0, lambda: self.batch_status_widget.clear())
+            self.root.after(0, lambda: self.batch_progress_label.config(
+                text=f"正在准备批量处理 {len(selected_files)} 个文件..."))
+            self.root.after(0, lambda: self.batch_stats_label.config(text=""))
+
+            # 添加所有文件到状态列表
+            for filename, url in selected_files:
+                self.root.after(0, lambda f=filename: self.batch_status_widget.add_file(f))
+
             # 获取当前选择的参数来构建子目录
             selections = self.url_builder.get_current_selections()
             tel_name = selections.get('telescope_name', 'Unknown')
@@ -1253,12 +1411,21 @@ class FitsWebDownloaderGUI:
 
             # 执行下载
             self._log(f"开始下载 {len(urls)} 个文件...")
+            self.root.after(0, lambda: self.batch_progress_label.config(
+                text=f"正在下载 {len(urls)} 个文件..."))
+
+            # 更新所有文件状态为下载中
+            for filename, url in selected_files:
+                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                    f, BatchStatusWidget.STATUS_DOWNLOADING))
+
             self._download_with_progress(urls, actual_download_dir)
             self._log("下载完成")
 
             # 步骤1.5: 检查WCS信息并准备文件列表
             self._log("\n步骤1.5: 检查WCS信息")
             self._log("-" * 60)
+            self.root.after(0, lambda: self.batch_progress_label.config(text="检查WCS信息..."))
 
             # 获取下载的文件列表
             downloaded_files = []
@@ -1266,8 +1433,14 @@ class FitsWebDownloaderGUI:
                 file_path = os.path.join(actual_download_dir, filename)
                 if os.path.exists(file_path):
                     downloaded_files.append(file_path)
+                    # 更新状态为下载成功
+                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_DOWNLOAD_SUCCESS))
                 else:
                     self._log(f"警告: 文件未找到 {filename}")
+                    # 更新状态为下载失败
+                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_DOWNLOAD_FAILED, "文件未找到"))
 
             self._log(f"找到 {len(downloaded_files)} 个已下载的文件")
 
@@ -1277,6 +1450,11 @@ class FitsWebDownloaderGUI:
 
             for file_path in downloaded_files:
                 filename = os.path.basename(file_path)
+
+                # 更新状态为检查WCS
+                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                    f, BatchStatusWidget.STATUS_WCS_CHECKING))
+
                 try:
                     # 检查是否有WCS信息
                     from astropy.io import fits as astropy_fits
@@ -1287,12 +1465,21 @@ class FitsWebDownloaderGUI:
                     if has_wcs:
                         files_with_wcs.append(file_path)
                         self._log(f"  {filename}: ✓ 已有WCS信息")
+                        # 更新状态为有WCS
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_WCS_FOUND))
                     else:
                         files_without_wcs.append(file_path)
                         self._log(f"  {filename}: ✗ 缺少WCS信息")
+                        # 更新状态为缺少WCS
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_WCS_MISSING))
                 except Exception as e:
                     files_without_wcs.append(file_path)
                     self._log(f"  {filename}: 检查WCS时出错: {str(e)}")
+                    # 更新状态为缺少WCS（错误）
+                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_WCS_MISSING, f"错误: {str(e)}"))
 
             self._log(f"WCS检查完成: {len(files_with_wcs)} 个有WCS, {len(files_without_wcs)} 个无WCS")
 
@@ -1301,10 +1488,16 @@ class FitsWebDownloaderGUI:
                 self._log(f"\n对 {len(files_without_wcs)} 个没有WCS信息的文件执行ASTAP处理...")
 
                 if self.fits_viewer.astap_processor:
-                    self.root.after(0, lambda: self.status_label.config(text="正在添加WCS信息..."))
+                    self.root.after(0, lambda: self.batch_progress_label.config(
+                        text=f"正在为 {len(files_without_wcs)} 个文件添加WCS信息..."))
 
                     for file_path in files_without_wcs:
                         filename = os.path.basename(file_path)
+
+                        # 更新状态为ASTAP处理中
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
+
                         try:
                             self._log(f"  {filename}: 执行ASTAP处理...")
                             success = self.fits_viewer.astap_processor.process_fits_file(file_path)
@@ -1319,12 +1512,24 @@ class FitsWebDownloaderGUI:
                                 if has_wcs:
                                     files_with_wcs.append(file_path)
                                     self._log(f"    ✓ ASTAP处理成功，已添加WCS信息")
+                                    # 更新状态为ASTAP成功
+                                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                        f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
                                 else:
                                     self._log(f"    ✗ ASTAP处理完成但未添加WCS信息")
+                                    # 更新状态为ASTAP失败
+                                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                        f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
                             else:
                                 self._log(f"    ✗ ASTAP处理失败")
+                                # 更新状态为ASTAP失败
+                                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                    f, BatchStatusWidget.STATUS_ASTAP_FAILED))
                         except Exception as e:
                             self._log(f"    ✗ ASTAP处理出错: {str(e)}")
+                            # 更新状态为ASTAP失败
+                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, str(e)))
 
                     self._log(f"ASTAP处理完成，现在共有 {len(files_with_wcs)} 个文件包含WCS信息")
                 else:
@@ -1337,7 +1542,8 @@ class FitsWebDownloaderGUI:
             # 步骤2: 执行Diff操作（只处理有WCS信息的文件）
             self._log("\n步骤2: 执行Diff操作")
             self._log("-" * 60)
-            self.root.after(0, lambda: self.status_label.config(text="正在执行Diff..."))
+            self.root.after(0, lambda: self.batch_progress_label.config(
+                text=f"准备执行Diff操作 ({len(files_with_wcs)} 个文件)..."))
 
             # 对每个有WCS信息的文件执行diff
             success_count = 0
@@ -1373,6 +1579,17 @@ class FitsWebDownloaderGUI:
                 filename = os.path.basename(download_file)
                 self._log(f"\n[{i}/{len(files_with_wcs)}] 处理: {filename}")
 
+                # 更新进度显示
+                progress_text = f"Diff处理中 ({i}/{len(files_with_wcs)}): {filename}"
+                self.root.after(0, lambda t=progress_text: self.batch_progress_label.config(text=t))
+
+                # 更新统计信息
+                stats_text = f"已完成: {i-1}/{len(files_with_wcs)} | 成功: {success_count} | 失败: {fail_count}"
+                self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
+
+                # 滚动到当前文件
+                self.root.after(0, lambda f=filename: self.batch_status_widget.scroll_to_file(f))
+
                 try:
                     # 使用diff_orb的模板查找方法（与diff按钮相同）
                     template_file = self.fits_viewer.diff_orb.find_template_file(download_file, template_dir)
@@ -1380,6 +1597,9 @@ class FitsWebDownloaderGUI:
                     if not template_file:
                         fail_count += 1
                         self._log(f"  ✗ 未找到匹配的模板文件")
+                        # 更新状态为Diff失败
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_FAILED, "未找到模板"))
                         continue
 
                     self._log(f"  使用模板: {os.path.basename(template_file)}")
@@ -1395,7 +1615,14 @@ class FitsWebDownloaderGUI:
                     if detection_dirs:
                         self._log(f"  ⊙ 已存在处理结果，跳过")
                         success_count += 1  # 计入成功数（因为已有结果）
+                        # 更新状态为跳过Diff
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_SKIPPED, "已有结果"))
                         continue
+
+                    # 更新状态为Diff处理中
+                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_DIFF_PROCESSING))
 
                     # 调用fits_viewer的diff功能（使用界面配置的参数）
                     # 这里直接调用process_diff，与diff按钮的逻辑一致
@@ -1416,6 +1643,10 @@ class FitsWebDownloaderGUI:
                         new_spots = result.get('new_bright_spots', 0)
                         self._log(f"  ✓ 成功 - 检测到 {new_spots} 个新亮点")
 
+                        # 更新状态为Diff成功
+                        self.root.after(0, lambda f=filename, n=new_spots: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_SUCCESS, f"{n}个亮点"))
+
                         # 记录输出目录
                         result_output_dir = result.get('output_directory')
                         if result_output_dir:
@@ -1423,10 +1654,16 @@ class FitsWebDownloaderGUI:
                     else:
                         fail_count += 1
                         self._log(f"  ✗ 失败")
+                        # 更新状态为Diff失败
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_FAILED))
 
                 except Exception as e:
                     fail_count += 1
                     self._log(f"  ✗ 错误: {str(e)}")
+                    # 更新状态为Diff失败
+                    self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_DIFF_FAILED, err))
 
             # 完成
             self._log("\n" + "=" * 60)
@@ -1434,6 +1671,20 @@ class FitsWebDownloaderGUI:
             self._log(f"成功: {success_count} 个")
             self._log(f"失败: {fail_count} 个")
             self._log("=" * 60)
+
+            # 更新批量处理状态标签页的进度信息
+            self.root.after(0, lambda: self.batch_progress_label.config(
+                text=f"✓ 批量处理完成！"))
+
+            # 获取并显示最终统计
+            stats = self.batch_status_widget.get_statistics()
+            final_stats_text = (
+                f"总计: {stats['total']} | "
+                f"Diff成功: {stats['diff_success']} | "
+                f"Diff失败: {stats['diff_failed']} | "
+                f"跳过: {stats['diff_skipped']}"
+            )
+            self.root.after(0, lambda t=final_stats_text: self.batch_stats_label.config(text=t))
 
             self.root.after(0, lambda: self.status_label.config(text=f"批量处理完成 (成功:{success_count} 失败:{fail_count})"))
 
