@@ -783,6 +783,10 @@ class FitsImageViewer:
 
             self.file_info_label.config(text=status_text)
             self.logger.info(f"已选择FITS文件: {filename}")
+
+            # 如果是下载目录的文件，自动检查并加载diff结果
+            if is_download_file:
+                self._auto_load_diff_results(file_path)
         else:
             # 选中的不是FITS文件
             self.selected_file_path = None
@@ -1406,7 +1410,116 @@ class FitsImageViewer:
         self.logger.info(f"diff输出目录: {output_dir}")
         self.logger.info(f"目录结构: {system_name}/{date_str}/{sky_region}/{subdir_name}")
         return output_dir
-    
+
+    def _auto_load_diff_results(self, file_path):
+        """自动检查并加载diff结果"""
+        try:
+            # 获取该文件对应的输出目录
+            output_dir = self._get_diff_output_directory()
+
+            # 检查输出目录是否存在
+            if not os.path.exists(output_dir):
+                self.logger.info(f"未找到diff输出目录，清除显示")
+                self._clear_diff_display()
+                return
+
+            # 检查输出目录中是否存在detection目录
+            try:
+                detection_dirs = [d for d in os.listdir(output_dir)
+                                if d.startswith('detection_') and os.path.isdir(os.path.join(output_dir, d))]
+            except Exception as e:
+                self.logger.info(f"读取输出目录失败，清除显示: {str(e)}")
+                self._clear_diff_display()
+                return
+
+            if not detection_dirs:
+                self.logger.info(f"未找到detection目录，清除显示")
+                self._clear_diff_display()
+                return
+
+            # 找到了diff结果
+            self.logger.info("=" * 60)
+            self.logger.info(f"发现已有diff结果: {detection_dirs[0]}")
+            self.logger.info(f"输出目录: {output_dir}")
+            self.logger.info("=" * 60)
+
+            # 保存输出目录路径并启用按钮
+            self.last_output_dir = output_dir
+            self.open_output_dir_btn.config(state="normal")
+
+            # 尝试显示第一个检测目标的cutout图片
+            cutout_displayed = self._display_first_detection_cutouts(output_dir)
+            if cutout_displayed:
+                self.logger.info("已自动加载cutout图片")
+                self.diff_progress_label.config(text="已加载diff结果", foreground="green")
+            else:
+                self.logger.info("未找到cutout图片")
+                self.diff_progress_label.config(text="已有diff结果（无cutout）", foreground="blue")
+
+            self.logger.info(f"输出目录: {output_dir} (点击'打开输出目录'按钮查看)")
+
+        except Exception as e:
+            self.logger.warning(f"自动加载diff结果失败: {str(e)}")
+            self._clear_diff_display()
+            # 不显示错误对话框，只记录日志
+
+    def _clear_diff_display(self):
+        """清除diff结果显示"""
+        # 停止动画
+        if hasattr(self, '_blink_animation_id') and self._blink_animation_id:
+            self.parent_frame.after_cancel(self._blink_animation_id)
+            self._blink_animation_id = None
+
+        # 断开点击事件
+        if hasattr(self, '_click_connection_id') and self._click_connection_id:
+            self.canvas.mpl_disconnect(self._click_connection_id)
+            self._click_connection_id = None
+
+        # 清空主画布
+        if hasattr(self, 'figure') and self.figure:
+            self.figure.clear()
+        if hasattr(self, 'canvas') and self.canvas:
+            self.canvas.draw()
+
+        # 重置cutout相关变量
+        if hasattr(self, '_all_cutout_sets'):
+            self._all_cutout_sets = []
+        if hasattr(self, '_current_cutout_index'):
+            self._current_cutout_index = 0
+        if hasattr(self, '_total_cutouts'):
+            self._total_cutouts = 0
+
+        # 清空坐标显示框
+        if hasattr(self, 'coord_deg_entry'):
+            self.coord_deg_entry.delete(0, tk.END)
+        if hasattr(self, 'coord_hms_entry'):
+            self.coord_hms_entry.delete(0, tk.END)
+        if hasattr(self, 'coord_compact_entry'):
+            self.coord_compact_entry.delete(0, tk.END)
+
+        # 更新cutout计数标签
+        if hasattr(self, 'cutout_count_label'):
+            self.cutout_count_label.config(text="0/0")
+
+        # 禁用导航按钮
+        if hasattr(self, 'prev_cutout_button'):
+            self.prev_cutout_button.config(state="disabled")
+        if hasattr(self, 'next_cutout_button'):
+            self.next_cutout_button.config(state="disabled")
+
+        # 清除输出目录
+        self.last_output_dir = None
+
+        # 禁用打开输出目录按钮
+        if hasattr(self, 'open_output_dir_btn'):
+            self.open_output_dir_btn.config(state="disabled")
+
+        # 清除进度标签
+        if hasattr(self, 'diff_progress_label'):
+            self.diff_progress_label.config(text="", foreground="black")
+
+        self.logger.info("已清除diff结果显示")
+
     def get_header_info(self) -> Optional[str]:
         """获取FITS头信息"""
         if self.current_header is None:
