@@ -1307,6 +1307,71 @@ Diff统计:
             self._log(f"打开批量输出目录失败: {str(e)}")
             messagebox.showerror("错误", f"打开目录失败: {str(e)}")
 
+    def _process_single_diff(self, download_file, template_dir, noise_methods, alignment_method,
+                            remove_bright_lines, stretch_method, percentile_low, fast_mode):
+        """
+        处理单个文件的diff操作（线程安全）
+
+        Returns:
+            dict: 包含处理结果的字典 {'success': bool, 'filename': str, 'message': str, 'new_spots': int}
+        """
+        filename = os.path.basename(download_file)
+        result_dict = {
+            'success': False,
+            'filename': filename,
+            'message': '',
+            'new_spots': 0
+        }
+
+        try:
+            # 查找模板文件
+            template_file = self.fits_viewer.diff_orb.find_template_file(download_file, template_dir)
+
+            if not template_file:
+                result_dict['message'] = "未找到模板"
+                return result_dict
+
+            # 设置当前处理的文件（让输出目录名称包含文件名）
+            self.fits_viewer.selected_file_path = download_file
+
+            # 获取输出目录
+            output_dir = self.fits_viewer._get_diff_output_directory()
+
+            # 检查是否已存在结果
+            if os.path.exists(output_dir):
+                detection_dirs = [d for d in os.listdir(output_dir)
+                                if d.startswith('detection_') and os.path.isdir(os.path.join(output_dir, d))]
+                if detection_dirs:
+                    result_dict['success'] = True
+                    result_dict['message'] = "已有结果"
+                    result_dict['skipped'] = True
+                    return result_dict
+
+            # 执行diff操作
+            diff_result = self.fits_viewer.diff_orb.process_diff(
+                download_file,
+                template_file,
+                output_dir,
+                noise_methods=noise_methods,
+                alignment_method=alignment_method,
+                remove_bright_lines=remove_bright_lines,
+                stretch_method=stretch_method,
+                percentile_low=percentile_low,
+                fast_mode=fast_mode
+            )
+
+            if diff_result and diff_result.get('success'):
+                result_dict['success'] = True
+                result_dict['new_spots'] = diff_result.get('new_bright_spots', 0)
+                result_dict['message'] = f"{result_dict['new_spots']}个亮点"
+            else:
+                result_dict['message'] = "处理失败"
+
+        except Exception as e:
+            result_dict['message'] = str(e)
+
+        return result_dict
+
     def _batch_process(self):
         """批量下载并执行diff操作"""
         selected_files = self._get_selected_files()
@@ -1344,8 +1409,12 @@ Diff统计:
     def _batch_process_thread(self, selected_files):
         """批量处理线程"""
         try:
+            # 获取线程数配置
+            thread_count = self.url_builder.get_thread_count()
+
             self._log("=" * 60)
             self._log("开始批量处理")
+            self._log(f"线程数: {thread_count}")
             self._log("=" * 60)
 
             # 切换到批量处理状态标签页
@@ -1574,96 +1643,82 @@ Diff统计:
                     percentile_low = 99.95
 
             self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}")
+            self._log(f"使用 {thread_count} 个线程并行处理")
 
-            for i, download_file in enumerate(files_with_wcs, 1):
-                filename = os.path.basename(download_file)
-                self._log(f"\n[{i}/{len(files_with_wcs)}] 处理: {filename}")
+            # 使用线程池并行处理
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import threading
 
-                # 更新进度显示
-                progress_text = f"Diff处理中 ({i}/{len(files_with_wcs)}): {filename}"
-                self.root.after(0, lambda t=progress_text: self.batch_progress_label.config(text=t))
+            # 创建线程锁用于更新计数器
+            counter_lock = threading.Lock()
+            completed_count = 0
 
-                # 更新统计信息
-                stats_text = f"已完成: {i-1}/{len(files_with_wcs)} | 成功: {success_count} | 失败: {fail_count}"
-                self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
-
-                # 滚动到当前文件
-                self.root.after(0, lambda f=filename: self.batch_status_widget.scroll_to_file(f))
-
-                try:
-                    # 使用diff_orb的模板查找方法（与diff按钮相同）
-                    template_file = self.fits_viewer.diff_orb.find_template_file(download_file, template_dir)
-
-                    if not template_file:
-                        fail_count += 1
-                        self._log(f"  ✗ 未找到匹配的模板文件")
-                        # 更新状态为Diff失败
-                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_DIFF_FAILED, "未找到模板"))
-                        continue
-
-                    self._log(f"  使用模板: {os.path.basename(template_file)}")
-
-                    # 设置当前处理的文件（让输出目录名称包含文件名）
-                    self.fits_viewer.selected_file_path = download_file
-
-                    # 获取输出目录（会使用download_file的文件名）
-                    output_dir = self.fits_viewer._get_diff_output_directory()
-
-                    # 检查输出目录中是否已存在detection目录（避免重复执行）
-                    detection_dirs = [d for d in os.listdir(output_dir) if d.startswith('detection_') and os.path.isdir(os.path.join(output_dir, d))]
-                    if detection_dirs:
-                        self._log(f"  ⊙ 已存在处理结果，跳过")
-                        success_count += 1  # 计入成功数（因为已有结果）
-                        # 更新状态为跳过Diff
-                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_DIFF_SKIPPED, "已有结果"))
-                        continue
-
+            # 创建线程池
+            with ThreadPoolExecutor(max_workers=thread_count) as executor:
+                # 提交所有任务
+                future_to_file = {}
+                for download_file in files_with_wcs:
+                    filename = os.path.basename(download_file)
                     # 更新状态为Diff处理中
                     self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
                         f, BatchStatusWidget.STATUS_DIFF_PROCESSING))
 
-                    # 调用fits_viewer的diff功能（使用界面配置的参数）
-                    # 这里直接调用process_diff，与diff按钮的逻辑一致
-                    result = self.fits_viewer.diff_orb.process_diff(
-                        download_file,
-                        template_file,
-                        output_dir,
-                        noise_methods=noise_methods,
-                        alignment_method=alignment_method,
-                        remove_bright_lines=remove_bright_lines,
-                        stretch_method=stretch_method,
-                        percentile_low=percentile_low,
-                        fast_mode=fast_mode
+                    future = executor.submit(
+                        self._process_single_diff,
+                        download_file, template_dir, noise_methods, alignment_method,
+                        remove_bright_lines, stretch_method, percentile_low, fast_mode
                     )
+                    future_to_file[future] = download_file
 
-                    if result and result.get('success'):
-                        success_count += 1
-                        new_spots = result.get('new_bright_spots', 0)
-                        self._log(f"  ✓ 成功 - 检测到 {new_spots} 个新亮点")
+                # 处理完成的任务
+                for future in as_completed(future_to_file):
+                    download_file = future_to_file[future]
+                    filename = os.path.basename(download_file)
 
-                        # 更新状态为Diff成功
-                        self.root.after(0, lambda f=filename, n=new_spots: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_DIFF_SUCCESS, f"{n}个亮点"))
+                    with counter_lock:
+                        completed_count += 1
+                        current_completed = completed_count
 
-                        # 记录输出目录
-                        result_output_dir = result.get('output_directory')
-                        if result_output_dir:
-                            self._log(f"  输出目录: {result_output_dir}")
-                    else:
+                    # 更新进度显示
+                    progress_text = f"Diff处理中 ({current_completed}/{len(files_with_wcs)}): 并行处理中..."
+                    self.root.after(0, lambda t=progress_text: self.batch_progress_label.config(text=t))
+
+                    try:
+                        result_dict = future.result()
+
+                        # 记录日志
+                        self._log(f"\n[{current_completed}/{len(files_with_wcs)}] {filename}")
+
+                        if result_dict['success']:
+                            if result_dict.get('skipped'):
+                                # 跳过的文件
+                                success_count += 1
+                                self._log(f"  ⊙ 已存在处理结果，跳过")
+                                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                    f, BatchStatusWidget.STATUS_DIFF_SKIPPED, "已有结果"))
+                            else:
+                                # 成功处理
+                                success_count += 1
+                                new_spots = result_dict['new_spots']
+                                self._log(f"  ✓ 成功 - 检测到 {new_spots} 个新亮点")
+                                self.root.after(0, lambda f=filename, n=new_spots: self.batch_status_widget.update_status(
+                                    f, BatchStatusWidget.STATUS_DIFF_SUCCESS, f"{n}个亮点"))
+                        else:
+                            # 失败
+                            fail_count += 1
+                            self._log(f"  ✗ {result_dict['message']}")
+                            self.root.after(0, lambda f=filename, msg=result_dict['message']: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_DIFF_FAILED, msg))
+
+                        # 更新统计信息
+                        stats_text = f"已完成: {current_completed}/{len(files_with_wcs)} | 成功: {success_count} | 失败: {fail_count}"
+                        self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
+
+                    except Exception as e:
                         fail_count += 1
-                        self._log(f"  ✗ 失败")
-                        # 更新状态为Diff失败
-                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_DIFF_FAILED))
-
-                except Exception as e:
-                    fail_count += 1
-                    self._log(f"  ✗ 错误: {str(e)}")
-                    # 更新状态为Diff失败
-                    self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_DIFF_FAILED, err))
+                        self._log(f"  ✗ 处理异常: {str(e)}")
+                        self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_FAILED, err))
 
             # 完成
             self._log("\n" + "=" * 60)

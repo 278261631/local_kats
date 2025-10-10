@@ -294,6 +294,13 @@ class URLBuilderFrame:
         self.batch_process_button = ttk.Button(row1, text="批量下载并Diff", command=self._on_batch_process_clicked, state="disabled")
         self.batch_process_button.pack(side=tk.LEFT, padx=(5, 0))
 
+        # 线程数配置
+        ttk.Label(row1, text="线程数:").pack(side=tk.LEFT, padx=(10, 2))
+        self.thread_count_var = tk.IntVar(value=4)
+        thread_spinbox = ttk.Spinbox(row1, from_=1, to=16, width=5,
+                                     textvariable=self.thread_count_var)
+        thread_spinbox.pack(side=tk.LEFT, padx=(0, 5))
+
         # 打开批量输出目录按钮
         self.open_batch_output_button = ttk.Button(row1, text="打开输出目录", command=self._on_open_batch_output_clicked, state="disabled")
         self.open_batch_output_button.pack(side=tk.LEFT, padx=(5, 0))
@@ -706,6 +713,12 @@ class URLBuilderFrame:
         """设置打开批量输出目录按钮状态"""
         if hasattr(self, 'open_batch_output_button'):
             self.open_batch_output_button.config(state=state)
+
+    def get_thread_count(self) -> int:
+        """获取线程数配置"""
+        if hasattr(self, 'thread_count_var'):
+            return self.thread_count_var.get()
+        return 4  # 默认值
 
 
 
