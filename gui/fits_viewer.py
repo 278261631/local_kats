@@ -56,7 +56,8 @@ class FitsImageViewer:
         # 设置日志
         self.logger = logging.getLogger(__name__)
 
-        # 初始化diff_orb集成
+        # 初始化diff_orb集成（传入GUI回调）
+        # 注意：此时log_callback还未定义，将在后面设置
         self.diff_orb = DiffOrbIntegration()
 
         # 初始化ASTAP处理器

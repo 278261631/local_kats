@@ -265,13 +265,23 @@ class FitsWebDownloaderGUI:
             get_diff_output_dir_callback=self._get_diff_output_dir,
             get_url_selections_callback=self._get_url_selections
         )
-        
+
+        # 设置diff_orb的GUI回调
+        if self.fits_viewer.diff_orb:
+            self.fits_viewer.diff_orb.gui_callback = self.get_error_logger_callback()
+
     def _create_log_widgets(self):
         """创建日志界面"""
         # 日志显示区域
         self.log_text = scrolledtext.ScrolledText(self.log_frame, height=30, width=100)
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
+
+        # 配置日志文本标签样式（用于彩色显示）
+        self.log_text.tag_config("ERROR", foreground="red")
+        self.log_text.tag_config("WARNING", foreground="orange")
+        self.log_text.tag_config("INFO", foreground="black")
+        self.log_text.tag_config("DEBUG", foreground="gray")
+
         # 日志控制按钮
         log_control_frame = ttk.Frame(self.log_frame)
         log_control_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
@@ -1049,9 +1059,27 @@ class FitsWebDownloaderGUI:
         # 同时输出到控制台
         print(message)
 
-    def _append_log(self, message):
-        """在日志文本框中添加消息"""
-        self.log_text.insert(tk.END, message)
+    def _append_log(self, message, level="INFO"):
+        """
+        在日志文本框中添加消息
+
+        Args:
+            message (str): 日志消息
+            level (str): 日志级别 (ERROR, WARNING, INFO, DEBUG)
+        """
+        # 添加时间戳
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        full_message = f"[{timestamp}] {message}\n"
+
+        # 插入消息并应用颜色标签
+        start_index = self.log_text.index(tk.END)
+        self.log_text.insert(tk.END, full_message)
+
+        # 应用颜色标签到整行
+        end_index = self.log_text.index(tk.END)
+        self.log_text.tag_add(level, start_index, end_index)
+
+        # 滚动到底部
         self.log_text.see(tk.END)
 
     def _clear_log(self):
@@ -1073,6 +1101,26 @@ class FitsWebDownloaderGUI:
                 messagebox.showinfo("成功", f"日志已保存到:\n{file_path}")
             except Exception as e:
                 messagebox.showerror("错误", f"保存日志失败:\n{str(e)}")
+
+    def get_error_logger_callback(self):
+        """
+        获取错误日志记录器的GUI回调函数
+
+        Returns:
+            Callable: 回调函数，接受(message, level)参数
+        """
+        def callback(message, level="INFO"):
+            """
+            错误日志回调函数
+
+            Args:
+                message (str): 日志消息
+                level (str): 日志级别 (ERROR, WARNING, INFO, DEBUG)
+            """
+            # 在主线程中更新日志显示
+            self.root.after(0, lambda: self._append_log(message, level))
+
+        return callback
 
     def run(self):
         """运行GUI应用程序"""

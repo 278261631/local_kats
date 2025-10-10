@@ -27,6 +27,7 @@ except ImportError as e:
     AlignedFITSComparator = None
 
 from filename_parser import FITSFilenameParser
+from error_logger import ErrorLogger
 
 # 导入噪点处理模块
 try:
@@ -42,10 +43,18 @@ except ImportError as e:
 
 class DiffOrbIntegration:
     """diff_orb集成类"""
-    
-    def __init__(self):
+
+    def __init__(self, gui_callback=None):
+        """
+        初始化diff_orb集成
+
+        Args:
+            gui_callback: GUI回调函数，用于显示错误信息
+        """
         self.logger = logging.getLogger(__name__)
         self.filename_parser = FITSFilenameParser()
+        self.gui_callback = gui_callback
+        self.error_logger = None  # 将在处理时创建
         
         # 检查diff_orb是否可用
         self.diff_orb_available = FITSAlignmentComparison is not None and AlignedFITSComparator is not None
@@ -162,23 +171,40 @@ class DiffOrbIntegration:
         if not self.diff_orb_available:
             self.logger.error("diff_orb模块不可用")
             return None
-        
+
+        # 创建输出目录
+        if output_dir is None:
+            output_dir = tempfile.mkdtemp(prefix="diff_orb_results_")
+        else:
+            os.makedirs(output_dir, exist_ok=True)
+
+        # 创建错误日志记录器
+        error_log_path = os.path.join(output_dir, "diff_error_log.txt")
+        self.error_logger = ErrorLogger(error_log_path, self.gui_callback)
+
         try:
+            self.error_logger.log_info("开始diff操作", {
+                "参考文件": os.path.basename(template_file),
+                "待比较文件": os.path.basename(download_file),
+                "输出目录": output_dir,
+                "对齐方式": alignment_method,
+                "降噪方式": str(noise_methods),
+                "快速模式": fast_mode
+            })
+
             # 验证输入文件
             if not os.path.exists(download_file):
-                self.logger.error(f"下载文件不存在: {download_file}")
+                error_msg = f"下载文件不存在"
+                self.logger.error(f"{error_msg}: {download_file}")
+                self.error_logger.log_error(error_msg, context={"文件路径": download_file})
                 return None
-            
+
             if not os.path.exists(template_file):
-                self.logger.error(f"模板文件不存在: {template_file}")
+                error_msg = f"模板文件不存在"
+                self.logger.error(f"{error_msg}: {template_file}")
+                self.error_logger.log_error(error_msg, context={"文件路径": template_file})
                 return None
-            
-            # 创建输出目录
-            if output_dir is None:
-                output_dir = tempfile.mkdtemp(prefix="diff_orb_results_")
-            else:
-                os.makedirs(output_dir, exist_ok=True)
-            
+
             self.logger.info(f"开始diff操作:")
             self.logger.info(f"  参考文件 (模板): {os.path.basename(template_file)}")
             self.logger.info(f"  待比较文件 (下载): {os.path.basename(download_file)}")
@@ -207,11 +233,21 @@ class DiffOrbIntegration:
                 )
 
             if not alignment_result or not alignment_result.get('alignment_success'):
-                self.logger.error("图像对齐失败")
+                error_msg = "图像对齐失败"
+                self.logger.error(error_msg)
+                self.error_logger.log_error(error_msg, context={
+                    "对齐方式": alignment_method,
+                    "参考文件": os.path.basename(processed_template_file),
+                    "待比较文件": os.path.basename(processed_download_file)
+                })
                 return None
+
+            self.error_logger.log_info("图像对齐成功")
 
             # 步骤2: 使用已对齐文件进行差异比较
             self.logger.info("步骤2: 执行已对齐文件差异比较...")
+            self.error_logger.log_info("开始差异比较")
+
             result = self.aligned_comparator.process_aligned_fits_comparison(
                 output_dir,  # 输入目录（包含对齐后的文件）
                 output_dir,  # 输出目录（同一目录）
@@ -220,11 +256,15 @@ class DiffOrbIntegration:
                 percentile_low=percentile_low,  # 传递百分位数参数
                 fast_mode=fast_mode  # 传递快速模式参数
             )
-            
+
             if result:
                 self.logger.info(f"diff操作成功完成")
                 self.logger.info(f"  对齐成功: {result.get('alignment_success', False)}")
                 self.logger.info(f"  检测到新亮点: {result.get('new_bright_spots', 0)} 个")
+
+                self.error_logger.log_info("diff操作成功完成", {
+                    "检测到新亮点": result.get('new_bright_spots', 0)
+                })
 
                 # 快速模式：删除中间文件
                 if fast_mode:
@@ -232,6 +272,9 @@ class DiffOrbIntegration:
 
                 # 收集输出文件信息
                 output_files = self._collect_output_files(output_dir)
+
+                # 关闭错误日志记录器
+                self.error_logger.close()
 
                 return {
                     'success': True,
@@ -241,14 +284,25 @@ class DiffOrbIntegration:
                     'output_files': output_files,
                     'reference_file': template_file,
                     'compared_file': download_file,
-                    'fast_mode': fast_mode
+                    'fast_mode': fast_mode,
+                    'error_log_file': error_log_path
                 }
             else:
-                self.logger.error("diff操作失败")
+                error_msg = "diff操作失败"
+                self.logger.error(error_msg)
+                self.error_logger.log_error(error_msg)
+                self.error_logger.close()
                 return None
-                
+
         except Exception as e:
-            self.logger.error(f"执行diff操作时出错: {str(e)}")
+            error_msg = "执行diff操作时出错"
+            self.logger.error(f"{error_msg}: {str(e)}")
+            self.error_logger.log_error(error_msg, exception=e, context={
+                "参考文件": template_file,
+                "待比较文件": download_file,
+                "输出目录": output_dir
+            })
+            self.error_logger.close()
             return None
     
     def _cleanup_intermediate_files(self, output_dir: str, template_file: str, download_file: str):
