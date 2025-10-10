@@ -182,6 +182,10 @@ class FitsImageViewer:
                                      command=self._execute_astap, state="disabled")
         self.astap_button.pack(side=tk.LEFT, padx=(5, 0))
 
+        # diff进度标签（放在第二行右侧）
+        self.diff_progress_label = ttk.Label(toolbar_frame2, text="", foreground="blue", font=("Arial", 9))
+        self.diff_progress_label.pack(side=tk.RIGHT, padx=(10, 0))
+
         # 第三行工具栏
         toolbar_frame3 = ttk.Frame(toolbar_container)
         toolbar_frame3.pack(fill=tk.X, pady=(2, 0))
@@ -1115,7 +1119,7 @@ class FitsImageViewer:
             return False
 
     def _execute_diff(self):
-        """执行diff操作"""
+        """执行diff操作（启动后台线程）"""
         if not self.selected_file_path:
             messagebox.showwarning("警告", "请先选择一个FITS文件")
             return
@@ -1134,18 +1138,35 @@ class FitsImageViewer:
             messagebox.showwarning("警告", "只能对下载目录中的文件执行diff操作")
             return
 
+        # 禁用按钮并显示进度
+        self.diff_button.config(state="disabled", text="处理中...")
+        self.diff_progress_label.config(text="正在准备Diff操作...", foreground="blue")
+
+        # 在后台线程中执行diff操作
+        import threading
+        thread = threading.Thread(target=self._execute_diff_thread, args=(template_dir,))
+        thread.daemon = True
+        thread.start()
+
+    def _execute_diff_thread(self, template_dir):
+        """在后台线程中执行diff操作"""
         try:
-            # 禁用按钮
-            self.diff_button.config(state="disabled", text="处理中...")
-            self.parent_frame.update()  # 更新界面显示
+            # 更新进度：查找模板文件
+            self.parent_frame.after(0, lambda: self.diff_progress_label.config(
+                text="正在查找模板文件...", foreground="blue"))
 
             # 查找对应的模板文件
             template_file = self.diff_orb.find_template_file(self.selected_file_path, template_dir)
 
             if not template_file:
-                messagebox.showwarning("警告", "未找到匹配的模板文件")
-                self.diff_button.config(state="normal", text="执行Diff")
+                self.parent_frame.after(0, lambda: messagebox.showwarning("警告", "未找到匹配的模板文件"))
+                self.parent_frame.after(0, lambda: self.diff_button.config(state="normal", text="执行Diff"))
+                self.parent_frame.after(0, lambda: self.diff_progress_label.config(text="", foreground="black"))
                 return
+
+            # 更新进度：准备输出目录
+            self.parent_frame.after(0, lambda: self.diff_progress_label.config(
+                text="正在准备输出目录...", foreground="blue"))
 
             # 获取输出目录
             output_dir = self._get_diff_output_directory()
@@ -1159,9 +1180,13 @@ class FitsImageViewer:
                 self.logger.info("跳过diff操作，直接显示已有结果")
                 self.logger.info("=" * 60)
 
+                # 更新进度：显示已有结果
+                self.parent_frame.after(0, lambda: self.diff_progress_label.config(
+                    text="已有处理结果，直接显示", foreground="green"))
+
                 # 直接显示已有结果，不弹窗询问
                 self.last_output_dir = output_dir
-                self.open_output_dir_btn.config(state="normal")
+                self.parent_frame.after(0, lambda: self.open_output_dir_btn.config(state="normal"))
 
                 # 尝试显示第一个检测目标的cutout图片
                 cutout_displayed = self._display_first_detection_cutouts(output_dir)
@@ -1171,7 +1196,8 @@ class FitsImageViewer:
                     self.logger.info("未找到cutout图片")
 
                 self.logger.info(f"输出目录: {output_dir} (点击'打开输出目录'按钮查看)")
-                self.diff_button.config(state="normal", text="执行Diff")
+                self.parent_frame.after(0, lambda: self.diff_button.config(state="normal", text="执行Diff"))
+                self.parent_frame.after(0, lambda: self.diff_progress_label.config(text="", foreground="black"))
                 return
 
             # 获取选择的降噪方式
@@ -1215,6 +1241,11 @@ class FitsImageViewer:
             fast_mode = self.fast_mode_var.get()
             self.logger.info(f"快速模式: {'是' if fast_mode else '否'}")
 
+            # 更新进度：开始执行Diff
+            filename = os.path.basename(self.selected_file_path)
+            self.parent_frame.after(0, lambda f=filename: self.diff_progress_label.config(
+                text=f"正在执行Diff: {f}", foreground="blue"))
+
             # 执行diff操作
             result = self.diff_orb.process_diff(self.selected_file_path, template_file, output_dir,
                                               noise_methods=noise_methods, alignment_method=alignment_method,
@@ -1224,6 +1255,11 @@ class FitsImageViewer:
                                               fast_mode=fast_mode)
 
             if result and result.get('success'):
+                # 更新进度：处理完成
+                new_spots = result.get('new_bright_spots', 0)
+                self.parent_frame.after(0, lambda n=new_spots: self.diff_progress_label.config(
+                    text=f"✓ Diff完成 - 检测到 {n} 个新亮点", foreground="green"))
+
                 # 记录结果摘要到日志
                 summary = self.diff_orb.get_diff_summary(result)
                 self.logger.info("=" * 60)
@@ -1248,18 +1284,23 @@ class FitsImageViewer:
 
                 # 保存输出目录路径并启用按钮
                 self.last_output_dir = output_dir
-                self.open_output_dir_btn.config(state="normal")
+                self.parent_frame.after(0, lambda: self.open_output_dir_btn.config(state="normal"))
                 self.logger.info(f"输出目录: {output_dir} (点击'打开输出目录'按钮查看)")
             else:
                 self.logger.error("Diff操作失败")
-                messagebox.showerror("错误", "Diff操作失败")
+                self.parent_frame.after(0, lambda: self.diff_progress_label.config(
+                    text="✗ Diff操作失败", foreground="red"))
+                self.parent_frame.after(0, lambda: messagebox.showerror("错误", "Diff操作失败"))
 
         except Exception as e:
             self.logger.error(f"执行diff操作时出错: {str(e)}")
-            messagebox.showerror("错误", f"执行diff操作时出错: {str(e)}")
+            error_msg = str(e)
+            self.parent_frame.after(0, lambda msg=error_msg: self.diff_progress_label.config(
+                text=f"✗ 错误: {msg}", foreground="red"))
+            self.parent_frame.after(0, lambda msg=error_msg: messagebox.showerror("错误", f"执行diff操作时出错: {msg}"))
         finally:
             # 恢复按钮状态
-            self.diff_button.config(state="normal", text="执行Diff")
+            self.parent_frame.after(0, lambda: self.diff_button.config(state="normal", text="执行Diff"))
 
     def _get_diff_output_directory(self) -> str:
         """获取diff操作的输出目录"""
