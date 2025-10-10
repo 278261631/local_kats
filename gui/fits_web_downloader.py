@@ -105,7 +105,7 @@ class FitsWebDownloaderGUI:
     def _create_scan_widgets(self):
         """创建扫描和下载界面"""
         # URL构建器区域
-        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process, self._open_batch_output_directory, self._full_day_batch_process)
+        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process, self._open_batch_output_directory, self._full_day_batch_process, self._full_day_all_systems_batch_process)
 
         # 保存批量处理的输出根目录
         self.last_batch_output_root = None
@@ -2243,6 +2243,205 @@ Diff统计:
                         f, BatchStatusWidget.STATUS_DIFF_FAILED, err))
 
         self._log(f"\nDiff处理完成: 成功 {success_count} 个, 失败 {fail_count} 个")
+
+    def _full_day_all_systems_batch_process(self):
+        """全天全系统下载diff - 对所选日期的所有系统的所有天区的所有文件执行批量下载diff操作"""
+        # 获取当前选择的日期
+        selections = self.url_builder.get_current_selections()
+        date = selections.get('date', '').strip()
+
+        # 验证必要参数
+        if not date:
+            messagebox.showwarning("警告", "请选择日期")
+            return
+
+        # 检查必要的目录配置
+        base_download_dir = self.download_dir_var.get().strip()
+        template_dir = self.template_dir_var.get().strip()
+        diff_output_dir = self.diff_output_dir_var.get().strip()
+
+        if not base_download_dir:
+            messagebox.showwarning("警告", "请配置下载根目录")
+            return
+
+        if not template_dir:
+            messagebox.showwarning("警告", "请配置模板文件目录")
+            return
+
+        if not diff_output_dir:
+            messagebox.showwarning("警告", "请配置Diff输出根目录")
+            return
+
+        # 获取所有望远镜系统
+        all_telescopes = self.config_manager.get_telescope_names()
+        if not all_telescopes:
+            messagebox.showwarning("警告", "未找到可用的望远镜系统")
+            return
+
+        # 确认操作
+        msg = f"将对以下配置执行全天全系统下载diff操作:\n\n"
+        msg += f"日期: {date}\n"
+        msg += f"系统数量: {len(all_telescopes)}\n"
+        msg += f"系统列表: {', '.join(all_telescopes)}\n\n"
+        msg += f"这将扫描并处理所有系统的所有天区的所有FITS文件，\n"
+        msg += f"可能需要非常长的时间。\n\n"
+        msg += f"是否继续？"
+
+        if not messagebox.askyesno("确认", msg):
+            return
+
+        # 在新线程中执行
+        thread = threading.Thread(target=self._full_day_all_systems_batch_process_thread, args=(date, all_telescopes))
+        thread.daemon = True
+        thread.start()
+
+    def _full_day_all_systems_batch_process_thread(self, date, all_telescopes):
+        """全天全系统批量处理线程"""
+        try:
+            # 禁用按钮
+            self.root.after(0, lambda: self.url_builder.set_batch_button_state("disabled"))
+            self.root.after(0, lambda: self.url_builder.set_full_day_batch_button_state("disabled"))
+            self.root.after(0, lambda: self.url_builder.set_full_day_all_systems_batch_button_state("disabled"))
+            self.root.after(0, lambda: self.url_builder.set_scan_button_state("disabled"))
+            self.root.after(0, lambda: self.download_button.config(state="disabled"))
+
+            self._log("=" * 60)
+            self._log("开始全天全系统下载diff处理")
+            self._log(f"日期: {date}")
+            self._log(f"系统数量: {len(all_telescopes)}")
+            self._log(f"系统列表: {', '.join(all_telescopes)}")
+            self._log("=" * 60)
+
+            # 切换到批量处理状态标签页
+            self.root.after(0, lambda: self.notebook.select(1))
+
+            # 清空批量状态组件
+            self.root.after(0, lambda: self.batch_status_widget.clear())
+
+            # 遍历所有系统
+            total_systems = len(all_telescopes)
+            total_files_processed = 0
+
+            for system_idx, tel_name in enumerate(all_telescopes, 1):
+                self._log(f"\n{'=' * 60}")
+                self._log(f"[{system_idx}/{total_systems}] 处理系统: {tel_name}")
+                self._log(f"{'=' * 60}")
+                self.root.after(0, lambda s=system_idx, t=total_systems, n=tel_name:
+                               self.status_label.config(text=f"正在处理系统 [{s}/{t}]: {n}"))
+
+                # 构建该系统的基础URL并扫描天区
+                url_template = self.config_manager.get_url_template()
+                format_params = {
+                    'tel_name': tel_name,
+                    'date': date,
+                    'k_number': ''
+                }
+
+                # 如果模板需要年份，添加年份参数
+                if '{year_of_date}' in url_template:
+                    try:
+                        year_of_date = date[:4] if len(date) >= 4 else datetime.now().strftime('%Y')
+                        format_params['year_of_date'] = year_of_date
+                    except Exception:
+                        format_params['year_of_date'] = datetime.now().strftime('%Y')
+
+                base_url = url_template.format(**format_params).rstrip('/')
+
+                # 扫描该系统的可用天区
+                self._log(f"扫描天区: {base_url}")
+                try:
+                    from url_builder import RegionScanner
+                    region_scanner = RegionScanner()
+                    available_regions = region_scanner.scan_available_regions(base_url)
+
+                    if not available_regions:
+                        self._log(f"  未找到可用天区，跳过系统 {tel_name}")
+                        continue
+
+                    self._log(f"  找到 {len(available_regions)} 个天区: {', '.join(available_regions)}")
+
+                    # 收集该系统所有天区的所有文件
+                    system_files_to_process = []
+
+                    for region_idx, k_number in enumerate(available_regions, 1):
+                        self._log(f"\n  [{region_idx}/{len(available_regions)}] 扫描天区: {k_number}")
+                        self.root.after(0, lambda s=system_idx, t=total_systems, n=tel_name, r=region_idx, rt=len(available_regions), k=k_number:
+                                       self.status_label.config(text=f"系统 [{s}/{t}] {n} - 天区 [{r}/{rt}]: {k}"))
+
+                        # 构建该天区的URL
+                        format_params['k_number'] = k_number
+                        region_url = url_template.format(**format_params)
+
+                        # 扫描该天区的FITS文件
+                        try:
+                            fits_files = self.directory_scanner.scan_directory_listing(region_url)
+                            if not fits_files:
+                                fits_files = self.scanner.scan_fits_files(region_url)
+
+                            self._log(f"    找到 {len(fits_files)} 个文件")
+
+                            # 将文件添加到处理列表
+                            for filename, url, size in fits_files:
+                                system_files_to_process.append((filename, url, tel_name, k_number))
+
+                        except Exception as e:
+                            self._log(f"    扫描失败: {str(e)}")
+                            continue
+
+                    if not system_files_to_process:
+                        self._log(f"\n系统 {tel_name} 未找到任何FITS文件")
+                        continue
+
+                    self._log(f"\n系统 {tel_name} 总共找到 {len(system_files_to_process)} 个文件")
+
+                    # 添加所有文件到状态列表
+                    for filename, url, tel_name_item, k_number in system_files_to_process:
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.add_file(f))
+
+                    # 按天区分组处理
+                    from collections import defaultdict
+                    files_by_region = defaultdict(list)
+                    for filename, url, tel_name_item, k_number in system_files_to_process:
+                        files_by_region[k_number].append((filename, url))
+
+                    # 对每个天区执行批量处理
+                    for region_idx, (k_number, region_files) in enumerate(files_by_region.items(), 1):
+                        self._log(f"\n  处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
+                        self._log(f"  文件数量: {len(region_files)}")
+
+                        # 调用现有的批量处理逻辑
+                        self._batch_process_region(region_files, tel_name, date, k_number)
+
+                    total_files_processed += len(system_files_to_process)
+
+                except Exception as e:
+                    self._log(f"处理系统 {tel_name} 时出错: {str(e)}")
+                    import traceback
+                    self._log(traceback.format_exc())
+                    continue
+
+            self._log("\n" + "=" * 60)
+            self._log("全天全系统下载diff处理完成！")
+            self._log(f"总共处理了 {total_files_processed} 个文件")
+            self._log("=" * 60)
+
+            # 显示完成消息
+            self.root.after(0, lambda: messagebox.showinfo("完成", f"全天全系统下载diff处理完成！\n总共处理了 {total_files_processed} 个文件"))
+
+        except Exception as e:
+            error_msg = f"全天全系统批量处理失败: {str(e)}"
+            self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
+            self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
+        finally:
+            # 重新启用按钮
+            self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
+            self.root.after(0, lambda: self.url_builder.set_full_day_batch_button_state("normal"))
+            self.root.after(0, lambda: self.url_builder.set_full_day_all_systems_batch_button_state("normal"))
+            self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
+            self.root.after(0, lambda: self.download_button.config(state="normal"))
+            self.root.after(0, lambda: self.status_label.config(text="就绪"))
 
     def _on_closing(self):
         """应用程序关闭事件"""
