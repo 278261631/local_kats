@@ -176,13 +176,14 @@ class RegionScanner:
 class URLBuilderFrame:
     """URL构建器界面组件"""
 
-    def __init__(self, parent_frame, config_manager: ConfigManager, on_url_change: Optional[Callable] = None, on_scan_fits: Optional[Callable] = None, on_batch_process: Optional[Callable] = None, on_open_batch_output: Optional[Callable] = None):
+    def __init__(self, parent_frame, config_manager: ConfigManager, on_url_change: Optional[Callable] = None, on_scan_fits: Optional[Callable] = None, on_batch_process: Optional[Callable] = None, on_open_batch_output: Optional[Callable] = None, on_full_day_batch_process: Optional[Callable] = None):
         self.parent_frame = parent_frame
         self.config_manager = config_manager
         self.on_url_change = on_url_change  # URL变化时的回调函数
         self.on_scan_fits = on_scan_fits  # 扫描FITS文件时的回调函数
         self.on_batch_process = on_batch_process  # 批量处理时的回调函数
         self.on_open_batch_output = on_open_batch_output  # 打开批量输出目录时的回调函数
+        self.on_full_day_batch_process = on_full_day_batch_process  # 全天下载diff时的回调函数
 
         self.logger = logging.getLogger(__name__)
 
@@ -293,6 +294,10 @@ class URLBuilderFrame:
         # 批量处理按钮
         self.batch_process_button = ttk.Button(row1, text="批量下载并Diff", command=self._on_batch_process_clicked, state="disabled")
         self.batch_process_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        # 全天下载diff按钮
+        self.full_day_batch_button = ttk.Button(row1, text="全天下载Diff", command=self._on_full_day_batch_clicked, state="disabled")
+        self.full_day_batch_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # 线程数配置
         ttk.Label(row1, text="线程数:").pack(side=tk.LEFT, padx=(10, 2))
@@ -609,9 +614,14 @@ class URLBuilderFrame:
                 foreground="green"
             )
 
+            # 启用全天下载diff按钮
+            self.full_day_batch_button.config(state="normal")
+
             self.logger.info(f"更新天区列表: {regions}")
         else:
             self.region_status_label.config(text="未找到天区", foreground="orange")
+            # 禁用全天下载diff按钮
+            self.full_day_batch_button.config(state="disabled")
 
     def _copy_url(self):
         """复制URL到剪贴板"""
@@ -689,6 +699,11 @@ class URLBuilderFrame:
         if self.on_batch_process:
             self.on_batch_process()
 
+    def _on_full_day_batch_clicked(self):
+        """全天下载diff按钮点击事件"""
+        if self.on_full_day_batch_process:
+            self.on_full_day_batch_process()
+
     def _on_open_batch_output_clicked(self):
         """打开批量输出目录按钮点击事件"""
         if self.on_open_batch_output:
@@ -709,6 +724,11 @@ class URLBuilderFrame:
         if hasattr(self, 'batch_process_button'):
             self.batch_process_button.config(state=state)
 
+    def set_full_day_batch_button_state(self, state: str):
+        """设置全天下载diff按钮状态"""
+        if hasattr(self, 'full_day_batch_button'):
+            self.full_day_batch_button.config(state=state)
+
     def set_open_batch_output_button_state(self, state: str):
         """设置打开批量输出目录按钮状态"""
         if hasattr(self, 'open_batch_output_button'):
@@ -719,6 +739,10 @@ class URLBuilderFrame:
         if hasattr(self, 'thread_count_var'):
             return self.thread_count_var.get()
         return 4  # 默认值
+
+    def get_available_regions(self) -> List[str]:
+        """获取当前可用的天区列表"""
+        return self.available_regions.copy() if self.available_regions else []
 
 
 

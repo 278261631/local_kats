@@ -105,7 +105,7 @@ class FitsWebDownloaderGUI:
     def _create_scan_widgets(self):
         """创建扫描和下载界面"""
         # URL构建器区域
-        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process, self._open_batch_output_directory)
+        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process, self._open_batch_output_directory, self._full_day_batch_process)
 
         # 保存批量处理的输出根目录
         self.last_batch_output_root = None
@@ -1761,6 +1761,488 @@ Diff统计:
     def _get_url_selections(self):
         """获取URL选择参数的回调函数"""
         return self.url_builder.get_current_selections()
+
+    def _full_day_batch_process(self):
+        """全天下载diff - 对所选日期的所有天区的所有文件执行批量下载diff操作"""
+        # 获取当前选择
+        selections = self.url_builder.get_current_selections()
+        tel_name = selections.get('telescope_name', '').strip()
+        date = selections.get('date', '').strip()
+
+        # 验证必要参数
+        if not tel_name:
+            messagebox.showwarning("警告", "请选择望远镜")
+            return
+
+        if not date:
+            messagebox.showwarning("警告", "请选择日期")
+            return
+
+        # 检查必要的目录配置
+        base_download_dir = self.download_dir_var.get().strip()
+        template_dir = self.template_dir_var.get().strip()
+        diff_output_dir = self.diff_output_dir_var.get().strip()
+
+        if not base_download_dir:
+            messagebox.showwarning("警告", "请配置下载根目录")
+            return
+
+        if not template_dir:
+            messagebox.showwarning("警告", "请配置模板文件目录")
+            return
+
+        if not diff_output_dir:
+            messagebox.showwarning("警告", "请配置Diff输出根目录")
+            return
+
+        # 获取可用的天区列表
+        available_regions = self.url_builder.get_available_regions()
+        if not available_regions:
+            # 如果没有天区列表，尝试扫描
+            messagebox.showinfo("提示", "正在扫描可用天区，请稍候...")
+            # 触发天区扫描
+            self.url_builder._auto_scan_regions()
+            # 等待扫描完成后再次获取
+            self.root.after(2000, lambda: self._continue_full_day_batch_process(tel_name, date))
+            return
+
+        # 确认操作
+        msg = f"将对以下配置执行全天下载diff操作:\n\n"
+        msg += f"望远镜: {tel_name}\n"
+        msg += f"日期: {date}\n"
+        msg += f"天区数量: {len(available_regions)}\n"
+        msg += f"天区列表: {', '.join(available_regions)}\n\n"
+        msg += f"这将扫描并处理所有天区的所有FITS文件，可能需要较长时间。\n\n"
+        msg += f"是否继续？"
+
+        if not messagebox.askyesno("确认", msg):
+            return
+
+        # 在新线程中执行
+        thread = threading.Thread(target=self._full_day_batch_process_thread, args=(tel_name, date, available_regions))
+        thread.daemon = True
+        thread.start()
+
+    def _continue_full_day_batch_process(self, tel_name, date):
+        """继续执行全天下载diff（在扫描天区后）"""
+        available_regions = self.url_builder.get_available_regions()
+        if not available_regions:
+            messagebox.showwarning("警告", "未找到可用的天区")
+            return
+
+        # 确认操作
+        msg = f"将对以下配置执行全天下载diff操作:\n\n"
+        msg += f"望远镜: {tel_name}\n"
+        msg += f"日期: {date}\n"
+        msg += f"天区数量: {len(available_regions)}\n"
+        msg += f"天区列表: {', '.join(available_regions)}\n\n"
+        msg += f"这将扫描并处理所有天区的所有FITS文件，可能需要较长时间。\n\n"
+        msg += f"是否继续？"
+
+        if not messagebox.askyesno("确认", msg):
+            return
+
+        # 在新线程中执行
+        thread = threading.Thread(target=self._full_day_batch_process_thread, args=(tel_name, date, available_regions))
+        thread.daemon = True
+        thread.start()
+
+    def _full_day_batch_process_thread(self, tel_name, date, available_regions):
+        """全天批量处理线程"""
+        try:
+            # 禁用按钮
+            self.root.after(0, lambda: self.url_builder.set_batch_button_state("disabled"))
+            self.root.after(0, lambda: self.url_builder.set_full_day_batch_button_state("disabled"))
+            self.root.after(0, lambda: self.url_builder.set_scan_button_state("disabled"))
+            self.root.after(0, lambda: self.download_button.config(state="disabled"))
+
+            self._log("=" * 60)
+            self._log("开始全天下载diff处理")
+            self._log(f"望远镜: {tel_name}")
+            self._log(f"日期: {date}")
+            self._log(f"天区数量: {len(available_regions)}")
+            self._log("=" * 60)
+
+            # 切换到批量处理状态标签页
+            self.root.after(0, lambda: self.notebook.select(1))
+
+            # 收集所有天区的所有文件
+            all_files_to_process = []
+            total_regions = len(available_regions)
+
+            for region_idx, k_number in enumerate(available_regions, 1):
+                self._log(f"\n[{region_idx}/{total_regions}] 正在扫描天区: {k_number}")
+                self.root.after(0, lambda r=region_idx, t=total_regions, k=k_number:
+                               self.status_label.config(text=f"正在扫描天区 [{r}/{t}]: {k}"))
+
+                # 构建该天区的URL
+                url_template = self.config_manager.get_url_template()
+                format_params = {
+                    'tel_name': tel_name,
+                    'date': date,
+                    'k_number': k_number
+                }
+
+                # 如果模板需要年份，添加年份参数
+                if '{year_of_date}' in url_template:
+                    try:
+                        year_of_date = date[:4] if len(date) >= 4 else datetime.now().strftime('%Y')
+                        format_params['year_of_date'] = year_of_date
+                    except Exception:
+                        format_params['year_of_date'] = datetime.now().strftime('%Y')
+
+                region_url = url_template.format(**format_params)
+
+                # 扫描该天区的FITS文件
+                try:
+                    fits_files = self.directory_scanner.scan_directory_listing(region_url)
+                    if not fits_files:
+                        # 如果目录扫描失败，尝试通用扫描器
+                        fits_files = self.scanner.scan_fits_files(region_url)
+
+                    self._log(f"  找到 {len(fits_files)} 个文件")
+
+                    # 将文件添加到处理列表，同时记录天区信息
+                    for filename, url, size in fits_files:
+                        all_files_to_process.append((filename, url, k_number))
+
+                except Exception as e:
+                    self._log(f"  扫描失败: {str(e)}")
+                    continue
+
+            if not all_files_to_process:
+                self._log("\n未找到任何FITS文件")
+                self.root.after(0, lambda: messagebox.showwarning("警告", "未找到任何FITS文件"))
+                return
+
+            self._log(f"\n总共找到 {len(all_files_to_process)} 个文件")
+            self._log("=" * 60)
+
+            # 准备批量处理
+            # 清空并初始化批量状态组件
+            self.root.after(0, lambda: self.batch_status_widget.clear())
+            self.root.after(0, lambda: self.batch_progress_label.config(
+                text=f"正在准备批量处理 {len(all_files_to_process)} 个文件..."))
+
+            # 添加所有文件到状态列表
+            for filename, url, k_number in all_files_to_process:
+                self.root.after(0, lambda f=filename: self.batch_status_widget.add_file(f))
+
+            # 按天区分组处理
+            from collections import defaultdict
+            files_by_region = defaultdict(list)
+            for filename, url, k_number in all_files_to_process:
+                files_by_region[k_number].append((filename, url))
+
+            # 对每个天区执行批量处理
+            for region_idx, (k_number, region_files) in enumerate(files_by_region.items(), 1):
+                self._log(f"\n处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
+                self._log(f"文件数量: {len(region_files)}")
+
+                # 调用现有的批量处理线程函数
+                # 注意：这里直接调用内部处理逻辑，而不是启动新线程
+                self._batch_process_region(region_files, tel_name, date, k_number)
+
+            self._log("\n" + "=" * 60)
+            self._log("全天下载diff处理完成！")
+            self._log("=" * 60)
+
+            # 显示完成消息
+            self.root.after(0, lambda: messagebox.showinfo("完成", "全天下载diff处理完成！"))
+
+        except Exception as e:
+            error_msg = f"全天批量处理失败: {str(e)}"
+            self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
+            self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
+        finally:
+            # 重新启用按钮
+            self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
+            self.root.after(0, lambda: self.url_builder.set_full_day_batch_button_state("normal"))
+            self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
+            self.root.after(0, lambda: self.download_button.config(state="normal"))
+            self.root.after(0, lambda: self.status_label.config(text="就绪"))
+
+    def _batch_process_region(self, selected_files, tel_name, date, k_number):
+        """
+        处理单个天区的批量下载和diff操作
+        这个方法复用现有的批量处理逻辑
+
+        Args:
+            selected_files: [(filename, url), ...] 文件列表
+            tel_name: 望远镜名称
+            date: 日期
+            k_number: 天区编号
+        """
+        try:
+            # 获取线程数配置
+            thread_count = self.url_builder.get_thread_count()
+
+            # 构建下载目录
+            base_download_dir = self.download_dir_var.get().strip()
+            actual_download_dir = os.path.join(base_download_dir, tel_name, date, k_number)
+            os.makedirs(actual_download_dir, exist_ok=True)
+
+            self._log(f"下载目录: {actual_download_dir}")
+
+            # 保存批量输出根目录
+            base_output_dir = self.diff_output_dir_var.get().strip()
+            self.last_batch_output_root = os.path.join(base_output_dir, tel_name, date, k_number)
+
+            # 步骤1: 下载文件（启用ASTAP处理）
+            self._log("\n步骤1: 下载文件（启用ASTAP处理）")
+            self._log("-" * 60)
+            self.root.after(0, lambda: self.status_label.config(text=f"正在下载 {k_number} 的文件..."))
+
+            # 创建下载器（强制启用ASTAP）
+            self.downloader = FitsDownloader(
+                max_workers=self.max_workers_var.get(),
+                retry_times=self.retry_times_var.get(),
+                timeout=self.timeout_var.get(),
+                enable_astap=True,
+                astap_config_path="config/url_config.json"
+            )
+
+            # 准备URL列表
+            urls = [url for filename, url in selected_files]
+
+            # 执行下载
+            self._log(f"开始下载 {len(urls)} 个文件...")
+
+            # 更新所有文件状态为下载中
+            for filename, url in selected_files:
+                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                    f, BatchStatusWidget.STATUS_DOWNLOADING))
+
+            self._download_with_progress(urls, actual_download_dir)
+            self._log("下载完成")
+
+            # 步骤1.5: 检查WCS信息并准备文件列表
+            self._log("\n步骤1.5: 检查WCS信息")
+            self._log("-" * 60)
+
+            # 获取下载的文件列表
+            downloaded_files = []
+            for filename, url in selected_files:
+                file_path = os.path.join(actual_download_dir, filename)
+                if os.path.exists(file_path):
+                    downloaded_files.append(file_path)
+                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_DOWNLOAD_SUCCESS))
+                else:
+                    self._log(f"警告: 文件未找到 {filename}")
+                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_DOWNLOAD_FAILED, "文件未找到"))
+
+            self._log(f"找到 {len(downloaded_files)} 个已下载的文件")
+
+            # 检查每个文件的WCS信息
+            files_with_wcs = []
+            files_without_wcs = []
+
+            for file_path in downloaded_files:
+                filename = os.path.basename(file_path)
+                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                    f, BatchStatusWidget.STATUS_WCS_CHECKING))
+
+                try:
+                    from astropy.io import fits as astropy_fits
+                    with astropy_fits.open(file_path) as hdul:
+                        header = hdul[0].header
+                        has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
+
+                    if has_wcs:
+                        files_with_wcs.append(file_path)
+                        self._log(f"  {filename}: ✓ 已有WCS信息")
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_WCS_FOUND))
+                    else:
+                        files_without_wcs.append(file_path)
+                        self._log(f"  {filename}: ✗ 缺少WCS信息")
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_WCS_MISSING))
+                except Exception as e:
+                    files_without_wcs.append(file_path)
+                    self._log(f"  {filename}: 检查WCS时出错: {str(e)}")
+                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_WCS_MISSING, f"错误: {str(e)}"))
+
+            self._log(f"WCS检查完成: {len(files_with_wcs)} 个有WCS, {len(files_without_wcs)} 个无WCS")
+
+            # 对没有WCS信息的文件执行ASTAP处理
+            if files_without_wcs:
+                self._log(f"\n对 {len(files_without_wcs)} 个没有WCS信息的文件执行ASTAP处理...")
+
+                if self.fits_viewer.astap_processor:
+                    for file_path in files_without_wcs:
+                        filename = os.path.basename(file_path)
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
+
+                        try:
+                            self._log(f"  {filename}: 执行ASTAP处理...")
+                            success = self.fits_viewer.astap_processor.process_fits_file(file_path)
+
+                            if success:
+                                from astropy.io import fits as astropy_fits
+                                with astropy_fits.open(file_path) as hdul:
+                                    header = hdul[0].header
+                                    has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
+
+                                if has_wcs:
+                                    files_with_wcs.append(file_path)
+                                    self._log(f"    ✓ ASTAP处理成功，已添加WCS信息")
+                                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                        f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
+                                else:
+                                    self._log(f"    ✗ ASTAP处理完成但未添加WCS信息")
+                                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                        f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
+                            else:
+                                self._log(f"    ✗ ASTAP处理失败")
+                                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                    f, BatchStatusWidget.STATUS_ASTAP_FAILED))
+                        except Exception as e:
+                            self._log(f"    ✗ ASTAP处理出错: {str(e)}")
+                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, str(e)))
+
+                    self._log(f"ASTAP处理完成，现在共有 {len(files_with_wcs)} 个文件包含WCS信息")
+                else:
+                    self._log("警告: ASTAP处理器不可用，无法添加WCS信息")
+
+            if not files_with_wcs:
+                self._log("没有包含WCS信息的文件，跳过该天区")
+                return
+
+            # 继续执行diff操作（调用现有的diff处理逻辑）
+            self._execute_diff_for_files(files_with_wcs, thread_count)
+
+        except Exception as e:
+            self._log(f"处理天区 {k_number} 时出错: {str(e)}")
+            import traceback
+            self._log(traceback.format_exc())
+
+    def _execute_diff_for_files(self, files_with_wcs, thread_count):
+        """
+        对文件列表执行diff操作
+
+        Args:
+            files_with_wcs: 包含WCS信息的文件路径列表
+            thread_count: 线程数
+        """
+        # 步骤2: 执行Diff操作
+        self._log("\n步骤2: 执行Diff操作")
+        self._log("-" * 60)
+        self.root.after(0, lambda: self.status_label.config(text="正在执行Diff操作..."))
+
+        success_count = 0
+        fail_count = 0
+
+        template_dir = self.template_dir_var.get().strip()
+
+        # 获取fits_viewer的配置参数
+        noise_methods = []
+        if self.fits_viewer.outlier_var.get():
+            noise_methods.append('outlier')
+        if self.fits_viewer.hot_cold_var.get():
+            noise_methods.append('hot_cold')
+        if self.fits_viewer.adaptive_median_var.get():
+            noise_methods.append('adaptive_median')
+
+        alignment_method = self.fits_viewer.alignment_var.get()
+        remove_bright_lines = self.fits_viewer.remove_lines_var.get()
+        stretch_method = self.fits_viewer.stretch_method_var.get()
+        fast_mode = self.fits_viewer.fast_mode_var.get()
+
+        # 获取百分位数参数
+        percentile_low = 99.95
+        if stretch_method == 'percentile':
+            try:
+                percentile_low = float(self.fits_viewer.percentile_var.get())
+            except:
+                percentile_low = 99.95
+
+        self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}")
+        self._log(f"使用 {thread_count} 个线程并行处理")
+
+        # 使用线程池并行处理
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+
+        # 创建线程锁用于更新计数器
+        counter_lock = threading.Lock()
+        completed_count = 0
+
+        # 创建线程池
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            # 提交所有任务
+            future_to_file = {}
+            for download_file in files_with_wcs:
+                filename = os.path.basename(download_file)
+                # 更新状态为Diff处理中
+                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                    f, BatchStatusWidget.STATUS_DIFF_PROCESSING))
+
+                future = executor.submit(
+                    self._process_single_diff,
+                    download_file, template_dir, noise_methods, alignment_method,
+                    remove_bright_lines, stretch_method, percentile_low, fast_mode
+                )
+                future_to_file[future] = download_file
+
+            # 处理完成的任务
+            for future in as_completed(future_to_file):
+                download_file = future_to_file[future]
+                filename = os.path.basename(download_file)
+
+                with counter_lock:
+                    completed_count += 1
+                    current_completed = completed_count
+
+                # 更新进度显示
+                progress_text = f"Diff处理中 ({current_completed}/{len(files_with_wcs)}): 并行处理中..."
+                self.root.after(0, lambda t=progress_text: self.batch_progress_label.config(text=t))
+
+                try:
+                    result_dict = future.result()
+
+                    # 记录日志
+                    self._log(f"\n[{current_completed}/{len(files_with_wcs)}] {filename}")
+
+                    if result_dict['success']:
+                        if result_dict.get('skipped'):
+                            # 跳过的文件
+                            success_count += 1
+                            self._log(f"  ⊙ 已存在处理结果，跳过")
+                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_DIFF_SKIPPED, "已有结果"))
+                        else:
+                            # 成功处理
+                            success_count += 1
+                            new_spots = result_dict['new_spots']
+                            self._log(f"  ✓ 成功 - 检测到 {new_spots} 个新亮点")
+                            self.root.after(0, lambda f=filename, n=new_spots: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_DIFF_SUCCESS, f"{n}个亮点"))
+                    else:
+                        # 失败
+                        fail_count += 1
+                        self._log(f"  ✗ {result_dict['message']}")
+                        self.root.after(0, lambda f=filename, msg=result_dict['message']: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_FAILED, msg))
+
+                    # 更新统计信息
+                    stats_text = f"已完成: {current_completed}/{len(files_with_wcs)} | 成功: {success_count} | 失败: {fail_count}"
+                    self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
+
+                except Exception as e:
+                    fail_count += 1
+                    self._log(f"  ✗ 处理异常: {str(e)}")
+                    self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_DIFF_FAILED, err))
+
+        self._log(f"\nDiff处理完成: 成功 {success_count} 个, 失败 {fail_count} 个")
 
     def _on_closing(self):
         """应用程序关闭事件"""
