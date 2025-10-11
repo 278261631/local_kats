@@ -36,11 +36,12 @@ except ImportError:
 class FitsImageViewer:
     """FITS图像查看器"""
 
-    def __init__(self, parent_frame, get_download_dir_callback: Optional[Callable] = None,
+    def __init__(self, parent_frame, config_manager=None, get_download_dir_callback: Optional[Callable] = None,
                  get_template_dir_callback: Optional[Callable] = None,
                  get_diff_output_dir_callback: Optional[Callable] = None,
                  get_url_selections_callback: Optional[Callable] = None):
         self.parent_frame = parent_frame
+        self.config_manager = config_manager
         self.current_fits_data = None
         self.current_header = None
         self.current_file_path = None
@@ -86,6 +87,12 @@ class FitsImageViewer:
 
         # 创建界面
         self._create_widgets()
+
+        # 从配置文件加载批量处理参数到控件
+        self._load_batch_settings()
+
+        # 绑定控件变化事件，自动保存到配置文件
+        self._bind_batch_settings_events()
 
         # 延迟执行首次刷新（确保界面完全创建后）
         self.parent_frame.after(100, self._first_time_refresh)
@@ -371,6 +378,164 @@ class FitsImageViewer:
                                               command=self._open_last_output_directory,
                                               state="disabled")
         self.open_output_dir_btn.pack(side=tk.LEFT, padx=(0, 0))
+
+    def _load_batch_settings(self):
+        """从配置文件加载批量处理参数到控件"""
+        if not self.config_manager:
+            return
+
+        try:
+            batch_settings = self.config_manager.get_batch_process_settings()
+
+            # 降噪方式
+            noise_method = batch_settings.get('noise_method', 'median')
+            # 重置所有降噪选项
+            self.outlier_var.set(False)
+            self.hot_cold_var.set(False)
+            self.adaptive_median_var.set(False)
+
+            if noise_method == 'median':
+                self.adaptive_median_var.set(True)
+            elif noise_method == 'gaussian':
+                self.outlier_var.set(True)
+            # 如果是'none'，所有选项都不选中
+
+            # 对齐方式
+            alignment_method = batch_settings.get('alignment_method', 'orb')
+            if alignment_method == 'orb':
+                self.alignment_var.set('rigid')
+            elif alignment_method == 'ecc':
+                self.alignment_var.set('wcs')
+            else:
+                self.alignment_var.set('rigid')
+
+            # 去除亮线
+            remove_bright_lines = batch_settings.get('remove_bright_lines', True)
+            self.remove_lines_var.set(remove_bright_lines)
+
+            # 快速模式
+            fast_mode = batch_settings.get('fast_mode', True)
+            self.fast_mode_var.set(fast_mode)
+
+            # 拉伸方法
+            stretch_method = batch_settings.get('stretch_method', 'percentile')
+            if stretch_method == 'percentile':
+                self.stretch_method_var.set('percentile')
+            elif stretch_method == 'minmax':
+                self.stretch_method_var.set('peak')
+            elif stretch_method == 'asinh':
+                self.stretch_method_var.set('peak')
+            else:
+                self.stretch_method_var.set('percentile')
+
+            # 百分位参数
+            percentile_low = batch_settings.get('percentile_low', 99.95)
+            self.percentile_var.set(str(percentile_low))
+
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%")
+
+        except Exception as e:
+            self.logger.error(f"加载批量处理参数失败: {str(e)}")
+
+    def _bind_batch_settings_events(self):
+        """绑定批量处理参数控件的变化事件"""
+        if not self.config_manager:
+            return
+
+        try:
+            # 绑定降噪方式复选框
+            self.outlier_var.trace('w', self._on_batch_settings_change)
+            self.hot_cold_var.trace('w', self._on_batch_settings_change)
+            self.adaptive_median_var.trace('w', self._on_batch_settings_change)
+
+            # 绑定对齐方式单选框
+            self.alignment_var.trace('w', self._on_batch_settings_change)
+
+            # 绑定去除亮线复选框
+            self.remove_lines_var.trace('w', self._on_batch_settings_change)
+
+            # 绑定快速模式复选框
+            self.fast_mode_var.trace('w', self._on_batch_settings_change)
+
+            # 绑定拉伸方法单选框
+            self.stretch_method_var.trace('w', self._on_batch_settings_change)
+
+            # 绑定百分位输入框（使用延迟保存，避免每次按键都保存）
+            self.percentile_var.trace('w', self._on_percentile_change)
+
+            self.logger.info("批量处理参数控件事件已绑定")
+
+        except Exception as e:
+            self.logger.error(f"绑定批量处理参数事件失败: {str(e)}")
+
+    def _on_batch_settings_change(self, *args):
+        """批量处理参数变化时保存到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            # 确定降噪方式
+            noise_method = 'none'
+            if self.adaptive_median_var.get():
+                noise_method = 'median'
+            elif self.outlier_var.get():
+                noise_method = 'gaussian'
+            elif self.hot_cold_var.get():
+                noise_method = 'gaussian'  # hot_cold也映射到gaussian
+
+            # 确定对齐方式
+            alignment_method = 'orb'
+            if self.alignment_var.get() == 'rigid':
+                alignment_method = 'orb'
+            elif self.alignment_var.get() == 'wcs':
+                alignment_method = 'ecc'
+
+            # 确定拉伸方法
+            stretch_method = 'percentile'
+            if self.stretch_method_var.get() == 'peak':
+                stretch_method = 'minmax'
+            elif self.stretch_method_var.get() == 'percentile':
+                stretch_method = 'percentile'
+
+            # 保存到配置文件
+            self.config_manager.update_batch_process_settings(
+                noise_method=noise_method,
+                alignment_method=alignment_method,
+                remove_bright_lines=self.remove_lines_var.get(),
+                fast_mode=self.fast_mode_var.get(),
+                stretch_method=stretch_method
+            )
+
+            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}")
+
+        except Exception as e:
+            self.logger.error(f"保存批量处理参数失败: {str(e)}")
+
+    def _on_percentile_change(self, *args):
+        """百分位参数变化时保存到配置文件（延迟保存）"""
+        if not self.config_manager:
+            return
+
+        # 取消之前的延迟保存任务
+        if hasattr(self, '_percentile_save_timer'):
+            self.parent_frame.after_cancel(self._percentile_save_timer)
+
+        # 设置新的延迟保存任务（1秒后保存）
+        self._percentile_save_timer = self.parent_frame.after(1000, self._save_percentile)
+
+    def _save_percentile(self):
+        """保存百分位参数到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            percentile_low = float(self.percentile_var.get())
+            self.config_manager.update_batch_process_settings(percentile_low=percentile_low)
+            self.logger.info(f"百分位参数已保存: {percentile_low}%")
+        except ValueError:
+            self.logger.warning(f"无效的百分位值: {self.percentile_var.get()}")
+        except Exception as e:
+            self.logger.error(f"保存百分位参数失败: {str(e)}")
 
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""

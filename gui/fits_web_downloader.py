@@ -220,7 +220,9 @@ class FitsWebDownloaderGUI:
 
         ttk.Label(params_frame, text="并发数:").pack(side=tk.LEFT)
         self.max_workers_var = tk.IntVar(value=1)
-        ttk.Spinbox(params_frame, from_=1, to=3, textvariable=self.max_workers_var, width=5).pack(side=tk.LEFT, padx=(5, 15))
+        self.max_workers_spinbox = ttk.Spinbox(params_frame, from_=1, to=1, textvariable=self.max_workers_var, width=5, state="disabled")
+        self.max_workers_spinbox.pack(side=tk.LEFT, padx=(5, 5))
+        ttk.Label(params_frame, text="(已锁定)", foreground="gray").pack(side=tk.LEFT, padx=(0, 15))
 
         ttk.Label(params_frame, text="重试次数:").pack(side=tk.LEFT)
         self.retry_times_var = tk.IntVar(value=3)
@@ -263,9 +265,10 @@ class FitsWebDownloaderGUI:
         ttk.Button(file_frame, text="从下载目录选择", command=self._select_from_download_dir).pack(side=tk.LEFT)
         ttk.Button(file_frame, text="选择其他FITS文件", command=self._select_fits_file).pack(side=tk.LEFT, padx=(10, 0))
 
-        # 创建FITS查看器，传递回调函数
+        # 创建FITS查看器，传递配置管理器和回调函数
         self.fits_viewer = FitsImageViewer(
             self.viewer_frame,
+            config_manager=self.config_manager,
             get_download_dir_callback=self._get_download_dir,
             get_template_dir_callback=self._get_template_dir,
             get_diff_output_dir_callback=self._get_diff_output_dir,
@@ -339,9 +342,15 @@ class FitsWebDownloaderGUI:
         try:
             # 加载下载设置
             download_settings = self.config_manager.get_download_settings()
-            self.max_workers_var.set(download_settings.get("max_workers", 1))
+            # 并发数锁定为1，不从配置加载
+            self.max_workers_var.set(1)
             self.retry_times_var.set(download_settings.get("retry_times", 3))
             self.timeout_var.set(download_settings.get("timeout", 30))
+
+            # 加载批量处理设置
+            batch_settings = self.config_manager.get_batch_process_settings()
+            # 这些设置将在url_builder中使用
+            self._log(f"批量处理设置已加载: 线程数={batch_settings.get('thread_count', 4)}")
 
             # 加载下载目录和模板目录
             last_selected = self.config_manager.get_last_selected()
@@ -1620,7 +1629,7 @@ Diff统计:
 
             template_dir = self.template_dir_var.get().strip()
 
-            # 获取fits_viewer的配置参数
+            # 从fits_viewer的控件获取配置参数（控件已从配置文件加载）
             noise_methods = []
             if self.fits_viewer.outlier_var.get():
                 noise_methods.append('outlier')
@@ -2142,7 +2151,7 @@ Diff统计:
 
         template_dir = self.template_dir_var.get().strip()
 
-        # 获取fits_viewer的配置参数
+        # 从fits_viewer的控件获取配置参数（控件已从配置文件加载）
         noise_methods = []
         if self.fits_viewer.outlier_var.get():
             noise_methods.append('outlier')

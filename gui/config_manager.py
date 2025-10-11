@@ -37,9 +37,19 @@ class ConfigManager:
             },
             "download_settings": {
                 "max_workers": 1,
-                "max_workers_limit": 3,
+                "max_workers_limit": 1,  # 锁定为1，不允许修改
+                "max_workers_enabled": False,  # 禁用并发数设置
                 "retry_times": 3,
                 "timeout": 30
+            },
+            "batch_process_settings": {
+                "thread_count": 4,  # 批量处理线程数（GUI默认值：4）
+                "noise_method": "median",  # 降噪方式: median, gaussian, none（GUI默认值：median，对应Adaptive Median选中）
+                "alignment_method": "ecc",  # 对齐方式: orb, ecc, none（GUI默认值：ecc，对应WCS选中）
+                "remove_bright_lines": True,  # 是否去除亮线（GUI默认值：True）
+                "fast_mode": True,  # 是否启用快速模式（GUI默认值：True）
+                "stretch_method": "percentile",  # 拉伸方法: percentile, minmax, asinh（GUI默认值：percentile）
+                "percentile_low": 99.95  # 百分位参数（GUI默认值：99.95）
             },
             "display_settings": {
                 "default_display_mode": "linear",
@@ -139,14 +149,32 @@ class ConfigManager:
     def get_display_settings(self) -> Dict[str, Any]:
         """获取显示设置"""
         return self.config["display_settings"]
-    
+
     def update_display_settings(self, **kwargs):
         """更新显示设置"""
         for key, value in kwargs.items():
             if key in self.config["display_settings"]:
                 self.config["display_settings"][key] = value
         self.save_config()
-    
+
+    def get_batch_process_settings(self) -> Dict[str, Any]:
+        """获取批量处理设置"""
+        # 如果配置中没有批量处理设置，使用默认值
+        if "batch_process_settings" not in self.config:
+            self.config["batch_process_settings"] = self.default_config["batch_process_settings"].copy()
+            self.save_config()
+        return self.config["batch_process_settings"]
+
+    def update_batch_process_settings(self, **kwargs):
+        """更新批量处理设置"""
+        if "batch_process_settings" not in self.config:
+            self.config["batch_process_settings"] = self.default_config["batch_process_settings"].copy()
+
+        for key, value in kwargs.items():
+            if key in self.config["batch_process_settings"]:
+                self.config["batch_process_settings"][key] = value
+        self.save_config()
+
     def get_url_template_type(self) -> str:
         """获取URL模板类型"""
         return self.config.get("url_template_type", "standard")

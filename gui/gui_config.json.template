@@ -23,13 +23,25 @@
     "telescope_name": "GY5",
     "date": "20250718",
     "k_number": "K096",
-    "download_directory": ""
+    "download_directory": "",
+    "template_directory": "",
+    "diff_output_directory": ""
   },
   "download_settings": {
     "max_workers": 1,
-    "max_workers_limit": 3,
+    "max_workers_limit": 1,
+    "max_workers_enabled": false,
     "retry_times": 3,
     "timeout": 30
+  },
+  "batch_process_settings": {
+    "thread_count": 4,
+    "noise_method": "median",
+    "alignment_method": "ecc",
+    "remove_bright_lines": true,
+    "fast_mode": true,
+    "stretch_method": "percentile",
+    "percentile_low": 99.95
   },
   "display_settings": {
     "default_display_mode": "linear",
@@ -37,5 +49,6 @@
     "auto_select_from_download_dir": true
   },
   "url_template_type": "standard",
-  "_note": "URL模板现在从独立的config/url_config.json文件中读取，请修改该文件来配置URL"
+  "_note": "URL模板现在从独立的config/url_config.json文件中读取，请修改该文件来配置URL",
+  "_batch_process_note": "batch_process_settings包含批量处理的配置: thread_count(线程数,默认4), noise_method(降噪方式,median/gaussian/none,默认median), alignment_method(对齐方式,orb/ecc,默认ecc), remove_bright_lines(去除亮线,默认true), fast_mode(快速模式,默认true), stretch_method(拉伸方法,percentile/minmax,默认percentile), percentile_low(百分位参数,默认99.95)"
 }

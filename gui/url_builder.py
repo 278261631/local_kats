@@ -365,12 +365,17 @@ class URLBuilderFrame:
         template_display_name = template_options.get(current_template_type, template_options["standard"])
         self.url_template_var.set(template_display_name)
 
+        # 加载批量处理设置
+        batch_settings = self.config_manager.get_batch_process_settings()
+        self.thread_count_var.set(batch_settings.get("thread_count", 4))
+
     def _bind_events(self):
         """绑定事件"""
         self.telescope_var.trace('w', self._on_telescope_or_date_change)
         self.date_var.trace('w', self._on_telescope_or_date_change)
         self.k_number_var.trace('w', self._on_selection_change)
         self.url_template_var.trace('w', self._on_template_change)
+        self.thread_count_var.trace('w', self._on_thread_count_change)
 
     def _on_telescope_or_date_change(self, *args):
         """望远镜或日期变化事件处理"""
@@ -413,6 +418,15 @@ class URLBuilderFrame:
 
         except Exception as e:
             self.logger.error(f"更改URL模板类型失败: {str(e)}")
+
+    def _on_thread_count_change(self, *args):
+        """线程数变化事件处理"""
+        try:
+            thread_count = self.thread_count_var.get()
+            self.config_manager.update_batch_process_settings(thread_count=thread_count)
+            self.logger.info(f"线程数已更改为: {thread_count}")
+        except Exception as e:
+            self.logger.error(f"更改线程数失败: {str(e)}")
 
     def _update_url(self):
         """更新URL"""
