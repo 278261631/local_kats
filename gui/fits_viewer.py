@@ -2840,18 +2840,53 @@ class FitsImageViewer:
         try:
             # 查找对应的原始FITS文件
             detection_dir = Path(fits_path).parent.parent
+            self.logger.info(f"cutout文件路径: {fits_path}")
+            self.logger.info(f"detection目录: {detection_dir}")
 
             # 尝试多个可能的FITS文件位置
             fits_files = []
 
-            # 1. detection目录的上级目录（下载目录）
+            # 1. detection目录的上级目录（下载目录）- 优先查找原始文件
             parent_dir = detection_dir.parent
-            fits_files.extend(list(parent_dir.glob("*.fits")))
-            fits_files.extend(list(parent_dir.glob("*.fit")))
+            self.logger.info(f"查找FITS文件的目录: {parent_dir}")
 
-            # 2. detection目录本身
-            fits_files.extend(list(detection_dir.glob("*.fits")))
-            fits_files.extend(list(detection_dir.glob("*.fit")))
+            # 查找所有FITS文件
+            all_parent_fits = list(parent_dir.glob("*.fits")) + list(parent_dir.glob("*.fit"))
+            self.logger.info(f"在 {parent_dir} 找到 {len(all_parent_fits)} 个FITS文件")
+
+            # 优先级1: 查找 *_noise_cleaned_aligned.fits 文件（处理后但未stretched）
+            noise_cleaned_aligned = [f for f in all_parent_fits
+                                    if 'noise_cleaned_aligned' in f.name.lower()
+                                    and 'stretched' not in f.name.lower()]
+
+            # 优先级2: 查找原始FITS文件（不含任何处理标记）
+            original_fits = [f for f in all_parent_fits
+                           if not any(marker in f.name.lower()
+                                    for marker in ['noise_cleaned', 'aligned', 'stretched', 'diff', 'detection'])]
+
+            if noise_cleaned_aligned:
+                fits_files.extend(noise_cleaned_aligned)
+                self.logger.info(f"找到 {len(noise_cleaned_aligned)} 个 noise_cleaned_aligned FITS文件:")
+                for f in noise_cleaned_aligned:
+                    self.logger.info(f"  - {f.name}")
+            elif original_fits:
+                fits_files.extend(original_fits)
+                self.logger.info(f"找到 {len(original_fits)} 个原始FITS文件:")
+                for f in original_fits:
+                    self.logger.info(f"  - {f.name}")
+            else:
+                # 如果都没有，使用所有FITS文件
+                fits_files.extend(all_parent_fits)
+                self.logger.info(f"未找到优先文件，使用所有FITS文件: {len(all_parent_fits)} 个")
+                for f in all_parent_fits:
+                    self.logger.info(f"  - {f.name}")
+
+            # 2. detection目录本身（作为备选）
+            if not fits_files:
+                self.logger.info(f"在父目录未找到，尝试detection目录: {detection_dir}")
+                fits_files.extend(list(detection_dir.glob("*.fits")))
+                fits_files.extend(list(detection_dir.glob("*.fit")))
+                self.logger.info(f"在detection目录找到 {len(fits_files)} 个FITS文件")
 
             if not fits_files:
                 self.logger.warning(f"未找到FITS文件，使用默认旋转角度0")
@@ -2859,48 +2894,97 @@ class FitsImageViewer:
 
             # 使用第一个找到的FITS文件
             fits_file = fits_files[0]
-            self.logger.info(f"读取FITS文件WCS信息: {fits_file}")
+            self.logger.info(f"选择FITS文件: {fits_file}")
+            self.logger.info(f"读取FITS文件WCS信息: {fits_file.name}")
 
             with fits.open(fits_file) as hdul:
                 header = hdul[0].header
 
-                # 尝试使用WCS获取旋转角度
-                try:
-                    from astropy.wcs import WCS
-                    wcs = WCS(header)
+                rotation = None
 
-                    # 获取PC矩阵（或CD矩阵）
-                    pc = wcs.wcs.get_pc()
+                # 方法1: 优先尝试从CROTA2关键字读取（最直接的方法）
+                if 'CROTA2' in header:
+                    rotation = float(header['CROTA2'])
+                    self.logger.info(f"从CROTA2读取旋转角度: {rotation:.2f}°")
+                elif 'CROTA1' in header:
+                    rotation = float(header['CROTA1'])
+                    self.logger.info(f"从CROTA1读取旋转角度: {rotation:.2f}°")
 
-                    # 计算旋转角度
-                    rotation = np.arctan2(pc[0, 1], pc[0, 0]) * 180 / np.pi
+                # 方法2: 如果没有CROTA，尝试从CD矩阵计算
+                if rotation is None and 'CD1_1' in header and 'CD1_2' in header:
+                    cd1_1 = float(header['CD1_1'])
+                    cd1_2 = float(header['CD1_2'])
+                    cd2_1 = float(header.get('CD2_1', 0))
+                    cd2_2 = float(header.get('CD2_2', 0))
 
-                    self.logger.info(f"从WCS PC矩阵计算得到旋转角度: {rotation:.2f}°")
-                    return rotation
+                    self.logger.info(f"CD矩阵: [[{cd1_1:.6e}, {cd1_2:.6e}], [{cd2_1:.6e}, {cd2_2:.6e}]]")
 
-                except Exception as wcs_error:
-                    self.logger.warning(f"WCS方法失败: {wcs_error}")
+                    # 检查是否有翻转
+                    flip_x = cd1_1 < 0
+                    flip_y = cd2_2 < 0
 
-                    # 尝试直接从header读取CROTA关键字
-                    if 'CROTA2' in header:
-                        rotation = float(header['CROTA2'])
-                        self.logger.info(f"从CROTA2读取旋转角度: {rotation:.2f}°")
-                        return rotation
-                    elif 'CROTA1' in header:
-                        rotation = float(header['CROTA1'])
-                        self.logger.info(f"从CROTA1读取旋转角度: {rotation:.2f}°")
-                        return rotation
+                    if flip_x:
+                        self.logger.warning("CD1_1 < 0: X轴被翻转")
+                    if flip_y:
+                        self.logger.warning("CD2_2 < 0: Y轴被翻转")
 
-                    # 尝试从CD矩阵计算
-                    if 'CD1_1' in header and 'CD1_2' in header:
-                        cd1_1 = float(header['CD1_1'])
-                        cd1_2 = float(header['CD1_2'])
-                        rotation = np.arctan2(cd1_2, cd1_1) * 180 / np.pi
-                        self.logger.info(f"从CD矩阵计算得到旋转角度: {rotation:.2f}°")
-                        return rotation
+                    # 计算旋转角度时，使用绝对值来消除翻转的影响
+                    # 翻转不是旋转，应该分开处理
+                    cd1_1_abs = abs(cd1_1)
+                    cd2_2_abs = abs(cd2_2)
 
+                    rotation = np.arctan2(cd1_2, cd1_1_abs) * 180 / np.pi
+                    self.logger.info(f"从CD矩阵计算得到旋转角度（已消除翻转影响）: {rotation:.2f}°")
+
+                    # 如果有翻转，记录但不影响旋转角度
+                    if flip_x or flip_y:
+                        self.logger.info(f"注意：图像有翻转（X={flip_x}, Y={flip_y}），但旋转角度已正确提取")
+
+                # 方法3: 如果CD矩阵也没有，尝试使用WCS的PC矩阵
+                if rotation is None:
+                    try:
+                        from astropy.wcs import WCS
+                        wcs = WCS(header)
+
+                        # 获取PC矩阵（或CD矩阵）
+                        pc = wcs.wcs.get_pc()
+
+                        self.logger.info(f"PC矩阵: [[{pc[0,0]:.6f}, {pc[0,1]:.6f}], [{pc[1,0]:.6f}, {pc[1,1]:.6f}]]")
+
+                        # 检查翻转
+                        flip_x = pc[0, 0] < 0
+                        flip_y = pc[1, 1] < 0
+
+                        if flip_x:
+                            self.logger.warning("PC[0,0] < 0: X轴被翻转")
+                        if flip_y:
+                            self.logger.warning("PC[1,1] < 0: Y轴被翻转")
+
+                        # 使用绝对值消除翻转影响
+                        pc00_abs = abs(pc[0, 0])
+                        rotation = np.arctan2(pc[0, 1], pc00_abs) * 180 / np.pi
+                        self.logger.info(f"从WCS PC矩阵计算得到旋转角度（已消除翻转影响）: {rotation:.2f}°")
+
+                        if flip_x or flip_y:
+                            self.logger.info(f"注意：图像有翻转（X={flip_x}, Y={flip_y}），但旋转角度已正确提取")
+
+                    except Exception as wcs_error:
+                        self.logger.warning(f"WCS方法失败: {wcs_error}")
+
+                # 如果所有方法都失败，使用默认值0
+                if rotation is None:
                     self.logger.warning("无法从header获取旋转角度，使用默认值0")
                     return 0.0
+
+                # 归一化角度到 [-180, 180) 范围（天文学常用范围）
+                while rotation > 180:
+                    rotation -= 360
+                while rotation <= -180:
+                    rotation += 360
+
+                self.logger.info(f"最终使用的旋转角度: {rotation:.2f}°")
+
+                return rotation
 
         except Exception as e:
             self.logger.error(f"获取旋转角度失败: {str(e)}")
