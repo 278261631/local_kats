@@ -296,29 +296,30 @@ class URLBuilderFrame:
         self.batch_process_button = ttk.Button(row1, text="批量下载并Diff", command=self._on_batch_process_clicked, state="disabled")
         self.batch_process_button.pack(side=tk.LEFT, padx=(5, 0))
 
-        # 全天下载diff按钮
-        self.full_day_batch_button = ttk.Button(row1, text="全天下载Diff", command=self._on_full_day_batch_clicked, state="disabled")
-        self.full_day_batch_button.pack(side=tk.LEFT, padx=(5, 0))
-
-        # 全天全系统下载diff按钮
-        self.full_day_all_systems_batch_button = ttk.Button(row1, text="全天全系统Diff", command=self._on_full_day_all_systems_batch_clicked, state="disabled")
-        self.full_day_all_systems_batch_button.pack(side=tk.LEFT, padx=(5, 0))
-
-        # 线程数配置
-        ttk.Label(row1, text="线程数:").pack(side=tk.LEFT, padx=(10, 2))
-        self.thread_count_var = tk.IntVar(value=4)
-        thread_spinbox = ttk.Spinbox(row1, from_=1, to=16, width=5,
-                                     textvariable=self.thread_count_var)
-        thread_spinbox.pack(side=tk.LEFT, padx=(0, 5))
-
-        # 打开批量输出目录按钮
-        self.open_batch_output_button = ttk.Button(row1, text="打开输出目录", command=self._on_open_batch_output_clicked, state="disabled")
-        self.open_batch_output_button.pack(side=tk.LEFT, padx=(5, 0))
-
-        # 第二行：URL模板选择
+        # 第二行：全天批量按钮、线程数配置和打开输出目录按钮
         row2 = ttk.Frame(main_frame)
         row2.pack(fill=tk.X, pady=(5, 0))
 
+        # 全天下载diff按钮
+        self.full_day_batch_button = ttk.Button(row2, text="全天下载Diff", command=self._on_full_day_batch_clicked, state="disabled")
+        self.full_day_batch_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 全天全系统下载diff按钮
+        self.full_day_all_systems_batch_button = ttk.Button(row2, text="全天全系统Diff", command=self._on_full_day_all_systems_batch_clicked, state="disabled")
+        self.full_day_all_systems_batch_button.pack(side=tk.LEFT, padx=(0, 15))
+
+        # 线程数配置
+        ttk.Label(row2, text="线程数:").pack(side=tk.LEFT, padx=(0, 2))
+        self.thread_count_var = tk.IntVar(value=4)
+        thread_spinbox = ttk.Spinbox(row2, from_=1, to=16, width=5,
+                                     textvariable=self.thread_count_var)
+        thread_spinbox.pack(side=tk.LEFT, padx=(0, 15))
+
+        # 打开批量输出目录按钮
+        self.open_batch_output_button = ttk.Button(row2, text="打开输出目录", command=self._on_open_batch_output_clicked, state="disabled")
+        self.open_batch_output_button.pack(side=tk.LEFT, padx=(0, 15))
+
+        # URL格式选择
         ttk.Label(row2, text="URL格式:").pack(side=tk.LEFT, padx=(0, 5))
 
         # URL模板选择下拉框
