@@ -128,17 +128,39 @@ def download_dss_rot(ra: float, dec: float, rotation: float, out_file: str = Non
 
 # === 调用示例 ===
 if __name__ == "__main__":
-    # 示例：下载猎户座大星云 (M42) 区域的DSS2彩色图像
-    # RA=83.8221度, Dec=-5.3911度, 旋转30度
-    success = download_dss_rot(
-        ra=83.8221,
-        dec=-5.3911,
-        rotation=30,
-        # out_file 参数可省略，默认保存到 当前时间/dss_rot.jpg
-        use_proxy=False  # 如果需要代理，设置为True
-    )
+    # 定义多个测试目标
+    targets = [
+        {"name": "M57_Ring_0deg", "ra": 283.3963, "dec": 33.0292, "rotation": 0},      # 环状星云 0度
+        {"name": "M57_Ring_45deg", "ra": 283.3963, "dec": 33.0292, "rotation": 45},    # 环状星云 45度
+        {"name": "M57_Ring_90deg", "ra": 283.3963, "dec": 33.0292, "rotation": 90},    # 环状星云 90度
+    ]
 
-    if success:
-        print("下载成功！")
-    else:
-        print("下载失败，请检查网络连接或尝试使用代理")
+    # 创建时间目录
+    time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    print(f"开始下载 {len(targets)} 个目标到目录: {time_str}/")
+    print("=" * 60)
+
+    success_count = 0
+    for i, target in enumerate(targets, 1):
+        print(f"\n[{i}/{len(targets)}] 下载 {target['name']}...")
+        print(f"  坐标: RA={target['ra']:.4f}°, Dec={target['dec']:.4f}°")
+
+        out_file = f"{time_str}/{target['name']}.jpg"
+        success = download_dss_rot(
+            ra=target['ra'],
+            dec=target['dec'],
+            rotation=target['rotation'],
+            out_file=out_file,
+            use_proxy=False  # 如果需要代理，设置为True
+        )
+
+        if success:
+            success_count += 1
+            print(f"  ✓ 成功")
+        else:
+            print(f"  ✗ 失败")
+
+    print("\n" + "=" * 60)
+    print(f"下载完成: {success_count}/{len(targets)} 成功")
+    print(f"文件保存在: {time_str}/")
