@@ -4,6 +4,7 @@ import urllib3
 import certifi
 import os
 import ssl
+from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 
@@ -42,20 +43,24 @@ class SSLAdapter(HTTPAdapter):
         proxy_kwargs['ssl_context'] = context
         return super().proxy_manager_for(proxy, **proxy_kwargs)
 
-def download_dss_rot(ra: float, dec: float, rotation: float, out_file: str = "dss_rot.jpg",
+def download_dss_rot(ra: float, dec: float, rotation: float, out_file: str = None,
                      use_proxy: bool = False, proxy_host: str = "127.0.0.1",
                      proxy_port: int = 10550, proxy_type: str = "socks5h",
                      verify_ssl: bool = False):
     """
     ra, dec     : 天区中心（度）
     rotation    : 旋转角（度，逆时针为正）
-    out_file    : 保存文件名
+    out_file    : 保存文件名，如果为None则自动生成到 当前时间/ 目录
     use_proxy   : 是否使用代理
     proxy_host  : 代理主机地址
     proxy_port  : 代理端口
     proxy_type  : 代理类型 (http, socks5, socks5h) - socks5h会通过代理进行DNS解析
     verify_ssl  : 是否验证SSL证书
     """
+    # 如果未指定输出文件，使用当前时间创建目录
+    if out_file is None:
+        time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_file = f"{time_str}/dss_rot.jpg"
     url = "https://alasky.cds.unistra.fr/hips-image-services/hips2fits"
     params = {
         "hips": "CDS/P/DSS2/color",   # 也可换成 CDS/P/2MASS/color 等
@@ -129,7 +134,7 @@ if __name__ == "__main__":
         ra=83.8221,
         dec=-5.3911,
         rotation=30,
-        out_file="dss_rot.jpg",
+        # out_file 参数可省略，默认保存到 当前时间/dss_rot.jpg
         use_proxy=False  # 如果需要代理，设置为True
     )
 
