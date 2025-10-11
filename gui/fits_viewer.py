@@ -5,6 +5,7 @@ FITS图像查看器
 """
 
 import os
+import sys
 import subprocess
 import platform
 import numpy as np
@@ -19,6 +20,10 @@ import logging
 from pathlib import Path
 from typing import Optional, Tuple, Callable
 from diff_orb_integration import DiffOrbIntegration
+
+# 添加项目根目录到路径以导入dss_cds_downloader
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from cds_dss_download.dss_cds_downloader import download_dss_rot
 
 # 尝试导入ASTAP处理器
 try:
@@ -239,7 +244,12 @@ class FitsImageViewer:
 
         self.next_cutout_button = ttk.Button(toolbar_frame3, text="下一组 ▶",
                                             command=self._show_next_cutout, state="disabled")
-        self.next_cutout_button.pack(side=tk.LEFT, padx=(0, 0))
+        self.next_cutout_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 检查DSS按钮
+        self.check_dss_button = ttk.Button(toolbar_frame3, text="检查DSS",
+                                          command=self._check_dss, state="disabled")
+        self.check_dss_button.pack(side=tk.LEFT, padx=(0, 0))
 
         # 坐标显示区域（第四行工具栏）
         toolbar_frame4 = ttk.Frame(toolbar_container)
@@ -1675,6 +1685,8 @@ class FitsImageViewer:
             self.prev_cutout_button.config(state="disabled")
         if hasattr(self, 'next_cutout_button'):
             self.next_cutout_button.config(state="disabled")
+        if hasattr(self, 'check_dss_button'):
+            self.check_dss_button.config(state="disabled")
 
         # 清除输出目录
         self.last_output_dir = None
@@ -1944,6 +1956,10 @@ class FitsImageViewer:
         if self._total_cutouts > 1:
             self.prev_cutout_button.config(state="normal")
             self.next_cutout_button.config(state="normal")
+
+        # 启用检查DSS按钮（只要有cutout就可以启用）
+        if hasattr(self, 'check_dss_button'):
+            self.check_dss_button.config(state="normal")
 
         # 提取文件信息（使用左侧选中的文件名）
         selected_filename = ""
@@ -2610,12 +2626,14 @@ class FitsImageViewer:
             # 显示aligned图像（可点击切换）
             self._click_ax = axes[1]
             self._click_images = [aligned_array, ref_array]
+            self._click_image_names = ["Aligned", "Reference"]
             self._click_index = 0
             self._click_im = self._click_ax.imshow(
                 aligned_array,
                 cmap='gray' if len(aligned_array.shape) == 2 else None
             )
-            self._click_ax.set_title("Aligned (点击切换)", fontsize=10, fontweight='bold')
+            total_images = len(self._click_images)
+            self._click_ax.set_title(f"Aligned (1/{total_images}) - 点击切换", fontsize=10, fontweight='bold')
             self._click_ax.axis('off')
 
             # 显示detection图像
@@ -2673,17 +2691,17 @@ class FitsImageViewer:
             try:
                 # 检查点击是否在aligned图像的子图区域内
                 if event.inaxes == self._click_ax:
-                    # 切换图像索引
-                    self._click_index = 1 - self._click_index
+                    # 循环切换图像索引
+                    self._click_index = (self._click_index + 1) % len(self._click_images)
 
                     # 更新图像数据
                     self._click_im.set_data(self._click_images[self._click_index])
 
                     # 更新标题显示当前图像
-                    if self._click_index == 0:
-                        self._click_ax.set_title("Aligned (点击切换)", fontsize=10, fontweight='bold')
-                    else:
-                        self._click_ax.set_title("Reference (模板图像)", fontsize=10, fontweight='bold')
+                    image_name = self._click_image_names[self._click_index] if hasattr(self, '_click_image_names') else f"Image {self._click_index}"
+                    total_images = len(self._click_images)
+                    self._click_ax.set_title(f"{image_name} ({self._click_index + 1}/{total_images}) - 点击切换",
+                                           fontsize=10, fontweight='bold')
 
                     # 刷新画布
                     self.canvas.draw_idle()
@@ -2693,5 +2711,199 @@ class FitsImageViewer:
 
         # 绑定点击事件到canvas，并保存连接ID
         self._click_connection_id = self.canvas.mpl_connect('button_press_event', on_click)
+
+    def _check_dss(self):
+        """检查DSS图像 - 根据当前显示目标的RA/DEC和FITS文件WCS角度信息下载DSS图像"""
+        try:
+            # 检查是否有当前显示的cutout
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.warning("请先执行差分检测并显示检测结果")
+                return
+
+            if not hasattr(self, '_current_cutout_index'):
+                self.logger.warning("没有当前显示的检测结果")
+                return
+
+            # 获取当前cutout的信息
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            reference_img = current_cutout['reference']
+            aligned_img = current_cutout['aligned']
+            detection_img = current_cutout['detection']
+
+            # 提取文件信息（包含RA/DEC）
+            selected_filename = ""
+            if self.selected_file_path:
+                selected_filename = os.path.basename(self.selected_file_path)
+
+            file_info = self._extract_file_info(reference_img, aligned_img, detection_img, selected_filename)
+
+            # 检查是否有RA/DEC信息
+            if not file_info.get('ra') or not file_info.get('dec'):
+                self.logger.error("无法获取目标的RA/DEC坐标信息")
+                return
+
+            ra = float(file_info['ra'])
+            dec = float(file_info['dec'])
+
+            self.logger.info(f"准备下载DSS图像: RA={ra}, Dec={dec}")
+
+            # 获取FITS文件的旋转角度
+            rotation_angle = self._get_fits_rotation_angle(detection_img)
+
+            self.logger.info(f"FITS文件旋转角度: {rotation_angle}°")
+
+            # 构建输出文件名
+            # 使用当前检测结果的目录
+            detection_dir = Path(detection_img).parent
+            dss_filename = f"dss_ra{ra:.4f}_dec{dec:.4f}_rot{rotation_angle:.1f}.jpg"
+            dss_output_path = detection_dir / dss_filename
+
+            # 显示下载进度对话框
+            progress_window = tk.Toplevel(self.parent_frame)
+            progress_window.title("下载DSS图像")
+            progress_window.geometry("400x120")
+            progress_window.transient(self.parent_frame)
+            progress_window.grab_set()
+
+            ttk.Label(progress_window, text=f"正在下载DSS图像...", font=("Arial", 10)).pack(pady=10)
+            ttk.Label(progress_window, text=f"RA: {ra:.4f}°  Dec: {dec:.4f}°", font=("Arial", 9)).pack(pady=5)
+            ttk.Label(progress_window, text=f"旋转角度: {rotation_angle:.1f}°", font=("Arial", 9)).pack(pady=5)
+
+            progress_bar = ttk.Progressbar(progress_window, mode='indeterminate')
+            progress_bar.pack(pady=10, padx=20, fill=tk.X)
+            progress_bar.start(10)
+
+            progress_window.update()
+
+            # 下载DSS图像
+            success = download_dss_rot(
+                ra=ra,
+                dec=dec,
+                rotation=rotation_angle,
+                out_file=str(dss_output_path),
+                use_proxy=False
+            )
+
+            # 关闭进度对话框
+            progress_bar.stop()
+            progress_window.destroy()
+
+            if success:
+                self.logger.info(f"DSS图像下载成功: {dss_output_path}")
+
+                # 将DSS图像添加到点击切换列表
+                if hasattr(self, '_click_images') and self._click_images:
+                    # 加载DSS图像
+                    from PIL import Image
+                    dss_img = Image.open(dss_output_path)
+                    dss_array = np.array(dss_img)
+
+                    # 添加到切换列表
+                    self._click_images.append(dss_array)
+                    self._click_image_names.append("DSS Image")
+
+                    total_images = len(self._click_images)
+                    self.logger.info(f"DSS图像已添加到切换列表，当前共有 {total_images} 张图像")
+                    self.logger.info(f"文件保存在: {dss_output_path}")
+
+                    # 自动切换到DSS图像
+                    self._click_index = total_images - 1  # 最后一张（DSS图像）
+                    self._click_im.set_data(self._click_images[self._click_index])
+
+                    # 更新标题
+                    image_name = self._click_image_names[self._click_index]
+                    self._click_ax.set_title(f"{image_name} ({self._click_index + 1}/{total_images}) - 点击切换",
+                                           fontsize=10, fontweight='bold')
+
+                    # 刷新画布
+                    self.canvas.draw_idle()
+
+                    self.logger.info(f"已自动切换到DSS图像显示")
+                else:
+                    self.logger.info(f"DSS图像下载成功，文件保存在: {dss_output_path}")
+            else:
+                self.logger.error("DSS图像下载失败，请检查网络连接")
+
+        except Exception as e:
+            self.logger.error(f"检查DSS失败: {str(e)}", exc_info=True)
+
+    def _get_fits_rotation_angle(self, fits_path):
+        """
+        从FITS文件的WCS信息中提取旋转角度
+
+        Args:
+            fits_path: FITS文件路径（可以是cutout图像路径）
+
+        Returns:
+            float: 旋转角度（度），如果无法获取则返回0
+        """
+        try:
+            # 查找对应的原始FITS文件
+            detection_dir = Path(fits_path).parent.parent
+
+            # 尝试多个可能的FITS文件位置
+            fits_files = []
+
+            # 1. detection目录的上级目录（下载目录）
+            parent_dir = detection_dir.parent
+            fits_files.extend(list(parent_dir.glob("*.fits")))
+            fits_files.extend(list(parent_dir.glob("*.fit")))
+
+            # 2. detection目录本身
+            fits_files.extend(list(detection_dir.glob("*.fits")))
+            fits_files.extend(list(detection_dir.glob("*.fit")))
+
+            if not fits_files:
+                self.logger.warning(f"未找到FITS文件，使用默认旋转角度0")
+                return 0.0
+
+            # 使用第一个找到的FITS文件
+            fits_file = fits_files[0]
+            self.logger.info(f"读取FITS文件WCS信息: {fits_file}")
+
+            with fits.open(fits_file) as hdul:
+                header = hdul[0].header
+
+                # 尝试使用WCS获取旋转角度
+                try:
+                    from astropy.wcs import WCS
+                    wcs = WCS(header)
+
+                    # 获取PC矩阵（或CD矩阵）
+                    pc = wcs.wcs.get_pc()
+
+                    # 计算旋转角度
+                    rotation = np.arctan2(pc[0, 1], pc[0, 0]) * 180 / np.pi
+
+                    self.logger.info(f"从WCS PC矩阵计算得到旋转角度: {rotation:.2f}°")
+                    return rotation
+
+                except Exception as wcs_error:
+                    self.logger.warning(f"WCS方法失败: {wcs_error}")
+
+                    # 尝试直接从header读取CROTA关键字
+                    if 'CROTA2' in header:
+                        rotation = float(header['CROTA2'])
+                        self.logger.info(f"从CROTA2读取旋转角度: {rotation:.2f}°")
+                        return rotation
+                    elif 'CROTA1' in header:
+                        rotation = float(header['CROTA1'])
+                        self.logger.info(f"从CROTA1读取旋转角度: {rotation:.2f}°")
+                        return rotation
+
+                    # 尝试从CD矩阵计算
+                    if 'CD1_1' in header and 'CD1_2' in header:
+                        cd1_1 = float(header['CD1_1'])
+                        cd1_2 = float(header['CD1_2'])
+                        rotation = np.arctan2(cd1_2, cd1_1) * 180 / np.pi
+                        self.logger.info(f"从CD矩阵计算得到旋转角度: {rotation:.2f}°")
+                        return rotation
+
+                    self.logger.warning("无法从header获取旋转角度，使用默认值0")
+                    return 0.0
+
+        except Exception as e:
+            self.logger.error(f"获取旋转角度失败: {str(e)}")
+            return 0.0
 
 
