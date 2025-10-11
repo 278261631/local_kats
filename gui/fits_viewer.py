@@ -321,6 +321,10 @@ class FitsImageViewer:
         self.directory_tree.bind('<Double-1>', self._on_tree_double_click)
         self.directory_tree.bind('<<TreeviewOpen>>', self._on_tree_open)
 
+        # 绑定键盘左右键事件
+        self.directory_tree.bind('<Left>', self._on_tree_left_key)
+        self.directory_tree.bind('<Right>', self._on_tree_right_key)
+
         # 不在这里初始化目录树，等待首次刷新
 
     def _create_image_display(self, parent):
@@ -2049,6 +2053,55 @@ class FitsImageViewer:
 
         prev_index = (self._current_cutout_index - 1) % self._total_cutouts
         self._display_cutout_by_index(prev_index)
+
+    def _on_tree_left_key(self, event):
+        """处理目录树的左键事件 - 对应"上一组"按钮"""
+        # 获取当前选中的节点
+        selection = self.directory_tree.selection()
+        if not selection:
+            return  # 没有选中节点，使用默认行为
+
+        item = selection[0]
+        # 检查是否有子节点
+        children = self.directory_tree.get_children(item)
+        if children:
+            # 有子节点，说明是目录节点，使用默认行为（折叠）
+            return
+
+        # 是最终节点（FITS文件），执行"上一组"操作
+        if hasattr(self, 'prev_cutout_button') and str(self.prev_cutout_button['state']) == 'normal':
+            self._show_previous_cutout()
+            return "break"  # 阻止默认行为
+
+    def _on_tree_right_key(self, event):
+        """处理目录树的右键事件 - 对应"下一组"按钮"""
+        # 获取当前选中的节点
+        selection = self.directory_tree.selection()
+        if not selection:
+            return  # 没有选中节点，使用默认行为
+
+        item = selection[0]
+        # 检查是否有子节点
+        children = self.directory_tree.get_children(item)
+        if children:
+            # 有子节点，说明是目录节点
+            # 检查节点是否已经展开
+            is_open = self.directory_tree.item(item, 'open')
+            if is_open:
+                # 已经展开，跳转到第一个子项目
+                first_child = children[0]
+                self.directory_tree.selection_set(first_child)
+                self.directory_tree.focus(first_child)
+                self.directory_tree.see(first_child)
+                return "break"  # 阻止默认行为
+            else:
+                # 未展开，使用默认行为（展开）
+                return
+
+        # 是最终节点（FITS文件），执行"下一组"操作
+        if hasattr(self, 'next_cutout_button') and str(self.next_cutout_button['state']) == 'normal':
+            self._show_next_cutout()
+            return "break"  # 阻止默认行为
 
     def _extract_file_info(self, reference_img, aligned_img, detection_img, selected_filename=""):
         """
