@@ -307,67 +307,55 @@ class AlignedFITSComparator:
         Returns:
             tuple: (参考文件路径, 对齐文件路径)
         """
-        fits_files = glob.glob(os.path.join(directory, "*.fits"))
+        # 只查找 noise_cleaned_aligned.fits 文件
+        noise_cleaned_files = glob.glob(os.path.join(directory, "*noise_cleaned_aligned.fits"))
 
-        if len(fits_files) < 2:
-            self.logger.error(f"目录中FITS文件数量不足: {len(fits_files)}")
+        if len(noise_cleaned_files) < 2:
+            self.logger.error(f"目录中 noise_cleaned_aligned.fits 文件数量不足: {len(noise_cleaned_files)}")
+            if noise_cleaned_files:
+                for f in noise_cleaned_files:
+                    self.logger.error(f"  - {os.path.basename(f)}")
             return None, None
 
-        # 根据文件名模式识别参考文件和对齐文件
-        reference_file = None
+        if len(noise_cleaned_files) > 2:
+            self.logger.error(f"目录中 noise_cleaned_aligned.fits 文件数量过多: {len(noise_cleaned_files)}，应该只有2个")
+            for f in noise_cleaned_files:
+                self.logger.error(f"  - {os.path.basename(f)}")
+            return None, None
+
+        # 根据文件名模式识别模板文件和对齐文件
+        # K***-*_noise_cleaned_aligned.fits 是模板文件
+        # GY*_K***-*_noise_cleaned_aligned.fits 是对齐文件（下载文件）
+        template_file = None
         aligned_file = None
-        template_aligned_file = None
-        download_aligned_file = None
 
-        for file_path in fits_files:
-            filename = os.path.basename(file_path).lower()
+        for file_path in noise_cleaned_files:
+            filename = os.path.basename(file_path)
 
-            # 传统命名模式：reference + aligned
-            if "reference" in filename:
-                reference_file = file_path
-            elif "aligned" in filename and "reference" not in filename:
+            # 判断是模板文件还是对齐文件
+            # 模板文件格式: K***-*_noise_cleaned_aligned.fits (以K开头)
+            # 对齐文件格式: GY*_K***-*_noise_cleaned_aligned.fits (以GY开头)
+            if filename.startswith("K") and not filename.startswith("GY"):
+                template_file = file_path
+            elif filename.startswith("GY"):
                 aligned_file = file_path
+            else:
+                self.logger.error(f"无法识别文件类型: {filename}")
+                self.logger.error(f"模板文件应以 K 开头，对齐文件应以 GY 开头")
+                return None, None
 
-            # WCS对齐命名模式：template_xxx_aligned.fits + download_xxx_aligned.fits
-            if "_aligned.fits" in filename:
-                if filename.startswith("template") or "template" in filename:
-                    template_aligned_file = file_path
-                elif filename.startswith("download") or "download" in filename:
-                    download_aligned_file = file_path
+        # 检查是否找到了两个文件
+        if not template_file or not aligned_file:
+            self.logger.error("未找到完整的文件对")
+            self.logger.error(f"模板文件: {os.path.basename(template_file) if template_file else '未找到'}")
+            self.logger.error(f"对齐文件: {os.path.basename(aligned_file) if aligned_file else '未找到'}")
+            return None, None
 
-        # 优先使用传统命名模式
-        if reference_file and aligned_file:
-            self.logger.info("使用传统命名模式 (reference + aligned)")
-            self.logger.info(f"参考文件: {os.path.basename(reference_file)}")
-            self.logger.info(f"对齐文件: {os.path.basename(aligned_file)}")
-            return reference_file, aligned_file
-
-        # 其次使用WCS对齐命名模式
-        if template_aligned_file and download_aligned_file:
-            self.logger.info("使用WCS对齐命名模式 (template_aligned + download_aligned)")
-            self.logger.info(f"模板文件: {os.path.basename(template_aligned_file)}")
-            self.logger.info(f"下载文件: {os.path.basename(download_aligned_file)}")
-            return template_aligned_file, download_aligned_file
-
-        # 如果有多个_aligned文件，尝试智能匹配
-        aligned_files = [f for f in fits_files if "_aligned.fits" in os.path.basename(f).lower()]
-        if len(aligned_files) >= 2:
-            # 按文件名排序，确保一致的选择顺序
-            aligned_files.sort()
-            self.logger.info("找到多个对齐文件，使用前两个")
-            self.logger.info(f"参考文件: {os.path.basename(aligned_files[0])}")
-            self.logger.info(f"对齐文件: {os.path.basename(aligned_files[1])}")
-            return aligned_files[0], aligned_files[1]
-
-        # 最后使用前两个文件作为备选
-        fits_files.sort()  # 确保一致的选择顺序
-        reference_file = fits_files[0]
-        aligned_file = fits_files[1]
-        self.logger.warning("未找到标准命名模式，使用前两个FITS文件")
-        self.logger.info(f"参考文件: {os.path.basename(reference_file)}")
+        self.logger.info("成功识别文件对")
+        self.logger.info(f"模板文件: {os.path.basename(template_file)}")
         self.logger.info(f"对齐文件: {os.path.basename(aligned_file)}")
 
-        return reference_file, aligned_file
+        return template_file, aligned_file
 
     def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95):
         """
