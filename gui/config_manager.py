@@ -55,6 +55,10 @@ class ConfigManager:
                 "flip_vertical": True,  # 上下翻转DSS（默认值：True）
                 "flip_horizontal": False  # 左右翻转DSS（默认值：False）
             },
+            "gps_settings": {
+                "latitude": 43.4,  # 纬度（默认值：43.4°N）
+                "longitude": 87.1  # 经度（默认值：87.1°E）
+            },
             "display_settings": {
                 "default_display_mode": "linear",
                 "default_colormap": "gray",
@@ -195,6 +199,24 @@ class ConfigManager:
         for key, value in kwargs.items():
             if key in ["flip_vertical", "flip_horizontal"]:
                 self.config["dss_flip_settings"][key] = value
+        self.save_config()
+
+    def get_gps_settings(self) -> Dict[str, Any]:
+        """获取GPS设置"""
+        # 如果配置中没有GPS设置，使用默认值
+        if "gps_settings" not in self.config:
+            self.config["gps_settings"] = self.default_config["gps_settings"].copy()
+            self.save_config()
+        return self.config["gps_settings"]
+
+    def update_gps_settings(self, **kwargs):
+        """更新GPS设置"""
+        if "gps_settings" not in self.config:
+            self.config["gps_settings"] = self.default_config["gps_settings"].copy()
+
+        for key, value in kwargs.items():
+            if key in ["latitude", "longitude"]:
+                self.config["gps_settings"][key] = value
         self.save_config()
 
     def get_url_template_type(self) -> str:

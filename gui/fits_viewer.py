@@ -105,6 +105,12 @@ class FitsImageViewer:
         # 绑定DSS翻转设置变化事件
         self._bind_dss_flip_settings_events()
 
+        # 从配置文件加载GPS设置
+        self._load_gps_settings()
+
+        # 绑定GPS设置变化事件
+        self._bind_gps_settings_events()
+
         # 延迟执行首次刷新（确保界面完全创建后）
         self.parent_frame.after(100, self._first_time_refresh)
         
@@ -295,18 +301,48 @@ class FitsImageViewer:
 
         # UTC时间
         ttk.Label(toolbar_frame5, text="UTC:").pack(side=tk.LEFT, padx=(5, 2))
-        self.time_utc_entry = ttk.Entry(toolbar_frame5, width=25)
+        self.time_utc_entry = ttk.Entry(toolbar_frame5, width=20)
         self.time_utc_entry.pack(side=tk.LEFT, padx=(0, 10))
 
         # 北京时间
         ttk.Label(toolbar_frame5, text="北京时间:").pack(side=tk.LEFT, padx=(5, 2))
-        self.time_beijing_entry = ttk.Entry(toolbar_frame5, width=25)
+        self.time_beijing_entry = ttk.Entry(toolbar_frame5, width=20)
         self.time_beijing_entry.pack(side=tk.LEFT, padx=(0, 10))
 
-        # +6时区时间
-        ttk.Label(toolbar_frame5, text="+6时区:").pack(side=tk.LEFT, padx=(5, 2))
-        self.time_plus6_entry = ttk.Entry(toolbar_frame5, width=25)
-        self.time_plus6_entry.pack(side=tk.LEFT, padx=(0, 5))
+        # 本地时区时间（根据GPS计算）
+        ttk.Label(toolbar_frame5, text="本地时间:").pack(side=tk.LEFT, padx=(5, 2))
+        self.time_local_entry = ttk.Entry(toolbar_frame5, width=20)
+        self.time_local_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # GPS位置信息（第六行工具栏）
+        toolbar_frame6 = ttk.Frame(toolbar_container)
+        toolbar_frame6.pack(fill=tk.X, pady=2)
+
+        ttk.Label(toolbar_frame6, text="GPS位置:").pack(side=tk.LEFT, padx=(5, 2))
+
+        # 纬度
+        ttk.Label(toolbar_frame6, text="纬度:").pack(side=tk.LEFT, padx=(5, 2))
+        self.gps_lat_var = tk.StringVar(value="43.4")
+        self.gps_lat_entry = ttk.Entry(toolbar_frame6, textvariable=self.gps_lat_var, width=10)
+        self.gps_lat_entry.pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(toolbar_frame6, text="N").pack(side=tk.LEFT, padx=(0, 10))
+
+        # 经度
+        ttk.Label(toolbar_frame6, text="经度:").pack(side=tk.LEFT, padx=(5, 2))
+        self.gps_lon_var = tk.StringVar(value="87.1")
+        self.gps_lon_entry = ttk.Entry(toolbar_frame6, textvariable=self.gps_lon_var, width=10)
+        self.gps_lon_entry.pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(toolbar_frame6, text="E").pack(side=tk.LEFT, padx=(0, 10))
+
+        # 计算时区显示
+        ttk.Label(toolbar_frame6, text="时区:").pack(side=tk.LEFT, padx=(5, 2))
+        self.timezone_label = ttk.Label(toolbar_frame6, text="UTC+6", foreground="blue")
+        self.timezone_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 保存GPS按钮
+        self.save_gps_button = ttk.Button(toolbar_frame6, text="保存GPS",
+                                         command=self._save_gps_settings)
+        self.save_gps_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
@@ -646,6 +682,103 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"保存DSS翻转设置失败: {str(e)}")
+
+    def _load_gps_settings(self):
+        """从配置文件加载GPS设置"""
+        if not self.config_manager:
+            return
+
+        try:
+            gps_settings = self.config_manager.get_gps_settings()
+
+            # 加载GPS坐标，默认值：43.4 N, 87.1 E
+            latitude = gps_settings.get('latitude', 43.4)
+            longitude = gps_settings.get('longitude', 87.1)
+
+            self.gps_lat_var.set(str(latitude))
+            self.gps_lon_var.set(str(longitude))
+
+            # 更新时区显示
+            self._update_timezone_display()
+
+            self.logger.info(f"GPS设置已加载: 纬度={latitude}°N, 经度={longitude}°E")
+
+        except Exception as e:
+            self.logger.error(f"加载GPS设置失败: {str(e)}")
+            # 使用默认值
+            self.gps_lat_var.set("43.4")
+            self.gps_lon_var.set("87.1")
+            self._update_timezone_display()
+
+    def _bind_gps_settings_events(self):
+        """绑定GPS设置的变化事件"""
+        try:
+            # 绑定GPS输入框变化事件（实时更新时区显示）
+            self.gps_lat_var.trace('w', self._on_gps_changed)
+            self.gps_lon_var.trace('w', self._on_gps_changed)
+
+            self.logger.info("GPS设置事件已绑定")
+
+        except Exception as e:
+            self.logger.error(f"绑定GPS设置事件失败: {str(e)}")
+
+    def _on_gps_changed(self, *args):
+        """GPS坐标变化时更新时区显示"""
+        self._update_timezone_display()
+
+    def _save_gps_settings(self):
+        """保存GPS设置到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            latitude = float(self.gps_lat_var.get())
+            longitude = float(self.gps_lon_var.get())
+
+            # 保存到配置文件
+            self.config_manager.update_gps_settings(
+                latitude=latitude,
+                longitude=longitude
+            )
+
+            self.logger.info(f"GPS设置已保存: 纬度={latitude}°N, 经度={longitude}°E")
+
+            # 更新时区显示
+            self._update_timezone_display()
+
+            # 如果有时间信息，重新计算本地时间
+            if hasattr(self, '_current_utc_time') and self._current_utc_time:
+                self._update_time_display_with_utc(self._current_utc_time)
+
+        except ValueError:
+            self.logger.error(f"无效的GPS坐标: 纬度={self.gps_lat_var.get()}, 经度={self.gps_lon_var.get()}")
+        except Exception as e:
+            self.logger.error(f"保存GPS设置失败: {str(e)}")
+
+    def _update_timezone_display(self):
+        """根据GPS经度更新时区显示"""
+        try:
+            longitude = float(self.gps_lon_var.get())
+
+            # 根据经度计算时区（每15度一个时区）
+            timezone_offset = round(longitude / 15)
+
+            # 限制在合理范围内 [-12, +14]
+            timezone_offset = max(-12, min(14, timezone_offset))
+
+            # 更新时区标签
+            if timezone_offset >= 0:
+                self.timezone_label.config(text=f"UTC+{timezone_offset}")
+            else:
+                self.timezone_label.config(text=f"UTC{timezone_offset}")
+
+            self.logger.info(f"时区已更新: 经度={longitude}°E → UTC{timezone_offset:+d}")
+
+        except ValueError:
+            self.timezone_label.config(text="UTC+?")
+            self.logger.warning(f"无效的经度值: {self.gps_lon_var.get()}")
+        except Exception as e:
+            self.logger.error(f"更新时区显示失败: {str(e)}")
 
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""
@@ -2092,7 +2225,7 @@ class FitsImageViewer:
         self.coord_compact_entry.delete(0, tk.END)
         self.time_utc_entry.delete(0, tk.END)
         self.time_beijing_entry.delete(0, tk.END)
-        self.time_plus6_entry.delete(0, tk.END)
+        self.time_local_entry.delete(0, tk.END)
 
         if not file_info:
             self.logger.warning("file_info为空")
@@ -2163,6 +2296,9 @@ class FitsImageViewer:
         # 时间显示
         time_info = self._extract_time_from_filename(file_info.get('filename', ''))
         if time_info:
+            # 保存UTC时间用于后续更新
+            self._current_utc_time = time_info.get('utc_datetime')
+
             # UTC时间
             if time_info.get('utc'):
                 self.time_utc_entry.insert(0, time_info['utc'])
@@ -2173,11 +2309,12 @@ class FitsImageViewer:
                 self.time_beijing_entry.insert(0, time_info['beijing'])
                 self.logger.info(f"北京时间: {time_info['beijing']}")
 
-            # +6时区时间
-            if time_info.get('plus6'):
-                self.time_plus6_entry.insert(0, time_info['plus6'])
-                self.logger.info(f"+6时区: {time_info['plus6']}")
+            # 本地时间（根据GPS计算）
+            if time_info.get('local'):
+                self.time_local_entry.insert(0, time_info['local'])
+                self.logger.info(f"本地时间: {time_info['local']}")
         else:
+            self._current_utc_time = None
             self.logger.warning("未能从文件名提取时间信息")
 
     def _extract_time_from_filename(self, filename):
@@ -2190,7 +2327,7 @@ class FitsImageViewer:
             filename: 文件名
 
         Returns:
-            dict: 包含utc, beijing, plus6时间字符串的字典，如果提取失败返回None
+            dict: 包含utc, beijing, local时间字符串的字典，如果提取失败返回None
         """
         import re
         from datetime import datetime, timedelta
@@ -2217,19 +2354,70 @@ class FitsImageViewer:
             beijing_dt = utc_dt + timedelta(hours=8)
             beijing_formatted = beijing_dt.strftime("%Y-%m-%d %H:%M:%S")
 
-            # 计算+6时区时间 (UTC+6)
-            plus6_dt = utc_dt + timedelta(hours=6)
-            plus6_formatted = plus6_dt.strftime("%Y-%m-%d %H:%M:%S")
+            # 根据GPS经度计算本地时区
+            try:
+                longitude = float(self.gps_lon_var.get())
+                timezone_offset = round(longitude / 15)
+                timezone_offset = max(-12, min(14, timezone_offset))
+            except:
+                timezone_offset = 6  # 默认UTC+6
+
+            # 计算本地时间
+            local_dt = utc_dt + timedelta(hours=timezone_offset)
+            local_formatted = local_dt.strftime("%Y-%m-%d %H:%M:%S")
 
             return {
                 'utc': utc_formatted,
+                'utc_datetime': utc_dt,  # 保存datetime对象用于后续更新
                 'beijing': beijing_formatted,
-                'plus6': plus6_formatted
+                'local': local_formatted
             }
 
         except Exception as e:
             self.logger.error(f"提取时间信息失败: {e}")
             return None
+
+    def _update_time_display_with_utc(self, utc_dt):
+        """
+        根据UTC时间更新所有时间显示
+
+        Args:
+            utc_dt: datetime对象，UTC时间
+        """
+        from datetime import timedelta
+
+        try:
+            # 清空时间框
+            self.time_utc_entry.delete(0, tk.END)
+            self.time_beijing_entry.delete(0, tk.END)
+            self.time_local_entry.delete(0, tk.END)
+
+            # UTC时间
+            utc_formatted = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+            self.time_utc_entry.insert(0, utc_formatted)
+
+            # 北京时间 (UTC+8)
+            beijing_dt = utc_dt + timedelta(hours=8)
+            beijing_formatted = beijing_dt.strftime("%Y-%m-%d %H:%M:%S")
+            self.time_beijing_entry.insert(0, beijing_formatted)
+
+            # 根据GPS经度计算本地时区
+            try:
+                longitude = float(self.gps_lon_var.get())
+                timezone_offset = round(longitude / 15)
+                timezone_offset = max(-12, min(14, timezone_offset))
+            except:
+                timezone_offset = 6  # 默认UTC+6
+
+            # 本地时间
+            local_dt = utc_dt + timedelta(hours=timezone_offset)
+            local_formatted = local_dt.strftime("%Y-%m-%d %H:%M:%S")
+            self.time_local_entry.insert(0, local_formatted)
+
+            self.logger.info(f"时间已更新: UTC={utc_formatted}, 北京={beijing_formatted}, 本地={local_formatted} (UTC{timezone_offset:+d})")
+
+        except Exception as e:
+            self.logger.error(f"更新时间显示失败: {e}")
 
     def _show_previous_cutout(self):
         """显示上一组cutout图片"""
