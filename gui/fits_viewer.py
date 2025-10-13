@@ -289,6 +289,25 @@ class FitsImageViewer:
         self.coord_compact_entry = ttk.Entry(toolbar_frame4, width=25)
         self.coord_compact_entry.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 时间显示区域（第五行工具栏）
+        toolbar_frame5 = ttk.Frame(toolbar_container)
+        toolbar_frame5.pack(fill=tk.X, pady=2)
+
+        # UTC时间
+        ttk.Label(toolbar_frame5, text="UTC:").pack(side=tk.LEFT, padx=(5, 2))
+        self.time_utc_entry = ttk.Entry(toolbar_frame5, width=25)
+        self.time_utc_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 北京时间
+        ttk.Label(toolbar_frame5, text="北京时间:").pack(side=tk.LEFT, padx=(5, 2))
+        self.time_beijing_entry = ttk.Entry(toolbar_frame5, width=25)
+        self.time_beijing_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        # +6时区时间
+        ttk.Label(toolbar_frame5, text="+6时区:").pack(side=tk.LEFT, padx=(5, 2))
+        self.time_plus6_entry = ttk.Entry(toolbar_frame5, width=25)
+        self.time_plus6_entry.pack(side=tk.LEFT, padx=(0, 5))
+
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
             self.astap_button.config(state="disabled", text="ASTAP不可用")
@@ -2071,6 +2090,9 @@ class FitsImageViewer:
         self.coord_deg_entry.delete(0, tk.END)
         self.coord_hms_entry.delete(0, tk.END)
         self.coord_compact_entry.delete(0, tk.END)
+        self.time_utc_entry.delete(0, tk.END)
+        self.time_beijing_entry.delete(0, tk.END)
+        self.time_plus6_entry.delete(0, tk.END)
 
         if not file_info:
             self.logger.warning("file_info为空")
@@ -2137,6 +2159,77 @@ class FitsImageViewer:
             self.logger.info(f"合并格式: {compact_text}")
         else:
             self.logger.warning(f"合并格式缺失: ra_compact={file_info.get('ra_compact')}, dec_compact={file_info.get('dec_compact')}")
+
+        # 时间显示
+        time_info = self._extract_time_from_filename(file_info.get('filename', ''))
+        if time_info:
+            # UTC时间
+            if time_info.get('utc'):
+                self.time_utc_entry.insert(0, time_info['utc'])
+                self.logger.info(f"UTC时间: {time_info['utc']}")
+
+            # 北京时间
+            if time_info.get('beijing'):
+                self.time_beijing_entry.insert(0, time_info['beijing'])
+                self.logger.info(f"北京时间: {time_info['beijing']}")
+
+            # +6时区时间
+            if time_info.get('plus6'):
+                self.time_plus6_entry.insert(0, time_info['plus6'])
+                self.logger.info(f"+6时区: {time_info['plus6']}")
+        else:
+            self.logger.warning("未能从文件名提取时间信息")
+
+    def _extract_time_from_filename(self, filename):
+        """
+        从文件名提取UTC时间并转换为不同时区
+
+        文件名格式示例: GY5_K053-1_No%20Filter_60S_Bin2_UTC20250628_191828_-14.9C_.fits
+
+        Args:
+            filename: 文件名
+
+        Returns:
+            dict: 包含utc, beijing, plus6时间字符串的字典，如果提取失败返回None
+        """
+        import re
+        from datetime import datetime, timedelta
+
+        try:
+            # 匹配UTC时间格式: UTC20250628_191828
+            pattern = r'UTC(\d{8})_(\d{6})'
+            match = re.search(pattern, filename)
+
+            if not match:
+                self.logger.warning(f"文件名中未找到UTC时间格式: {filename}")
+                return None
+
+            date_str = match.group(1)  # 20250628
+            time_str = match.group(2)  # 191828
+
+            # 解析UTC时间
+            utc_dt = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M%S")
+
+            # 格式化UTC时间
+            utc_formatted = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            # 计算北京时间 (UTC+8)
+            beijing_dt = utc_dt + timedelta(hours=8)
+            beijing_formatted = beijing_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            # 计算+6时区时间 (UTC+6)
+            plus6_dt = utc_dt + timedelta(hours=6)
+            plus6_formatted = plus6_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            return {
+                'utc': utc_formatted,
+                'beijing': beijing_formatted,
+                'plus6': plus6_formatted
+            }
+
+        except Exception as e:
+            self.logger.error(f"提取时间信息失败: {e}")
+            return None
 
     def _show_previous_cutout(self):
         """显示上一组cutout图片"""
