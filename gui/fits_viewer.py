@@ -342,7 +342,17 @@ class FitsImageViewer:
         # 保存GPS按钮
         self.save_gps_button = ttk.Button(toolbar_frame6, text="保存GPS",
                                          command=self._save_gps_settings)
-        self.save_gps_button.pack(side=tk.LEFT, padx=(5, 0))
+        self.save_gps_button.pack(side=tk.LEFT, padx=(5, 10))
+
+        # Skybot查询按钮
+        self.skybot_button = ttk.Button(toolbar_frame6, text="查询小行星(Skybot)",
+                                       command=self._query_skybot, state="disabled")
+        self.skybot_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        # Skybot查询结果显示
+        ttk.Label(toolbar_frame6, text="查询结果:").pack(side=tk.LEFT, padx=(5, 2))
+        self.skybot_result_label = ttk.Label(toolbar_frame6, text="未查询", foreground="gray")
+        self.skybot_result_label.pack(side=tk.LEFT, padx=(0, 5))
 
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
@@ -1916,6 +1926,9 @@ class FitsImageViewer:
             self.next_cutout_button.config(state="disabled")
         if hasattr(self, 'check_dss_button'):
             self.check_dss_button.config(state="disabled")
+        if hasattr(self, 'skybot_button'):
+            self.skybot_button.config(state="disabled")
+            self.skybot_result_label.config(text="未查询", foreground="gray")
 
         # 清除输出目录
         self.last_output_dir = None
@@ -2189,6 +2202,10 @@ class FitsImageViewer:
         # 启用检查DSS按钮（只要有cutout就可以启用）
         if hasattr(self, 'check_dss_button'):
             self.check_dss_button.config(state="normal")
+
+        # 启用Skybot查询按钮（只要有cutout就可以启用）
+        if hasattr(self, 'skybot_button'):
+            self.skybot_button.config(state="normal")
 
         # 提取文件信息（使用左侧选中的文件名）
         selected_filename = ""
@@ -3243,6 +3260,149 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"应用DSS图像翻转失败: {str(e)}", exc_info=True)
+
+    def _query_skybot(self):
+        """使用Skybot查询小行星数据"""
+        try:
+            # 检查是否有当前显示的cutout
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.warning("请先执行差分检测并显示检测结果")
+                return
+
+            if not hasattr(self, '_current_cutout_index'):
+                self.logger.warning("没有当前显示的检测结果")
+                return
+
+            # 获取当前cutout的信息
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            reference_img = current_cutout['reference']
+            aligned_img = current_cutout['aligned']
+            detection_img = current_cutout['detection']
+
+            # 提取文件信息（包含RA/DEC）
+            selected_filename = ""
+            if self.selected_file_path:
+                selected_filename = os.path.basename(self.selected_file_path)
+
+            file_info = self._extract_file_info(reference_img, aligned_img, detection_img, selected_filename)
+
+            # 检查是否有RA/DEC信息
+            if not file_info.get('ra') or not file_info.get('dec'):
+                self.logger.error("无法获取目标的RA/DEC坐标信息")
+                self.skybot_result_label.config(text="坐标缺失", foreground="red")
+                return
+
+            ra = float(file_info['ra'])
+            dec = float(file_info['dec'])
+
+            # 检查是否有UTC时间
+            if not hasattr(self, '_current_utc_time') or not self._current_utc_time:
+                self.logger.error("无法获取UTC时间信息")
+                self.skybot_result_label.config(text="时间缺失", foreground="red")
+                return
+
+            utc_time = self._current_utc_time
+
+            # 获取GPS位置
+            try:
+                latitude = float(self.gps_lat_var.get())
+                longitude = float(self.gps_lon_var.get())
+            except ValueError:
+                self.logger.error(f"无效的GPS坐标: 纬度={self.gps_lat_var.get()}, 经度={self.gps_lon_var.get()}")
+                self.skybot_result_label.config(text="GPS无效", foreground="red")
+                return
+
+            self.logger.info(f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, GPS=({latitude}°N, {longitude}°E)")
+            self.skybot_result_label.config(text="查询中...", foreground="orange")
+
+            # 执行Skybot查询
+            results = self._perform_skybot_query(ra, dec, utc_time, latitude, longitude)
+
+            if results is not None:
+                count = len(results)
+                if count > 0:
+                    self.skybot_result_label.config(text=f"找到 {count} 个", foreground="green")
+                    self.logger.info(f"Skybot查询成功，找到 {count} 个小行星")
+
+                    # 输出详细结果到日志
+                    self.logger.info("=" * 80)
+                    self.logger.info("Skybot查询结果详情:")
+                    self.logger.info("=" * 80)
+
+                    for i, row in enumerate(results, 1):
+                        self.logger.info(f"\n第 {i} 个小行星:")
+                        self.logger.info(f"  名称: {row.get('Name', 'N/A')}")
+                        self.logger.info(f"  编号: {row.get('Number', 'N/A')}")
+                        self.logger.info(f"  类型: {row.get('Type', 'N/A')}")
+                        self.logger.info(f"  RA: {row.get('RA', 'N/A')}°")
+                        self.logger.info(f"  DEC: {row.get('DEC', 'N/A')}°")
+                        self.logger.info(f"  距离: {row.get('Dg', 'N/A')} AU")
+                        self.logger.info(f"  星等: {row.get('Mv', 'N/A')}")
+                        self.logger.info(f"  角距离: {row.get('posunc', 'N/A')} arcsec")
+
+                    self.logger.info("=" * 80)
+                else:
+                    self.skybot_result_label.config(text="未找到", foreground="blue")
+                    self.logger.info("Skybot查询完成，未找到小行星")
+            else:
+                self.skybot_result_label.config(text="查询失败", foreground="red")
+                self.logger.error("Skybot查询失败")
+
+        except Exception as e:
+            self.logger.error(f"Skybot查询失败: {str(e)}", exc_info=True)
+            self.skybot_result_label.config(text="查询出错", foreground="red")
+
+    def _perform_skybot_query(self, ra, dec, utc_time, latitude, longitude):
+        """
+        执行Skybot查询
+
+        Args:
+            ra: 赤经（度）
+            dec: 赤纬（度）
+            utc_time: UTC时间（datetime对象）
+            latitude: 纬度（度）
+            longitude: 经度（度）
+
+        Returns:
+            查询结果表，如果失败返回None
+        """
+        try:
+            from astroquery.imcce import Skybot
+            from astropy.time import Time
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+
+            # 转换时间格式
+            obs_time = Time(utc_time)
+
+            # 创建坐标对象
+            coord = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
+
+            # 设置搜索半径（默认0.1度）
+            search_radius = 0.1 * u.degree
+
+            # 默认使用MPC观测站代码 N87
+            mpc_code = 'N87'
+
+            self.logger.info(f"Skybot查询参数:")
+            self.logger.info(f"  坐标: RA={ra}°, Dec={dec}°")
+            self.logger.info(f"  时间: {obs_time.iso}")
+            self.logger.info(f"  观测站: MPC code {mpc_code}")
+            self.logger.info(f"  (GPS参考: 经度={longitude}°, 纬度={latitude}°)")
+            self.logger.info(f"  搜索半径: {search_radius}")
+
+            # 执行查询，使用MPC观测站代码
+            results = Skybot.cone_search(coord, search_radius, obs_time, location=mpc_code)
+
+            return results
+
+        except ImportError as e:
+            self.logger.error("astroquery未安装或导入失败，请安装: pip install astroquery")
+            self.logger.error(f"详细错误: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Skybot查询执行失败: {str(e)}", exc_info=True)
+            return None
 
     def _get_fits_rotation_angle(self, fits_path):
         """
