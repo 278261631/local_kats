@@ -59,6 +59,9 @@ class ConfigManager:
                 "latitude": 43.4,  # 纬度（默认值：43.4°N）
                 "longitude": 87.1  # 经度（默认值：87.1°E）
             },
+            "mpc_settings": {
+                "mpc_code": "N87"  # MPC观测站代码（默认值：N87）
+            },
             "display_settings": {
                 "default_display_mode": "linear",
                 "default_colormap": "gray",
@@ -217,6 +220,24 @@ class ConfigManager:
         for key, value in kwargs.items():
             if key in ["latitude", "longitude"]:
                 self.config["gps_settings"][key] = value
+        self.save_config()
+
+    def get_mpc_settings(self) -> Dict[str, Any]:
+        """获取MPC代码设置"""
+        # 如果配置中没有MPC设置，使用默认值
+        if "mpc_settings" not in self.config:
+            self.config["mpc_settings"] = self.default_config["mpc_settings"].copy()
+            self.save_config()
+        return self.config["mpc_settings"]
+
+    def update_mpc_settings(self, **kwargs):
+        """更新MPC代码设置"""
+        if "mpc_settings" not in self.config:
+            self.config["mpc_settings"] = self.default_config["mpc_settings"].copy()
+
+        for key, value in kwargs.items():
+            if key == "mpc_code":
+                self.config["mpc_settings"][key] = value
         self.save_config()
 
     def get_url_template_type(self) -> str:

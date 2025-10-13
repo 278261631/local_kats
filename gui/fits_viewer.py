@@ -111,6 +111,9 @@ class FitsImageViewer:
         # 绑定GPS设置变化事件
         self._bind_gps_settings_events()
 
+        # 从配置文件加载MPC代码设置
+        self._load_mpc_settings()
+
         # 延迟执行首次刷新（确保界面完全创建后）
         self.parent_frame.after(100, self._first_time_refresh)
         
@@ -343,6 +346,17 @@ class FitsImageViewer:
         self.save_gps_button = ttk.Button(toolbar_frame6, text="保存GPS",
                                          command=self._save_gps_settings)
         self.save_gps_button.pack(side=tk.LEFT, padx=(5, 10))
+
+        # MPC观测站代码
+        ttk.Label(toolbar_frame6, text="MPC代码:").pack(side=tk.LEFT, padx=(5, 2))
+        self.mpc_code_var = tk.StringVar(value="N87")
+        self.mpc_code_entry = ttk.Entry(toolbar_frame6, textvariable=self.mpc_code_var, width=8)
+        self.mpc_code_entry.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 保存MPC代码按钮
+        self.save_mpc_button = ttk.Button(toolbar_frame6, text="保存MPC",
+                                         command=self._save_mpc_settings)
+        self.save_mpc_button.pack(side=tk.LEFT, padx=(0, 10))
 
         # Skybot查询按钮
         self.skybot_button = ttk.Button(toolbar_frame6, text="查询小行星(Skybot)",
@@ -789,6 +803,46 @@ class FitsImageViewer:
             self.logger.warning(f"无效的经度值: {self.gps_lon_var.get()}")
         except Exception as e:
             self.logger.error(f"更新时区显示失败: {str(e)}")
+
+    def _load_mpc_settings(self):
+        """从配置文件加载MPC代码设置"""
+        if not self.config_manager:
+            return
+
+        try:
+            mpc_settings = self.config_manager.get_mpc_settings()
+
+            # 加载MPC代码，默认值：N87
+            mpc_code = mpc_settings.get('mpc_code', 'N87')
+
+            self.mpc_code_var.set(mpc_code)
+
+            self.logger.info(f"MPC代码设置已加载: {mpc_code}")
+
+        except Exception as e:
+            self.logger.error(f"加载MPC代码设置失败: {str(e)}")
+            # 使用默认值
+            self.mpc_code_var.set("N87")
+
+    def _save_mpc_settings(self):
+        """保存MPC代码设置到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            mpc_code = self.mpc_code_var.get().strip().upper()
+
+            if not mpc_code:
+                self.logger.error("MPC代码不能为空")
+                return
+
+            # 保存到配置文件
+            self.config_manager.update_mpc_settings(mpc_code=mpc_code)
+
+            self.logger.info(f"MPC代码设置已保存: {mpc_code}")
+
+        except Exception as e:
+            self.logger.error(f"保存MPC代码设置失败: {str(e)}")
 
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""
@@ -3312,11 +3366,16 @@ class FitsImageViewer:
                 self.skybot_result_label.config(text="GPS无效", foreground="red")
                 return
 
-            self.logger.info(f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, GPS=({latitude}°N, {longitude}°E)")
+            # 获取MPC代码
+            mpc_code = self.mpc_code_var.get().strip().upper()
+            if not mpc_code:
+                mpc_code = 'N87'  # 默认值
+
+            self.logger.info(f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, MPC={mpc_code}, GPS=({latitude}°N, {longitude}°E)")
             self.skybot_result_label.config(text="查询中...", foreground="orange")
 
             # 执行Skybot查询
-            results = self._perform_skybot_query(ra, dec, utc_time, latitude, longitude)
+            results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude)
 
             if results is not None:
                 count = len(results)
@@ -3352,7 +3411,7 @@ class FitsImageViewer:
             self.logger.error(f"Skybot查询失败: {str(e)}", exc_info=True)
             self.skybot_result_label.config(text="查询出错", foreground="red")
 
-    def _perform_skybot_query(self, ra, dec, utc_time, latitude, longitude):
+    def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude):
         """
         执行Skybot查询
 
@@ -3360,8 +3419,9 @@ class FitsImageViewer:
             ra: 赤经（度）
             dec: 赤纬（度）
             utc_time: UTC时间（datetime对象）
-            latitude: 纬度（度）
-            longitude: 经度（度）
+            mpc_code: MPC观测站代码
+            latitude: 纬度（度，仅用于日志）
+            longitude: 经度（度，仅用于日志）
 
         Returns:
             查询结果表，如果失败返回None
@@ -3380,9 +3440,6 @@ class FitsImageViewer:
 
             # 设置搜索半径（默认0.1度）
             search_radius = 0.1 * u.degree
-
-            # 默认使用MPC观测站代码 N87
-            mpc_code = 'N87'
 
             self.logger.info(f"Skybot查询参数:")
             self.logger.info(f"  坐标: RA={ra}°, Dec={dec}°")
