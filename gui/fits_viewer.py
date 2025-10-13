@@ -3388,16 +3388,38 @@ class FitsImageViewer:
                     self.logger.info("Skybot查询结果详情:")
                     self.logger.info("=" * 80)
 
+                    # 获取列名
+                    colnames = results.colnames
+                    self.logger.info(f"可用列: {', '.join(colnames)}")
+
                     for i, row in enumerate(results, 1):
                         self.logger.info(f"\n第 {i} 个小行星:")
-                        self.logger.info(f"  名称: {row.get('Name', 'N/A')}")
-                        self.logger.info(f"  编号: {row.get('Number', 'N/A')}")
-                        self.logger.info(f"  类型: {row.get('Type', 'N/A')}")
-                        self.logger.info(f"  RA: {row.get('RA', 'N/A')}°")
-                        self.logger.info(f"  DEC: {row.get('DEC', 'N/A')}°")
-                        self.logger.info(f"  距离: {row.get('Dg', 'N/A')} AU")
-                        self.logger.info(f"  星等: {row.get('Mv', 'N/A')}")
-                        self.logger.info(f"  角距离: {row.get('posunc', 'N/A')} arcsec")
+
+                        # 使用字典访问方式，并处理可能不存在的列
+                        try:
+                            # 常见的列名
+                            if 'Name' in colnames:
+                                self.logger.info(f"  名称: {row['Name']}")
+                            if 'Number' in colnames:
+                                self.logger.info(f"  编号: {row['Number']}")
+                            if 'Type' in colnames:
+                                self.logger.info(f"  类型: {row['Type']}")
+                            if 'RA' in colnames:
+                                self.logger.info(f"  RA: {row['RA']}°")
+                            if 'DEC' in colnames:
+                                self.logger.info(f"  DEC: {row['DEC']}°")
+                            if 'Dg' in colnames:
+                                self.logger.info(f"  距离: {row['Dg']} AU")
+                            if 'Mv' in colnames:
+                                self.logger.info(f"  星等: {row['Mv']}")
+                            if 'posunc' in colnames:
+                                self.logger.info(f"  位置不确定度: {row['posunc']} arcsec")
+
+                            # 输出所有列（用于调试）
+                            self.logger.info(f"  完整数据: {dict(zip(colnames, row))}")
+
+                        except Exception as e:
+                            self.logger.error(f"  解析第 {i} 个小行星数据失败: {e}")
 
                     self.logger.info("=" * 80)
                 else:
@@ -3449,9 +3471,21 @@ class FitsImageViewer:
             self.logger.info(f"  搜索半径: {search_radius}")
 
             # 执行查询，使用MPC观测站代码
-            results = Skybot.cone_search(coord, search_radius, obs_time, location=mpc_code)
-
-            return results
+            try:
+                results = Skybot.cone_search(coord, search_radius, obs_time, location=mpc_code)
+                return results
+            except RuntimeError as e:
+                # RuntimeError通常表示"未找到小行星"，这是正常情况
+                error_msg = str(e)
+                if "No solar system object was found" in error_msg:
+                    self.logger.info("Skybot查询完成：在指定区域未找到小行星")
+                    # 返回空表而不是None，表示查询成功但无结果
+                    from astropy.table import Table
+                    return Table()
+                else:
+                    # 其他RuntimeError仍然作为错误处理
+                    self.logger.error(f"Skybot查询失败: {error_msg}")
+                    return None
 
         except ImportError as e:
             self.logger.error("astroquery未安装或导入失败，请安装: pip install astroquery")
