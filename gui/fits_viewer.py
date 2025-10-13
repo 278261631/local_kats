@@ -2161,10 +2161,19 @@ class FitsImageViewer:
             # 有子节点，说明是目录节点，使用默认行为（折叠）
             return
 
-        # 是最终节点（FITS文件），执行"上一组"操作
-        if hasattr(self, 'prev_cutout_button') and str(self.prev_cutout_button['state']) == 'normal':
-            self._show_previous_cutout()
-            return "break"  # 阻止默认行为
+        # 是最终节点（FITS文件）
+        # 检查是否有检测结果且不是第一个检测结果
+        has_cutouts = hasattr(self, '_current_cutout_index') and hasattr(self, '_total_cutouts')
+        is_not_first = has_cutouts and self._current_cutout_index > 0
+
+        # 只有在不是第一个检测结果时才执行"上一组"操作
+        if is_not_first:
+            if hasattr(self, 'prev_cutout_button') and str(self.prev_cutout_button['state']) == 'normal':
+                self._show_previous_cutout()
+                return "break"  # 阻止默认行为
+
+        # 其他情况（第一个检测结果或没有检测结果），保留默认折叠功能
+        # 不返回"break"，让默认行为执行
 
     def _on_tree_right_key(self, event):
         """处理目录树的右键事件 - 对应"下一组"按钮"""
