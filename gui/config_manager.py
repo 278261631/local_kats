@@ -51,6 +51,10 @@ class ConfigManager:
                 "stretch_method": "percentile",  # 拉伸方法: percentile, minmax, asinh（GUI默认值：percentile）
                 "percentile_low": 99.95  # 百分位参数（GUI默认值：99.95）
             },
+            "dss_flip_settings": {
+                "flip_vertical": True,  # 上下翻转DSS（默认值：True）
+                "flip_horizontal": False  # 左右翻转DSS（默认值：False）
+            },
             "display_settings": {
                 "default_display_mode": "linear",
                 "default_colormap": "gray",
@@ -173,6 +177,24 @@ class ConfigManager:
         for key, value in kwargs.items():
             if key in self.config["batch_process_settings"]:
                 self.config["batch_process_settings"][key] = value
+        self.save_config()
+
+    def get_dss_flip_settings(self) -> Dict[str, Any]:
+        """获取DSS翻转设置"""
+        # 如果配置中没有DSS翻转设置，使用默认值
+        if "dss_flip_settings" not in self.config:
+            self.config["dss_flip_settings"] = self.default_config["dss_flip_settings"].copy()
+            self.save_config()
+        return self.config["dss_flip_settings"]
+
+    def update_dss_flip_settings(self, **kwargs):
+        """更新DSS翻转设置"""
+        if "dss_flip_settings" not in self.config:
+            self.config["dss_flip_settings"] = self.default_config["dss_flip_settings"].copy()
+
+        for key, value in kwargs.items():
+            if key in ["flip_vertical", "flip_horizontal"]:
+                self.config["dss_flip_settings"][key] = value
         self.save_config()
 
     def get_url_template_type(self) -> str:

@@ -99,6 +99,12 @@ class FitsImageViewer:
         # 绑定控件变化事件，自动保存到配置文件
         self._bind_batch_settings_events()
 
+        # 从配置文件加载DSS翻转设置
+        self._load_dss_flip_settings()
+
+        # 绑定DSS翻转设置变化事件
+        self._bind_dss_flip_settings_events()
+
         # 延迟执行首次刷新（确保界面完全创建后）
         self.parent_frame.after(100, self._first_time_refresh)
         
@@ -249,7 +255,20 @@ class FitsImageViewer:
         # 检查DSS按钮
         self.check_dss_button = ttk.Button(toolbar_frame3, text="检查DSS",
                                           command=self._check_dss, state="disabled")
-        self.check_dss_button.pack(side=tk.LEFT, padx=(0, 0))
+        self.check_dss_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # DSS翻转选项（使用Checkbutton）
+        self.flip_dss_vertical_var = tk.BooleanVar(value=True)  # 默认选中
+        self.flip_dss_vertical_check = ttk.Checkbutton(toolbar_frame3, text="上下翻转DSS",
+                                                       variable=self.flip_dss_vertical_var,
+                                                       command=self._on_flip_dss_config_changed)
+        self.flip_dss_vertical_check.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.flip_dss_horizontal_var = tk.BooleanVar(value=False)  # 默认不选中
+        self.flip_dss_horizontal_check = ttk.Checkbutton(toolbar_frame3, text="左右翻转DSS",
+                                                         variable=self.flip_dss_horizontal_var,
+                                                         command=self._on_flip_dss_config_changed)
+        self.flip_dss_horizontal_check.pack(side=tk.LEFT, padx=(0, 0))
 
         # 坐标显示区域（第四行工具栏）
         toolbar_frame4 = ttk.Frame(toolbar_container)
@@ -550,6 +569,64 @@ class FitsImageViewer:
             self.logger.warning(f"无效的百分位值: {self.percentile_var.get()}")
         except Exception as e:
             self.logger.error(f"保存百分位参数失败: {str(e)}")
+
+    def _load_dss_flip_settings(self):
+        """从配置文件加载DSS翻转设置"""
+        if not self.config_manager:
+            return
+
+        try:
+            dss_settings = self.config_manager.get_dss_flip_settings()
+
+            # 加载翻转设置，默认值：上下翻转=True，左右翻转=False
+            flip_vertical = dss_settings.get('flip_vertical', True)
+            flip_horizontal = dss_settings.get('flip_horizontal', False)
+
+            self.flip_dss_vertical_var.set(flip_vertical)
+            self.flip_dss_horizontal_var.set(flip_horizontal)
+
+            self.logger.info(f"DSS翻转设置已加载: 上下翻转={flip_vertical}, 左右翻转={flip_horizontal}")
+
+        except Exception as e:
+            self.logger.error(f"加载DSS翻转设置失败: {str(e)}")
+            # 使用默认值
+            self.flip_dss_vertical_var.set(True)
+            self.flip_dss_horizontal_var.set(False)
+
+    def _bind_dss_flip_settings_events(self):
+        """绑定DSS翻转设置的变化事件"""
+        if not self.config_manager:
+            return
+
+        try:
+            # 绑定翻转复选框
+            self.flip_dss_vertical_var.trace('w', self._on_flip_dss_config_changed)
+            self.flip_dss_horizontal_var.trace('w', self._on_flip_dss_config_changed)
+
+            self.logger.info("DSS翻转设置事件已绑定")
+
+        except Exception as e:
+            self.logger.error(f"绑定DSS翻转设置事件失败: {str(e)}")
+
+    def _on_flip_dss_config_changed(self, *args):
+        """DSS翻转设置变化时保存到配置文件并应用翻转"""
+        if not self.config_manager:
+            return
+
+        try:
+            # 保存到配置文件
+            self.config_manager.update_dss_flip_settings(
+                flip_vertical=self.flip_dss_vertical_var.get(),
+                flip_horizontal=self.flip_dss_horizontal_var.get()
+            )
+
+            self.logger.info(f"DSS翻转设置已保存: 上下翻转={self.flip_dss_vertical_var.get()}, 左右翻转={self.flip_dss_horizontal_var.get()}")
+
+            # 如果已经有DSS图像，应用翻转
+            self._apply_dss_flip()
+
+        except Exception as e:
+            self.logger.error(f"保存DSS翻转设置失败: {str(e)}")
 
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""
@@ -2802,9 +2879,16 @@ class FitsImageViewer:
                     self._click_images.append(dss_array)
                     self._click_image_names.append("DSS Image")
 
+                    # 记录DSS图像的索引和原始数据
+                    self._dss_image_index = len(self._click_images) - 1
+                    self._dss_original_array = dss_array.copy()  # 保存原始数据用于翻转操作
+
                     total_images = len(self._click_images)
                     self.logger.info(f"DSS图像已添加到切换列表，当前共有 {total_images} 张图像")
                     self.logger.info(f"文件保存在: {dss_output_path}")
+
+                    # 应用翻转设置
+                    self._apply_dss_flip()
 
                     # 自动切换到DSS图像
                     self._click_index = total_images - 1  # 最后一张（DSS图像）
@@ -2826,6 +2910,49 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"检查DSS失败: {str(e)}", exc_info=True)
+
+    def _apply_dss_flip(self):
+        """根据配置应用DSS图像翻转"""
+        try:
+            # 检查是否有DSS图像
+            if not hasattr(self, '_dss_image_index') or not hasattr(self, '_dss_original_array'):
+                return
+
+            # 获取DSS图像索引
+            dss_index = self._dss_image_index
+
+            # 从原始图像开始应用翻转
+            flipped_dss = self._dss_original_array.copy()
+
+            # 根据配置应用翻转
+            if self.flip_dss_vertical_var.get():
+                flipped_dss = np.flipud(flipped_dss)
+
+            if self.flip_dss_horizontal_var.get():
+                flipped_dss = np.fliplr(flipped_dss)
+
+            # 更新图像数据
+            self._click_images[dss_index] = flipped_dss
+
+            # 如果当前显示的是DSS图像，更新显示
+            if hasattr(self, '_click_index') and self._click_index == dss_index:
+                self._click_im.set_data(flipped_dss)
+                self.canvas.draw_idle()
+
+            # 记录翻转状态
+            flip_status = []
+            if self.flip_dss_vertical_var.get():
+                flip_status.append("上下翻转")
+            if self.flip_dss_horizontal_var.get():
+                flip_status.append("左右翻转")
+
+            if flip_status:
+                self.logger.info(f"DSS图像已应用翻转: {', '.join(flip_status)}")
+            else:
+                self.logger.info("DSS图像已恢复原始方向")
+
+        except Exception as e:
+            self.logger.error(f"应用DSS图像翻转失败: {str(e)}", exc_info=True)
 
     def _get_fits_rotation_angle(self, fits_path):
         """
