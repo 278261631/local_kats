@@ -272,7 +272,8 @@ class FitsWebDownloaderGUI:
             get_download_dir_callback=self._get_download_dir,
             get_template_dir_callback=self._get_template_dir,
             get_diff_output_dir_callback=self._get_diff_output_dir,
-            get_url_selections_callback=self._get_url_selections
+            get_url_selections_callback=self._get_url_selections,
+            log_callback=self.get_error_logger_callback()  # 传递日志回调函数
         )
 
         # 设置diff_orb的GUI回调

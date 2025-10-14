@@ -44,7 +44,8 @@ class FitsImageViewer:
     def __init__(self, parent_frame, config_manager=None, get_download_dir_callback: Optional[Callable] = None,
                  get_template_dir_callback: Optional[Callable] = None,
                  get_diff_output_dir_callback: Optional[Callable] = None,
-                 get_url_selections_callback: Optional[Callable] = None):
+                 get_url_selections_callback: Optional[Callable] = None,
+                 log_callback: Optional[Callable] = None):
         self.parent_frame = parent_frame
         self.config_manager = config_manager
         self.current_fits_data = None
@@ -58,6 +59,7 @@ class FitsImageViewer:
         self.get_template_dir_callback = get_template_dir_callback
         self.get_diff_output_dir_callback = get_diff_output_dir_callback
         self.get_url_selections_callback = get_url_selections_callback
+        self.log_callback = log_callback  # 日志回调函数，用于输出到日志标签页
 
         # 设置日志
         self.logger = logging.getLogger(__name__)
@@ -3371,7 +3373,12 @@ class FitsImageViewer:
             if not mpc_code:
                 mpc_code = 'N87'  # 默认值
 
-            self.logger.info(f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, MPC={mpc_code}, GPS=({latitude}°N, {longitude}°E)")
+            query_info = f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, MPC={mpc_code}, GPS=({latitude}°N, {longitude}°E)"
+            self.logger.info(query_info)
+            # 输出到日志标签页
+            if self.log_callback:
+                self.log_callback(query_info, "INFO")
+
             self.skybot_result_label.config(text="查询中...", foreground="orange")
 
             # 执行Skybot查询
@@ -3381,56 +3388,112 @@ class FitsImageViewer:
                 count = len(results)
                 if count > 0:
                     self.skybot_result_label.config(text=f"找到 {count} 个", foreground="green")
-                    self.logger.info(f"Skybot查询成功，找到 {count} 个小行星")
+                    success_msg = f"Skybot查询成功，找到 {count} 个小行星"
+                    self.logger.info(success_msg)
+                    if self.log_callback:
+                        self.log_callback(success_msg, "INFO")
 
                     # 输出详细结果到日志
-                    self.logger.info("=" * 80)
-                    self.logger.info("Skybot查询结果详情:")
-                    self.logger.info("=" * 80)
+                    separator = "=" * 80
+                    header = "Skybot查询结果详情:"
+                    self.logger.info(separator)
+                    self.logger.info(header)
+                    self.logger.info(separator)
+                    if self.log_callback:
+                        self.log_callback(separator, "INFO")
+                        self.log_callback(header, "INFO")
+                        self.log_callback(separator, "INFO")
 
                     # 获取列名
                     colnames = results.colnames
-                    self.logger.info(f"可用列: {', '.join(colnames)}")
+                    colnames_msg = f"可用列: {', '.join(colnames)}"
+                    self.logger.info(colnames_msg)
+                    if self.log_callback:
+                        self.log_callback(colnames_msg, "INFO")
 
                     for i, row in enumerate(results, 1):
-                        self.logger.info(f"\n第 {i} 个小行星:")
+                        asteroid_header = f"\n第 {i} 个小行星:"
+                        self.logger.info(asteroid_header)
+                        if self.log_callback:
+                            self.log_callback(asteroid_header, "INFO")
 
                         # 使用字典访问方式，并处理可能不存在的列
                         try:
                             # 常见的列名
                             if 'Name' in colnames:
-                                self.logger.info(f"  名称: {row['Name']}")
+                                msg = f"  名称: {row['Name']}"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
                             if 'Number' in colnames:
-                                self.logger.info(f"  编号: {row['Number']}")
+                                msg = f"  编号: {row['Number']}"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
                             if 'Type' in colnames:
-                                self.logger.info(f"  类型: {row['Type']}")
+                                msg = f"  类型: {row['Type']}"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
                             if 'RA' in colnames:
-                                self.logger.info(f"  RA: {row['RA']}°")
+                                msg = f"  RA: {row['RA']}°"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
                             if 'DEC' in colnames:
-                                self.logger.info(f"  DEC: {row['DEC']}°")
+                                msg = f"  DEC: {row['DEC']}°"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
                             if 'Dg' in colnames:
-                                self.logger.info(f"  距离: {row['Dg']} AU")
+                                msg = f"  距离: {row['Dg']} AU"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
                             if 'Mv' in colnames:
-                                self.logger.info(f"  星等: {row['Mv']}")
+                                msg = f"  星等: {row['Mv']}"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
                             if 'posunc' in colnames:
-                                self.logger.info(f"  位置不确定度: {row['posunc']} arcsec")
+                                msg = f"  位置不确定度: {row['posunc']} arcsec"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
 
                             # 输出所有列（用于调试）
-                            self.logger.info(f"  完整数据: {dict(zip(colnames, row))}")
+                            full_data_msg = f"  完整数据: {dict(zip(colnames, row))}"
+                            self.logger.info(full_data_msg)
+                            if self.log_callback:
+                                self.log_callback(full_data_msg, "INFO")
 
                         except Exception as e:
-                            self.logger.error(f"  解析第 {i} 个小行星数据失败: {e}")
+                            error_msg = f"  解析第 {i} 个小行星数据失败: {e}"
+                            self.logger.error(error_msg)
+                            if self.log_callback:
+                                self.log_callback(error_msg, "ERROR")
 
-                    self.logger.info("=" * 80)
+                    self.logger.info(separator)
+                    if self.log_callback:
+                        self.log_callback(separator, "INFO")
                 else:
                     self.skybot_result_label.config(text="未找到", foreground="blue")
-                    self.logger.info("Skybot查询完成，未找到小行星")
+                    not_found_msg = "Skybot查询完成，未找到小行星"
+                    self.logger.info(not_found_msg)
+                    if self.log_callback:
+                        self.log_callback(not_found_msg, "INFO")
             else:
                 self.skybot_result_label.config(text="查询失败", foreground="red")
-                self.logger.error("Skybot查询失败")
+                error_msg = "Skybot查询失败"
+                self.logger.error(error_msg)
+                if self.log_callback:
+                    self.log_callback(error_msg, "ERROR")
 
         except Exception as e:
-            self.logger.error(f"Skybot查询失败: {str(e)}", exc_info=True)
+            exception_msg = f"Skybot查询失败: {str(e)}"
+            self.logger.error(exception_msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(exception_msg, "ERROR")
             self.skybot_result_label.config(text="查询出错", foreground="red")
 
     def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude):
@@ -3463,12 +3526,27 @@ class FitsImageViewer:
             # 设置搜索半径（默认0.1度）
             search_radius = 0.1 * u.degree
 
-            self.logger.info(f"Skybot查询参数:")
-            self.logger.info(f"  坐标: RA={ra}°, Dec={dec}°")
-            self.logger.info(f"  时间: {obs_time.iso}")
-            self.logger.info(f"  观测站: MPC code {mpc_code}")
-            self.logger.info(f"  (GPS参考: 经度={longitude}°, 纬度={latitude}°)")
-            self.logger.info(f"  搜索半径: {search_radius}")
+            param_header = f"Skybot查询参数:"
+            param_coord = f"  坐标: RA={ra}°, Dec={dec}°"
+            param_time = f"  时间: {obs_time.iso}"
+            param_station = f"  观测站: MPC code {mpc_code}"
+            param_gps = f"  (GPS参考: 经度={longitude}°, 纬度={latitude}°)"
+            param_radius = f"  搜索半径: {search_radius}"
+
+            self.logger.info(param_header)
+            self.logger.info(param_coord)
+            self.logger.info(param_time)
+            self.logger.info(param_station)
+            self.logger.info(param_gps)
+            self.logger.info(param_radius)
+
+            if self.log_callback:
+                self.log_callback(param_header, "INFO")
+                self.log_callback(param_coord, "INFO")
+                self.log_callback(param_time, "INFO")
+                self.log_callback(param_station, "INFO")
+                self.log_callback(param_gps, "INFO")
+                self.log_callback(param_radius, "INFO")
 
             # 执行查询，使用MPC观测站代码
             try:
@@ -3478,21 +3556,35 @@ class FitsImageViewer:
                 # RuntimeError通常表示"未找到小行星"，这是正常情况
                 error_msg = str(e)
                 if "No solar system object was found" in error_msg:
-                    self.logger.info("Skybot查询完成：在指定区域未找到小行星")
+                    no_result_msg = "Skybot查询完成：在指定区域未找到小行星"
+                    self.logger.info(no_result_msg)
+                    if self.log_callback:
+                        self.log_callback(no_result_msg, "INFO")
                     # 返回空表而不是None，表示查询成功但无结果
                     from astropy.table import Table
                     return Table()
                 else:
                     # 其他RuntimeError仍然作为错误处理
-                    self.logger.error(f"Skybot查询失败: {error_msg}")
+                    error_msg_full = f"Skybot查询失败: {error_msg}"
+                    self.logger.error(error_msg_full)
+                    if self.log_callback:
+                        self.log_callback(error_msg_full, "ERROR")
                     return None
 
         except ImportError as e:
-            self.logger.error("astroquery未安装或导入失败，请安装: pip install astroquery")
-            self.logger.error(f"详细错误: {e}")
+            import_error_msg = "astroquery未安装或导入失败，请安装: pip install astroquery"
+            detail_error_msg = f"详细错误: {e}"
+            self.logger.error(import_error_msg)
+            self.logger.error(detail_error_msg)
+            if self.log_callback:
+                self.log_callback(import_error_msg, "ERROR")
+                self.log_callback(detail_error_msg, "ERROR")
             return None
         except Exception as e:
-            self.logger.error(f"Skybot查询执行失败: {str(e)}", exc_info=True)
+            exec_error_msg = f"Skybot查询执行失败: {str(e)}"
+            self.logger.error(exec_error_msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(exec_error_msg, "ERROR")
             return None
 
     def _get_fits_rotation_angle(self, fits_path):
