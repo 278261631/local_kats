@@ -49,7 +49,8 @@ class ConfigManager:
                 "remove_bright_lines": True,  # 是否去除亮线（GUI默认值：True）
                 "fast_mode": True,  # 是否启用快速模式（GUI默认值：True）
                 "stretch_method": "percentile",  # 拉伸方法: percentile, minmax, asinh（GUI默认值：percentile）
-                "percentile_low": 99.95  # 百分位参数（GUI默认值：99.95）
+                "percentile_low": 99.95,  # 百分位参数（GUI默认值：99.95）
+                "max_jaggedness_ratio": 2.0  # 最大锯齿比率（GUI默认值：2.0）
             },
             "dss_flip_settings": {
                 "flip_vertical": True,  # 上下翻转DSS（默认值：True）

@@ -16,7 +16,7 @@ from PIL import Image
 class SignalBlobDetector:
     """基于信号强度的斑点检测器"""
 
-    def __init__(self, sigma_threshold=5.0, min_area=10, max_area=500, min_circularity=0.3, gamma=2.2):
+    def __init__(self, sigma_threshold=5.0, min_area=10, max_area=500, min_circularity=0.3, gamma=2.2, max_jaggedness_ratio=2.0):
         """
         初始化检测器
 
@@ -26,12 +26,14 @@ class SignalBlobDetector:
             max_area: 最大面积
             min_circularity: 最小圆度
             gamma: 伽马校正值
+            max_jaggedness_ratio: 最大锯齿比率（poly顶点数/hull顶点数），默认2.0
         """
         self.sigma_threshold = sigma_threshold
         self.min_area = min_area
         self.max_area = max_area
         self.min_circularity = min_circularity
         self.gamma = gamma
+        self.max_jaggedness_ratio = max_jaggedness_ratio
         
     def load_fits_image(self, fits_path):
         """加载 FITS 文件"""
@@ -314,6 +316,23 @@ class SignalBlobDetector:
             if circularity < self.min_circularity:
                 continue
 
+            # 锯齿检测
+            hull = cv2.convexHull(contour)
+            eps = 0.01 * cv2.arcLength(contour, True)
+            poly = cv2.approxPolyDP(contour, eps, True)
+
+            # 计算锯齿比率
+            hull_vertices = len(hull)
+            poly_vertices = len(poly)
+            if hull_vertices > 0:
+                jaggedness_ratio = poly_vertices / hull_vertices
+            else:
+                jaggedness_ratio = 0
+
+            # 锯齿比率过滤
+            if jaggedness_ratio > self.max_jaggedness_ratio:
+                continue
+
             # 计算中心和半径
             M = cv2.moments(contour)
             if M['m00'] == 0:
@@ -338,6 +357,9 @@ class SignalBlobDetector:
                 'center': (cx, cy),
                 'area': area,
                 'circularity': circularity,
+                'jaggedness_ratio': jaggedness_ratio,
+                'hull_vertices': hull_vertices,
+                'poly_vertices': poly_vertices,
                 'mean_signal': mean_signal,
                 'max_signal': max_signal,
                 'snr': snr,
@@ -400,15 +422,19 @@ class SignalBlobDetector:
             return
 
         print(f"\n检测到的斑点详细信息（已排序：综合得分=面积+圆度）:")
-        print(f"{'序号':<6} {'综合得分':<10} {'面积':<10} {'圆度':<10} {'X坐标':<10} {'Y坐标':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12}")
-        print("-" * 110)
+        print(f"{'序号':<6} {'综合得分':<10} {'面积':<10} {'圆度':<10} {'锯齿比':<10} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<10} {'Y坐标':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12}")
+        print("-" * 140)
 
         for i, blob in enumerate(blobs, 1):
             cx, cy = blob['center']
             quality_score = blob.get('quality_score', 0)
             snr = blob.get('snr', 0)
             max_snr = blob.get('max_snr', 0)
+            jaggedness = blob.get('jaggedness_ratio', 0)
+            hull_verts = blob.get('hull_vertices', 0)
+            poly_verts = blob.get('poly_vertices', 0)
             print(f"{i:<6} {quality_score:<10.3f} {blob['area']:<10.1f} {blob['circularity']:<10.3f} "
+                  f"{jaggedness:<10.3f} {hull_verts:<10} {poly_verts:<10} "
                   f"{cx:<10.2f} {cy:<10.2f} {snr:<10.2f} {max_snr:<10.2f} {blob['mean_signal']:<12.6f}")
 
         # 统计信息
@@ -416,6 +442,7 @@ class SignalBlobDetector:
         areas = [b['area'] for b in blobs]
         signals = [b['mean_signal'] for b in blobs]
         circularities = [b['circularity'] for b in blobs]
+        jaggedness_ratios = [b.get('jaggedness_ratio', 0) for b in blobs]
         snrs = [b.get('snr', 0) for b in blobs]
 
         print(f"\n统计信息:")
@@ -423,6 +450,7 @@ class SignalBlobDetector:
         print(f"  - 综合得分: {np.mean(quality_scores):.3f} ± {np.std(quality_scores):.3f} (范围: {np.min(quality_scores):.3f} - {np.max(quality_scores):.3f})")
         print(f"  - 面积: {np.mean(areas):.2f} ± {np.std(areas):.2f} (范围: {np.min(areas):.2f} - {np.max(areas):.2f})")
         print(f"  - 圆度: {np.mean(circularities):.3f} ± {np.std(circularities):.3f} (范围: {np.min(circularities):.3f} - {np.max(circularities):.3f})")
+        print(f"  - 锯齿比: {np.mean(jaggedness_ratios):.3f} ± {np.std(jaggedness_ratios):.3f} (范围: {np.min(jaggedness_ratios):.3f} - {np.max(jaggedness_ratios):.3f})")
         print(f"  - SNR: {np.mean(snrs):.2f} ± {np.std(snrs):.2f} (范围: {np.min(snrs):.2f} - {np.max(snrs):.2f})")
         print(f"  - 平均信号: {np.mean(signals):.6f} ± {np.std(signals):.6f}")
         print(f"  - 信号范围: {np.min(signals):.6f} - {np.max(signals):.6f}")
@@ -561,7 +589,7 @@ class SignalBlobDetector:
                             output_folder, base_name, cutout_size=100,
                             reference_data=None, aligned_data=None,
                             stretch_method='percentile', low_percentile=1, high_percentile=99,
-                            header=None):
+                            header=None, generate_shape_viz=False):
         """
         为每个检测结果提取截图并生成GIF
 
@@ -579,6 +607,7 @@ class SignalBlobDetector:
             low_percentile: 低百分位（默认1%）
             high_percentile: 高百分位（默认99%）
             header: FITS header（用于坐标转换）
+            generate_shape_viz: 是否生成hull和poly可视化图片（默认False，快速模式下为False）
         """
         if not blobs:
             return
@@ -663,6 +692,152 @@ class SignalBlobDetector:
             result_path = os.path.join(cutouts_folder, f"{file_prefix}_3_detection.png")
             cv2.imwrite(result_path, result_cutout)
 
+            # 生成hull和poly可视化图片（仅在非快速模式下）
+            if generate_shape_viz and 'contour' in blob:
+                contour = blob['contour']
+
+                # 计算contour相对于cutout的偏移
+                offset_x = x1
+                offset_y = y1
+
+                # 调整contour坐标到cutout坐标系
+                contour_shifted = contour.copy()
+                contour_shifted[:, 0, 0] -= offset_x
+                contour_shifted[:, 0, 1] -= offset_y
+
+                # 过滤掉超出cutout范围的点
+                valid_mask = (
+                    (contour_shifted[:, 0, 0] >= 0) &
+                    (contour_shifted[:, 0, 0] < (x2 - x1)) &
+                    (contour_shifted[:, 0, 1] >= 0) &
+                    (contour_shifted[:, 0, 1] < (y2 - y1))
+                )
+
+                if np.any(valid_mask):
+                    contour_shifted = contour_shifted[valid_mask]
+
+                    # 计算hull和poly
+                    hull = cv2.convexHull(contour_shifted)
+                    eps = 0.01 * cv2.arcLength(contour_shifted, True)
+                    poly = cv2.approxPolyDP(contour_shifted, eps, True)
+
+                    # === 1. 生成contour单独可视化图片 ===
+                    contour_viz = np.zeros((cutout_size, cutout_size, 3), dtype=np.uint8)
+
+                    # 绘制原始轮廓（白色，粗线）
+                    cv2.drawContours(contour_viz, [contour_shifted], -1, (255, 255, 255), 2)
+
+                    # 标注轮廓顶点（黄色小圆点）
+                    for point in contour_shifted:
+                        pt = tuple(point[0])
+                        cv2.circle(contour_viz, pt, 1, (0, 255, 255), -1)
+
+                    # 添加标题
+                    cv2.putText(contour_viz, "Contour", (5, 15),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+                    # 添加轮廓点数信息
+                    contour_points = len(contour_shifted)
+                    cv2.putText(contour_viz, f"Points: {contour_points}", (5, 35),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255), 1)
+
+                    # 保存contour可视化图片
+                    contour_viz_path = os.path.join(cutouts_folder, f"{file_prefix}_4_contour.png")
+                    cv2.imwrite(contour_viz_path, contour_viz)
+
+                    # === 2. 生成hull可视化图片 ===
+                    hull_viz = np.zeros((cutout_size, cutout_size, 3), dtype=np.uint8)
+
+                    # 绘制原始轮廓（灰色，细线）
+                    cv2.drawContours(hull_viz, [contour_shifted], -1, (128, 128, 128), 1)
+
+                    # 绘制凸包（绿色，粗线）
+                    cv2.drawContours(hull_viz, [hull], -1, (0, 255, 0), 2)
+
+                    # 标注hull顶点（绿色小圆点）
+                    for point in hull:
+                        pt = tuple(point[0])
+                        cv2.circle(hull_viz, pt, 3, (0, 255, 0), -1)
+
+                    # 添加标题和信息
+                    cv2.putText(hull_viz, "Convex Hull", (5, 15),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                    hull_verts = blob.get('hull_vertices', len(hull))
+                    cv2.putText(hull_viz, f"Vertices: {hull_verts}", (5, 35),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0), 1)
+
+                    # 保存hull可视化图片
+                    hull_viz_path = os.path.join(cutouts_folder, f"{file_prefix}_5_hull.png")
+                    cv2.imwrite(hull_viz_path, hull_viz)
+
+                    # === 3. 生成poly可视化图片 ===
+                    poly_viz = np.zeros((cutout_size, cutout_size, 3), dtype=np.uint8)
+
+                    # 绘制原始轮廓（灰色，细线）
+                    cv2.drawContours(poly_viz, [contour_shifted], -1, (128, 128, 128), 1)
+
+                    # 绘制多边形近似（红色，粗线）
+                    cv2.drawContours(poly_viz, [poly], -1, (0, 0, 255), 2)
+
+                    # 标注poly顶点（红色小圆点）
+                    for point in poly:
+                        pt = tuple(point[0])
+                        cv2.circle(poly_viz, pt, 3, (0, 0, 255), -1)
+
+                    # 添加标题和信息
+                    cv2.putText(poly_viz, "Polygon Approx", (5, 15),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                    poly_verts = blob.get('poly_vertices', len(poly))
+                    cv2.putText(poly_viz, f"Vertices: {poly_verts}", (5, 35),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+
+                    # 保存poly可视化图片
+                    poly_viz_path = os.path.join(cutouts_folder, f"{file_prefix}_6_poly.png")
+                    cv2.imwrite(poly_viz_path, poly_viz)
+
+                    # === 4. 生成综合对比图片 ===
+                    shape_viz = np.zeros((cutout_size, cutout_size, 3), dtype=np.uint8)
+
+                    # 绘制原始轮廓（白色，细线）
+                    cv2.drawContours(shape_viz, [contour_shifted], -1, (255, 255, 255), 1)
+
+                    # 绘制凸包（绿色，粗线）
+                    cv2.drawContours(shape_viz, [hull], -1, (0, 255, 0), 2)
+
+                    # 绘制多边形近似（红色，粗线）
+                    cv2.drawContours(shape_viz, [poly], -1, (0, 0, 255), 2)
+
+                    # 标注hull顶点（绿色小圆点）
+                    for point in hull:
+                        pt = tuple(point[0])
+                        cv2.circle(shape_viz, pt, 2, (0, 255, 0), -1)
+
+                    # 标注poly顶点（红色小圆点）
+                    for point in poly:
+                        pt = tuple(point[0])
+                        cv2.circle(shape_viz, pt, 3, (0, 0, 255), -1)
+
+                    # 添加图例文字
+                    cv2.putText(shape_viz, "White: Contour", (5, 15),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+                    cv2.putText(shape_viz, "Green: Hull", (5, 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0), 1)
+                    cv2.putText(shape_viz, "Red: Poly", (5, 45),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+
+                    # 添加顶点数信息
+                    jagg_ratio = blob.get('jaggedness_ratio', 0)
+                    cv2.putText(shape_viz, f"Hull: {hull_verts}", (5, 65),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0), 1)
+                    cv2.putText(shape_viz, f"Poly: {poly_verts}", (5, 80),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+                    cv2.putText(shape_viz, f"Ratio: {jagg_ratio:.3f}", (5, 95),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 0), 1)
+
+                    # 保存综合对比图片
+                    shape_viz_path = os.path.join(cutouts_folder, f"{file_prefix}_7_combined.png")
+                    cv2.imwrite(shape_viz_path, shape_viz)
+
             # 生成GIF动画（只包含reference和aligned，不包含detection）
             try:
                 images = []
@@ -708,7 +883,7 @@ class SignalBlobDetector:
         print(f"已为 {len(blobs)} 个检测结果生成截图和GIF")
 
     def save_results(self, original_data, stretched_data, mask, result_image, blobs,
-                     output_dir, base_name, threshold_info, reference_data=None, aligned_data=None, header=None):
+                     output_dir, base_name, threshold_info, reference_data=None, aligned_data=None, header=None, generate_shape_viz=False):
         """保存检测结果"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -749,7 +924,7 @@ class SignalBlobDetector:
         self.extract_blob_cutouts(original_data, stretched_data, result_image, blobs,
                                   output_folder, base_name,
                                   reference_data=reference_data, aligned_data=aligned_data,
-                                  header=header)
+                                  header=header, generate_shape_viz=generate_shape_viz)
 
         # 保存详细信息
         txt_output = os.path.join(output_folder, f"{base_name}_analysis_{param_str}.txt")
@@ -763,6 +938,7 @@ class SignalBlobDetector:
             f.write(f"  - 信号阈值: {self.sigma_threshold}σ\n")
             f.write(f"  - 面积范围: {self.min_area} - {self.max_area}\n")
             f.write(f"  - 最小圆度: {self.min_circularity}\n")
+            f.write(f"  - 最大锯齿比率: {self.max_jaggedness_ratio}\n")
             f.write(f"  - 拉伸方法: {threshold_info.get('stretch_method', 'unknown')}\n")
             if 'peak_value' in threshold_info:
                 f.write(f"  - 直方图峰值: {threshold_info['peak_value']:.6f}\n")
@@ -780,15 +956,19 @@ class SignalBlobDetector:
             f.write("\n")
 
             f.write(f"检测到 {len(blobs)} 个斑点（按综合得分排序：面积+圆度）\n\n")
-            f.write(f"{'序号':<6} {'综合得分':<12} {'面积':<12} {'圆度':<12} {'X坐标':<12} {'Y坐标':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14}\n")
-            f.write("-" * 130 + "\n")
+            f.write(f"{'序号':<6} {'综合得分':<12} {'面积':<12} {'圆度':<12} {'锯齿比':<12} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<12} {'Y坐标':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14}\n")
+            f.write("-" * 162 + "\n")
 
             for i, blob in enumerate(blobs, 1):
                 cx, cy = blob['center']
                 quality_score = blob.get('quality_score', 0)
                 snr = blob.get('snr', 0)
                 max_snr = blob.get('max_snr', 0)
+                jaggedness_ratio = blob.get('jaggedness_ratio', 0)
+                hull_vertices = blob.get('hull_vertices', 0)
+                poly_vertices = blob.get('poly_vertices', 0)
                 f.write(f"{i:<6} {quality_score:<12.4f} {blob['area']:<12.2f} {blob['circularity']:<12.4f} "
+                       f"{jaggedness_ratio:<12.4f} {hull_vertices:<10} {poly_vertices:<10} "
                        f"{cx:<12.4f} {cy:<12.4f} {snr:<12.2f} {max_snr:<12.2f} "
                        f"{blob['mean_signal']:<14.8f} {blob['max_signal']:<14.8f}\n")
 
@@ -796,7 +976,7 @@ class SignalBlobDetector:
     
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.5,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
-                         stretch_method='percentile', percentile_low=99.95):
+                         stretch_method='percentile', percentile_low=99.95, fast_mode=False):
         """
         处理 FITS 文件的完整流程
 
@@ -810,6 +990,7 @@ class SignalBlobDetector:
             remove_bright_lines: 是否去除亮线，默认True
             stretch_method: 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸（默认）
             percentile_low: 百分位数起点，默认99.95，终点使用最大值
+            fast_mode: 快速模式，不生成hull和poly可视化图片，默认False
         """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
@@ -900,10 +1081,11 @@ class SignalBlobDetector:
         base_name = os.path.splitext(os.path.basename(fits_path))[0]
 
         # 保存时传递去除亮线后的数据
+        # 在非快速模式下生成hull和poly可视化
         self.save_results(data, stretched_data_no_lines, mask, result_image, blobs,
                          output_dir, base_name, threshold_info,
                          reference_data=reference_data, aligned_data=aligned_data,
-                         header=header)
+                         header=header, generate_shape_viz=not fast_mode)
 
         print(f"\n处理完成！")
         return blobs
@@ -923,6 +1105,8 @@ def main():
                        help='最大面积，默认 1000')
     parser.add_argument('--min-circularity', type=float, default=0.3,
                        help='最小圆度 (0-1)，默认 0.3')
+    parser.add_argument('--max-jaggedness-ratio', type=float, default=2.0,
+                       help='最大锯齿比率（poly顶点数/hull顶点数），默认 2.0')
     parser.add_argument('--stretch-method', type=str, default='percentile',
                        choices=['peak', 'percentile'],
                        help='拉伸方法: peak=峰值拉伸, percentile=百分位数拉伸(默认)')
@@ -936,6 +1120,8 @@ def main():
                        help='参考图像（模板）FITS文件路径')
     parser.add_argument('--aligned', type=str, default=None,
                        help='对齐图像（下载）FITS文件路径')
+    parser.add_argument('--fast-mode', action='store_true',
+                       help='快速模式，不生成hull和poly可视化图片（默认生成）')
 
     args = parser.parse_args()
 
@@ -965,7 +1151,8 @@ def main():
         min_area=args.min_area,
         max_area=args.max_area,
         min_circularity=args.min_circularity,
-        gamma=2.2  # 保留但不使用
+        gamma=2.2,  # 保留但不使用
+        max_jaggedness_ratio=args.max_jaggedness_ratio
     )
 
     # 如果指定了 --no-peak-stretch，则明确设置 use_peak_stretch=False
@@ -979,7 +1166,8 @@ def main():
                               aligned_fits=args.aligned,
                               remove_bright_lines=args.remove_lines,
                               stretch_method=args.stretch_method,
-                              percentile_low=args.percentile_low)
+                              percentile_low=args.percentile_low,
+                              fast_mode=args.fast_mode)
 
 
 if __name__ == "__main__":

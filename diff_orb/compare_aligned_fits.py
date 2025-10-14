@@ -357,7 +357,7 @@ class AlignedFITSComparator:
 
         return template_file, aligned_file
 
-    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95):
+    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, max_jaggedness_ratio=2.0, fast_mode=False):
         """
         对difference.fits执行signal_blob_detector检测
 
@@ -369,6 +369,8 @@ class AlignedFITSComparator:
             remove_bright_lines: 是否去除亮线，默认True
             stretch_method: 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸
             percentile_low: 百分位数起点，默认99.95
+            max_jaggedness_ratio: 最大锯齿比率，默认2.0
+            fast_mode: 快速模式，不生成hull和poly可视化图片，默认False
 
         Returns:
             dict: 检测结果信息
@@ -391,7 +393,8 @@ class AlignedFITSComparator:
                 '--threshold', '0.5',
                 '--min-area', '1',
                 '--max-area', '1000',
-                '--min-circularity', '0.3'
+                '--min-circularity', '0.3',
+                '--max-jaggedness-ratio', str(max_jaggedness_ratio)
             ]
 
             # 添加去除亮线参数
@@ -408,6 +411,10 @@ class AlignedFITSComparator:
                 cmd.extend(['--reference', reference_file])
             if aligned_file and os.path.exists(aligned_file):
                 cmd.extend(['--aligned', aligned_file])
+
+            # 添加快速模式参数
+            if fast_mode:
+                cmd.append('--fast-mode')
 
             self.logger.info(f"执行命令: {' '.join(cmd)}")
 
@@ -441,7 +448,7 @@ class AlignedFITSComparator:
             self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
             return {'success': False, 'error': str(e)}
 
-    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False):
+    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0):
         """
         处理已对齐FITS文件的差异比较
 
@@ -452,6 +459,7 @@ class AlignedFITSComparator:
             stretch_method (str): 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸
             percentile_low (float): 百分位数起点，默认99.95
             fast_mode (bool): 快速模式，减少中间文件输出，默认False
+            max_jaggedness_ratio (float): 最大锯齿比率，默认2.0
 
         Returns:
             dict: 处理结果信息
@@ -622,7 +630,9 @@ class AlignedFITSComparator:
             aligned_file=aligned_file,
             remove_bright_lines=remove_bright_lines,
             stretch_method=stretch_method,
-            percentile_low=percentile_low
+            percentile_low=percentile_low,
+            max_jaggedness_ratio=max_jaggedness_ratio,
+            fast_mode=fast_mode
         )
 
         # 快速模式：检测完成后删除差异FITS文件

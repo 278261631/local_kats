@@ -201,6 +201,15 @@ class FitsImageViewer:
             rb.pack(side=tk.LEFT, padx=(5, 0))
             # 可以考虑添加tooltip功能
 
+        # 锯齿比率输入框架
+        jaggedness_frame = ttk.Frame(toolbar_frame2)
+        jaggedness_frame.pack(side=tk.LEFT, padx=(10, 0))
+
+        ttk.Label(jaggedness_frame, text="锯齿比率:").pack(side=tk.LEFT)
+        self.jaggedness_ratio_var = tk.StringVar(value="2.0")
+        jaggedness_entry = ttk.Entry(jaggedness_frame, textvariable=self.jaggedness_ratio_var, width=6)
+        jaggedness_entry.pack(side=tk.LEFT, padx=(2, 0))
+
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
@@ -546,7 +555,11 @@ class FitsImageViewer:
             percentile_low = batch_settings.get('percentile_low', 99.95)
             self.percentile_var.set(str(percentile_low))
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%")
+            # 锯齿比率
+            max_jaggedness_ratio = batch_settings.get('max_jaggedness_ratio', 2.0)
+            self.jaggedness_ratio_var.set(str(max_jaggedness_ratio))
+
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -576,6 +589,9 @@ class FitsImageViewer:
 
             # 绑定百分位输入框（使用延迟保存，避免每次按键都保存）
             self.percentile_var.trace('w', self._on_percentile_change)
+
+            # 绑定锯齿比率输入框
+            self.jaggedness_ratio_var.trace('w', self._on_jaggedness_ratio_change)
 
             self.logger.info("批量处理参数控件事件已绑定")
 
@@ -650,6 +666,32 @@ class FitsImageViewer:
             self.logger.warning(f"无效的百分位值: {self.percentile_var.get()}")
         except Exception as e:
             self.logger.error(f"保存百分位参数失败: {str(e)}")
+
+    def _on_jaggedness_ratio_change(self, *args):
+        """锯齿比率参数变化时保存到配置文件（延迟保存）"""
+        if not self.config_manager:
+            return
+
+        # 取消之前的延迟保存任务
+        if hasattr(self, '_jaggedness_save_timer'):
+            self.parent_frame.after_cancel(self._jaggedness_save_timer)
+
+        # 设置新的延迟保存任务（1秒后保存）
+        self._jaggedness_save_timer = self.parent_frame.after(1000, self._save_jaggedness_ratio)
+
+    def _save_jaggedness_ratio(self):
+        """保存锯齿比率参数到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            max_jaggedness_ratio = float(self.jaggedness_ratio_var.get())
+            self.config_manager.update_batch_process_settings(max_jaggedness_ratio=max_jaggedness_ratio)
+            self.logger.info(f"锯齿比率参数已保存: {max_jaggedness_ratio}")
+        except ValueError:
+            self.logger.warning(f"无效的锯齿比率值: {self.jaggedness_ratio_var.get()}")
+        except Exception as e:
+            self.logger.error(f"保存锯齿比率参数失败: {str(e)}")
 
     def _load_dss_flip_settings(self):
         """从配置文件加载DSS翻转设置"""
@@ -1719,6 +1761,17 @@ class FitsImageViewer:
             fast_mode = self.fast_mode_var.get()
             self.logger.info(f"快速模式: {'是' if fast_mode else '否'}")
 
+            # 获取锯齿比率参数
+            max_jaggedness_ratio = 2.0  # 默认值
+            try:
+                max_jaggedness_ratio = float(self.jaggedness_ratio_var.get())
+                if max_jaggedness_ratio <= 0:
+                    raise ValueError("锯齿比率必须大于0")
+                self.logger.info(f"锯齿比率: {max_jaggedness_ratio}")
+            except ValueError as e:
+                self.logger.warning(f"锯齿比率输入无效，使用默认值2.0: {e}")
+                max_jaggedness_ratio = 2.0
+
             # 更新进度：开始执行Diff
             filename = os.path.basename(self.selected_file_path)
             self.parent_frame.after(0, lambda f=filename: self.diff_progress_label.config(
@@ -1730,7 +1783,8 @@ class FitsImageViewer:
                                               remove_bright_lines=remove_bright_lines,
                                               stretch_method=stretch_method,
                                               percentile_low=percentile_low,
-                                              fast_mode=fast_mode)
+                                              fast_mode=fast_mode,
+                                              max_jaggedness_ratio=max_jaggedness_ratio)
 
             if result and result.get('success'):
                 # 更新进度：处理完成
