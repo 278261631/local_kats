@@ -16,7 +16,7 @@ from PIL import Image
 class SignalBlobDetector:
     """基于信号强度的斑点检测器"""
 
-    def __init__(self, sigma_threshold=5.0, min_area=10, max_area=500, min_circularity=0.3, gamma=2.2, max_jaggedness_ratio=2.0):
+    def __init__(self, sigma_threshold=5.0, min_area=10, max_area=500, min_circularity=0.79, gamma=2.2, max_jaggedness_ratio=1.2):
         """
         初始化检测器
 
@@ -24,9 +24,9 @@ class SignalBlobDetector:
             sigma_threshold: 信号阈值（背景噪声的多少倍标准差）
             min_area: 最小面积
             max_area: 最大面积
-            min_circularity: 最小圆度
+            min_circularity: 最小圆度，默认0.79
             gamma: 伽马校正值
-            max_jaggedness_ratio: 最大锯齿比率（poly顶点数/hull顶点数），默认2.0
+            max_jaggedness_ratio: 最大锯齿比率（poly顶点数/hull顶点数），默认1.2
         """
         self.sigma_threshold = sigma_threshold
         self.min_area = min_area
@@ -255,18 +255,24 @@ class SignalBlobDetector:
     def create_signal_mask(self, data, median, sigma):
         """
         创建信号掩码，只保留高于阈值的像素
+
+        .. deprecated::
+            此方法已废弃，不再使用。
+            实际的mask创建逻辑在 process_fits_file() 方法的第1048行。
+            使用硬阈值对拉伸后的数据进行二值化：
+            mask = (stretched_data_no_lines > detection_threshold).astype(np.uint8) * 255
         """
         threshold = median + self.sigma_threshold * sigma
         mask = (data > threshold).astype(np.uint8) * 255
-        
+
         signal_pixels = np.sum(mask > 0)
         total_pixels = mask.size
         percentage = (signal_pixels / total_pixels) * 100
-        
+
         print(f"\n信号掩码:")
         print(f"  - 阈值: {threshold:.6f}")
         print(f"  - 信号像素: {signal_pixels} ({percentage:.3f}%)")
-        
+
         return mask, threshold
     
     def detect_blobs_from_mask(self, mask, original_data):
@@ -974,7 +980,7 @@ class SignalBlobDetector:
 
         print(f"保存分析报告: {txt_output}")
     
-    def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.5,
+    def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.1,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
                          stretch_method='percentile', percentile_low=99.95, fast_mode=False):
         """
@@ -984,7 +990,7 @@ class SignalBlobDetector:
             fits_path: difference.fits文件路径
             output_dir: 输出目录
             use_peak_stretch: 是否使用峰值拉伸（已废弃，使用stretch_method，默认None表示由stretch_method决定）
-            detection_threshold: 检测阈值
+            detection_threshold: 检测阈值，默认0.1（拉伸后数据范围0-1）
             reference_fits: 参考图像（模板）FITS文件路径
             aligned_fits: 对齐图像（下载）FITS文件路径
             remove_bright_lines: 是否去除亮线，默认True
@@ -1097,16 +1103,16 @@ def main():
     parser.add_argument('fits_file', nargs='?',
                        default='aligned_comparison_20251004_151632_difference.fits',
                        help='FITS 文件路径（difference.fits）')
-    parser.add_argument('--threshold', type=float, default=0.5,
-                       help='检测阈值（拉伸后的值），默认 0.5，推荐范围 0.3-0.8')
+    parser.add_argument('--threshold', type=float, default=0.1,
+                       help='检测阈值（拉伸后的值），默认 0.1，推荐范围 0.1-0.5')
     parser.add_argument('--min-area', type=float, default=1,
                        help='最小面积，默认 1')
     parser.add_argument('--max-area', type=float, default=1000,
                        help='最大面积，默认 1000')
-    parser.add_argument('--min-circularity', type=float, default=0.3,
-                       help='最小圆度 (0-1)，默认 0.3')
-    parser.add_argument('--max-jaggedness-ratio', type=float, default=2.0,
-                       help='最大锯齿比率（poly顶点数/hull顶点数），默认 2.0')
+    parser.add_argument('--min-circularity', type=float, default=0.79,
+                       help='最小圆度 (0-1)，默认 0.79')
+    parser.add_argument('--max-jaggedness-ratio', type=float, default=1.2,
+                       help='最大锯齿比率（poly顶点数/hull顶点数），默认 1.2')
     parser.add_argument('--stretch-method', type=str, default='percentile',
                        choices=['peak', 'percentile'],
                        help='拉伸方法: peak=峰值拉伸, percentile=百分位数拉伸(默认)')
