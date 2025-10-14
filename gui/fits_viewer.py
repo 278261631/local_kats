@@ -6,6 +6,7 @@ FITS图像查看器
 
 import os
 import sys
+import re
 import subprocess
 import platform
 import numpy as np
@@ -902,6 +903,8 @@ class FitsImageViewer:
             self.directory_tree.tag_configure("wcs_green", foreground="green")
             self.directory_tree.tag_configure("wcs_orange", foreground="orange")
             self.directory_tree.tag_configure("diff_blue", foreground="blue")
+            self.directory_tree.tag_configure("diff_purple", foreground="#8B00FF")  # 蓝紫色（检测列表为空）
+            self.directory_tree.tag_configure("diff_gold_red", foreground="#FF4500")  # 金红色（有高分检测）
 
             # 清空现有树
             for item in self.directory_tree.get_children():
@@ -1054,15 +1057,167 @@ class FitsImageViewer:
             # 按文件名排序
             fits_files.sort(key=lambda x: x[0])
 
-            # 添加文件节点
+            # 添加文件节点并检查diff结果
             for filename, file_path, file_size in fits_files:
                 size_str = self._format_file_size(file_size)
                 file_text = f"📄 {filename} ({size_str})"
+
+                # 检查是否有diff结果并确定颜色标记
+                file_tags = ["fits_file"]
+                detection_info = self._check_file_diff_result(file_path, directory)
+
+                if detection_info:
+                    if detection_info['high_score_count'] > 0:
+                        file_tags.append("diff_gold_red")
+                        file_text = f"📄 [{detection_info['high_score_count']}] {filename} ({size_str})"
+                    elif detection_info['is_empty']:
+                        file_tags.append("diff_purple")
+                    else:
+                        file_tags.append("diff_blue")
+
                 self.directory_tree.insert(parent_node, "end", text=file_text,
-                                         values=(file_path,), tags=("fits_file",))
+                                         values=(file_path,), tags=tuple(file_tags))
 
         except Exception as e:
             self.logger.error(f"添加FITS文件失败: {str(e)}")
+
+    def _check_file_diff_result(self, file_path, region_dir):
+        """
+        检查单个文件是否有diff结果
+
+        Args:
+            file_path: FITS文件路径
+            region_dir: 天区目录路径
+
+        Returns:
+            dict or None: 包含检测信息的字典，如果没有diff结果则返回None
+                {
+                    'has_result': bool,
+                    'is_empty': bool,
+                    'high_score_count': int,
+                    'detection_count': int
+                }
+        """
+        try:
+            filename = os.path.basename(file_path)
+
+            # 获取配置的输出目录
+            base_output_dir = None
+            if self.get_diff_output_dir_callback:
+                base_output_dir = self.get_diff_output_dir_callback()
+
+            if not base_output_dir or not os.path.exists(base_output_dir):
+                return None
+
+            # 从region_dir提取相对路径部分
+            download_dir = None
+            if self.get_download_dir_callback:
+                download_dir = self.get_download_dir_callback()
+
+            if not download_dir:
+                return None
+
+            # 标准化路径
+            normalized_region_dir = os.path.normpath(region_dir)
+            normalized_download_dir = os.path.normpath(download_dir)
+
+            # 获取相对路径
+            try:
+                relative_path = os.path.relpath(normalized_region_dir, normalized_download_dir)
+            except ValueError:
+                return None
+
+            # 构建输出目录路径
+            output_region_dir = os.path.join(base_output_dir, relative_path)
+            file_basename = os.path.splitext(filename)[0]
+            potential_output_dir = os.path.join(output_region_dir, file_basename)
+
+            # 检查是否存在detection目录
+            if not os.path.exists(potential_output_dir) or not os.path.isdir(potential_output_dir):
+                return None
+
+            # 查找detection_开头的目录
+            detection_dir_path = None
+            try:
+                items = os.listdir(potential_output_dir)
+                for item_name in items:
+                    item_path = os.path.join(potential_output_dir, item_name)
+                    if os.path.isdir(item_path) and item_name.startswith('detection_'):
+                        detection_dir_path = item_path
+                        break
+            except Exception:
+                return None
+
+            if not detection_dir_path:
+                return None
+
+            # 分析 analysis.txt 文件
+            detection_count = 0
+            high_score_count = 0
+            is_empty_detection = False
+
+            try:
+                # 查找 analysis.txt 文件（支持带参数的长文件名）
+                analysis_files = [f for f in os.listdir(detection_dir_path)
+                                if '_analysis' in f and f.endswith('.txt')]
+
+                if analysis_files:
+                    analysis_path = os.path.join(detection_dir_path, analysis_files[0])
+
+                    with open(analysis_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                        # 查找检测数量行
+                        count_match = re.search(r'检测到\s+(\d+)\s+个斑点', content)
+                        if count_match:
+                            detection_count = int(count_match.group(1))
+
+                            if detection_count == 0:
+                                is_empty_detection = True
+                            else:
+                                # 解析每一行检测结果，计算综合评分 > 6.0 的数量
+                                lines = content.split('\n')
+                                in_data_section = False
+                                for line in lines:
+                                    line_stripped = line.strip()
+
+                                    # 检测到分隔线后，下一行开始是数据
+                                    if line_stripped.startswith('-' * 10):
+                                        in_data_section = True
+                                        continue
+
+                                    # 跳过表头
+                                    if '综合得分' in line or '序号' in line:
+                                        continue
+
+                                    # 只在数据区域解析
+                                    if in_data_section and line_stripped:
+                                        # 尝试解析数据行
+                                        parts = line_stripped.split()
+                                        if len(parts) >= 2:
+                                            try:
+                                                # 第一列是序号，第二列是综合得分
+                                                seq = int(parts[0])  # 验证第一列是数字
+                                                score = float(parts[1])
+                                                if score > 6.0:
+                                                    high_score_count += 1
+                                            except (ValueError, IndexError):
+                                                continue
+            except Exception as e:
+                # 记录异常但不中断
+                import traceback
+                self.logger.debug(f"解析analysis.txt异常: {e}\n{traceback.format_exc()}")
+                pass
+
+            return {
+                'has_result': True,
+                'is_empty': is_empty_detection,
+                'high_score_count': high_score_count,
+                'detection_count': detection_count
+            }
+
+        except Exception:
+            return None
 
     def _format_file_size(self, size_bytes):
         """格式化文件大小"""
@@ -1448,6 +1603,7 @@ class FitsImageViewer:
 
                     # 检查是否存在detection目录
                     has_diff_result = False
+                    detection_dir_path = None
                     if os.path.exists(potential_output_dir) and os.path.isdir(potential_output_dir):
                         self.logger.info(f"  输出目录存在，查找detection子目录...")
                         # 查找detection_开头的目录
@@ -1459,6 +1615,7 @@ class FitsImageViewer:
                                 item_path = os.path.join(potential_output_dir, item_name)
                                 if os.path.isdir(item_path) and item_name.startswith('detection_'):
                                     has_diff_result = True
+                                    detection_dir_path = item_path
                                     self.logger.info(f"  ✓ 找到diff结果: {filename} -> {item_name}")
                                     break
                         except Exception as list_error:
@@ -1466,15 +1623,99 @@ class FitsImageViewer:
                     else:
                         self.logger.debug(f"  输出目录不存在")
 
-                    # 如果有diff结果，标记为蓝色
-                    if has_diff_result:
+                    # 如果有diff结果，分析检测结果并标记颜色
+                    if has_diff_result and detection_dir_path:
+                        # 分析 analysis.txt 文件
+                        detection_count = 0
+                        high_score_count = 0
+                        is_empty_detection = False
+
+                        try:
+                            # 查找 analysis.txt 文件（支持带参数的长文件名）
+                            analysis_files = [f for f in os.listdir(detection_dir_path) if '_analysis' in f and f.endswith('.txt')]
+
+                            if analysis_files:
+                                analysis_path = os.path.join(detection_dir_path, analysis_files[0])
+                                self.logger.info(f"  分析文件: {analysis_path}")
+
+                                with open(analysis_path, 'r', encoding='utf-8') as f:
+                                    content = f.read()
+
+                                    # 查找检测数量行，例如："检测到 5 个斑点"
+                                    count_match = re.search(r'检测到\s+(\d+)\s+个斑点', content)
+                                    if count_match:
+                                        detection_count = int(count_match.group(1))
+                                        self.logger.info(f"  检测数量: {detection_count}")
+
+                                        if detection_count == 0:
+                                            is_empty_detection = True
+                                        else:
+                                            # 解析每一行检测结果，计算综合评分 > 6.0 的数量
+                                            # 格式: 序号 综合得分 面积 圆度 ...
+                                            lines = content.split('\n')
+                                            in_data_section = False
+                                            for line in lines:
+                                                line_stripped = line.strip()
+
+                                                # 检测到分隔线后，下一行开始是数据
+                                                if line_stripped.startswith('-' * 10):
+                                                    in_data_section = True
+                                                    continue
+
+                                                # 跳过表头
+                                                if '综合得分' in line or '序号' in line:
+                                                    continue
+
+                                                # 只在数据区域解析
+                                                if in_data_section and line_stripped:
+                                                    # 尝试解析数据行
+                                                    parts = line_stripped.split()
+                                                    if len(parts) >= 2:
+                                                        try:
+                                                            # 第一列是序号，第二列是综合得分
+                                                            seq = int(parts[0])  # 验证第一列是数字
+                                                            score = float(parts[1])
+                                                            if score > 6.0:
+                                                                high_score_count += 1
+                                                                self.logger.debug(f"    找到高分: 序号{seq}, 得分{score}")
+                                                        except (ValueError, IndexError):
+                                                            continue
+
+                                            self.logger.info(f"  高分检测数量 (>6.0): {high_score_count}")
+                            else:
+                                self.logger.warning(f"  未找到 analysis.txt 文件")
+
+                        except Exception as analysis_error:
+                            self.logger.error(f"  分析检测结果失败: {analysis_error}")
+
+                        # 根据分析结果标记颜色
                         current_tags = list(child_tags)
                         # 移除其他颜色标记
-                        current_tags = [t for t in current_tags if t not in ["wcs_green", "wcs_orange", "diff_blue"]]
-                        current_tags.append("diff_blue")
-                        self.directory_tree.item(child, tags=current_tags)
+                        current_tags = [t for t in current_tags if t not in ["wcs_green", "wcs_orange", "diff_blue", "diff_purple", "diff_gold_red"]]
+
+                        # 获取当前显示的文本
+                        current_text = self.directory_tree.item(child, "text")
+                        # 移除可能存在的数量前缀
+                        current_text = re.sub(r'^\[\d+\]\s*', '', current_text)
+
+                        if high_score_count > 0:
+                            # 有高分检测，标记为金红色，并在前面加上数量
+                            current_tags.append("diff_gold_red")
+                            new_text = f"[{high_score_count}] {current_text}"
+                            self.directory_tree.item(child, text=new_text, tags=current_tags)
+                            self.logger.info(f"  ✓ 已标记为金红色: {filename}，高分检测数: {high_score_count}")
+                        elif is_empty_detection:
+                            # 检测列表为空，标记为蓝紫色
+                            current_tags.append("diff_purple")
+                            self.directory_tree.item(child, tags=current_tags)
+                            self.logger.info(f"  ✓ 已标记为蓝紫色: {filename}（检测列表为空）")
+                        else:
+                            # 有检测但无高分，标记为蓝色
+                            current_tags.append("diff_blue")
+                            self.directory_tree.item(child, tags=current_tags)
+                            self.logger.info(f"  ✓ 已标记为蓝色: {filename}")
+
                         marked_count += 1
-                        self.logger.info(f"  ✓ 已标记为蓝色: {filename}")
 
             self.logger.info(f"完成天区目录diff结果扫描: {region_dir}，标记了 {marked_count} 个文件")
 
@@ -2181,6 +2422,8 @@ class FitsImageViewer:
             self.directory_tree.tag_configure("wcs_green", foreground="green")
             self.directory_tree.tag_configure("wcs_orange", foreground="orange")
             self.directory_tree.tag_configure("diff_blue", foreground="blue")
+            self.directory_tree.tag_configure("diff_purple", foreground="#8B00FF")  # 蓝紫色（检测列表为空）
+            self.directory_tree.tag_configure("diff_gold_red", foreground="#FF4500")  # 金红色（有高分检测）
 
             # 遍历目录树，找到对应的文件节点并更新颜色
             def update_node_colors(parent_item):
