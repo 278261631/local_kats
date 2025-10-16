@@ -16,7 +16,7 @@ from PIL import Image
 class SignalBlobDetector:
     """基于信号强度的斑点检测器"""
 
-    def __init__(self, sigma_threshold=5.0, min_area=10, max_area=500, min_circularity=0.79, gamma=2.2, max_jaggedness_ratio=1.2):
+    def __init__(self, sigma_threshold=5.0, min_area=2, max_area=36, min_circularity=0.79, gamma=2.2, max_jaggedness_ratio=1.2):
         """
         初始化检测器
 
@@ -398,23 +398,24 @@ class SignalBlobDetector:
             blob['distance_to_center'] = distance
 
             # 计算面积和圆度的综合得分（非线性）
-            # 面积归一化：假设合理面积范围是 min_area 到 max_area
+            # 面积归一化：假设合理面积范围是 min_area 到 max_area，映射到0-1
             area_normalized = (blob['area'] - self.min_area) / (self.max_area - self.min_area + 1e-10)
             area_normalized = np.clip(area_normalized, 0, 1)
 
             # 圆度已经是0-1范围
             circularity = blob['circularity']
 
-            # 非线性综合得分：使用指数形式，让高圆度+大面积的得分显著更高
-            # 方案：面积 × 圆度^3
-            # 圆度的3次方：让圆度差异被放大
-            # - 圆度0.9: 0.9^3 = 0.729
-            # - 圆度0.95: 0.95^3 = 0.857
-            # - 圆度0.99: 0.99^3 = 0.970
-            # 乘以面积：让面积大的目标得分更高
+            # 非线性综合得分：让圆度占更大比例
+            # 方案：(圆度^2) × 2000 × 面积归一化(0-1)
+            # 圆度的2次方：让圆度差异被适度放大
+            # - 圆度0.9: 0.9^2 = 0.81
+            # - 圆度0.95: 0.95^2 = 0.90
+            # - 圆度0.99: 0.99^2 = 0.98
+            # 乘以2000：大幅放大圆度的影响力
+            # 乘以归一化面积(0-1)：让面积也有一定影响
 
-            # 综合得分：面积 × 圆度^3
-            blob['quality_score'] = blob['area'] * (circularity ** 3)
+            # 综合得分：(圆度^2) × 2000 × 面积归一化(0-1)
+            blob['quality_score'] = (circularity ** 2) * 2000 * area_normalized
 
         # 排序：综合得分降序（大的在前）
         sorted_blobs = sorted(blobs, key=lambda b: -b['quality_score'])
@@ -427,7 +428,7 @@ class SignalBlobDetector:
             print("\n未检测到任何斑点")
             return
 
-        print(f"\n检测到的斑点详细信息（已排序：综合得分=面积+圆度）:")
+        print(f"\n检测到的斑点详细信息（已排序：综合得分=(圆度^2)×2000×面积归一化）:")
         print(f"{'序号':<6} {'综合得分':<10} {'面积':<10} {'圆度':<10} {'锯齿比':<10} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<10} {'Y坐标':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12}")
         print("-" * 140)
 
@@ -961,7 +962,7 @@ class SignalBlobDetector:
                 f.write(f"信号像素数: {threshold_info['signal_pixels']}\n")
             f.write("\n")
 
-            f.write(f"检测到 {len(blobs)} 个斑点（按综合得分排序：面积+圆度）\n\n")
+            f.write(f"检测到 {len(blobs)} 个斑点（按综合得分排序：(圆度^2)×2000×面积归一化）\n\n")
             f.write(f"{'序号':<6} {'综合得分':<12} {'面积':<12} {'圆度':<12} {'锯齿比':<12} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<12} {'Y坐标':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14}\n")
             f.write("-" * 162 + "\n")
 
@@ -1105,10 +1106,10 @@ def main():
                        help='FITS 文件路径（difference.fits）')
     parser.add_argument('--threshold', type=float, default=0.0,
                        help='检测阈值（拉伸后的值），默认 0.0，推荐范围 0.0-0.5')
-    parser.add_argument('--min-area', type=float, default=1,
-                       help='最小面积，默认 1')
-    parser.add_argument('--max-area', type=float, default=1000,
-                       help='最大面积，默认 1000')
+    parser.add_argument('--min-area', type=float, default=2,
+                       help='最小面积，默认 2')
+    parser.add_argument('--max-area', type=float, default=36,
+                       help='最大面积，默认 36')
     parser.add_argument('--min-circularity', type=float, default=0.79,
                        help='最小圆度 (0-1)，默认 0.79')
     parser.add_argument('--max-jaggedness-ratio', type=float, default=1.2,
