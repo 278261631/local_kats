@@ -1382,6 +1382,45 @@ Diff统计:
 
         return result_dict
 
+    def _process_single_astap(self, file_path):
+        """
+        处理单个文件的ASTAP操作（线程安全）
+
+        Returns:
+            dict: 包含处理结果的字典 {'success': bool, 'filename': str, 'message': str}
+        """
+        filename = os.path.basename(file_path)
+        result_dict = {
+            'success': False,
+            'filename': filename,
+            'message': ''
+        }
+
+        try:
+            # 检查ASTAP处理器是否可用
+            if not self.fits_viewer or not self.fits_viewer.astap_processor:
+                result_dict['message'] = "ASTAP处理器不可用"
+                return result_dict
+
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                result_dict['message'] = "文件不存在"
+                return result_dict
+
+            # 执行ASTAP处理
+            astap_success = self.fits_viewer.astap_processor.process_fits_file(file_path)
+
+            if astap_success:
+                result_dict['success'] = True
+                result_dict['message'] = "ASTAP处理成功"
+            else:
+                result_dict['message'] = "ASTAP处理失败"
+
+        except Exception as e:
+            result_dict['message'] = str(e)
+
+        return result_dict
+
     def _batch_process(self):
         """批量下载并执行diff操作"""
         selected_files = self._get_selected_files()
@@ -1570,47 +1609,102 @@ Diff统计:
                     self.root.after(0, lambda: self.batch_progress_label.config(
                         text=f"正在为 {len(files_without_wcs)} 个文件添加WCS信息..."))
 
-                    for file_path in files_without_wcs:
-                        filename = os.path.basename(file_path)
+                    # 使用线程池并行处理ASTAP（与diff操作使用相同的线程数）
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    import threading
 
-                        # 更新状态为ASTAP处理中
-                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
+                    # 创建线程锁用于更新计数器
+                    astap_counter_lock = threading.Lock()
+                    astap_completed_count = 0
+                    astap_success_count = 0
+                    astap_fail_count = 0
 
-                        try:
-                            self._log(f"  {filename}: 执行ASTAP处理...")
-                            success = self.fits_viewer.astap_processor.process_fits_file(file_path)
-
-                            if success:
-                                # ASTAP处理成功，重新检查WCS
-                                from astropy.io import fits as astropy_fits
-                                with astropy_fits.open(file_path) as hdul:
-                                    header = hdul[0].header
-                                    has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
-
-                                if has_wcs:
-                                    files_with_wcs.append(file_path)
-                                    self._log(f"    ✓ ASTAP处理成功，已添加WCS信息")
-                                    # 更新状态为ASTAP成功
-                                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                        f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
-                                else:
-                                    self._log(f"    ✗ ASTAP处理完成但未添加WCS信息")
-                                    # 更新状态为ASTAP失败
-                                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                        f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
-                            else:
-                                self._log(f"    ✗ ASTAP处理失败")
-                                # 更新状态为ASTAP失败
-                                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                    f, BatchStatusWidget.STATUS_ASTAP_FAILED))
-                        except Exception as e:
-                            self._log(f"    ✗ ASTAP处理出错: {str(e)}")
-                            # 更新状态为ASTAP失败
+                    # 创建线程池，使用与diff操作相同的线程数
+                    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+                        # 提交所有ASTAP任务
+                        future_to_file = {}
+                        for file_path in files_without_wcs:
+                            filename = os.path.basename(file_path)
+                            
+                            # 更新状态为ASTAP处理中
                             self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, str(e)))
+                                f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
+
+                            future = executor.submit(
+                                self._process_single_astap,
+                                file_path
+                            )
+                            future_to_file[future] = file_path
+
+                        # 处理完成的ASTAP任务
+                        for future in as_completed(future_to_file):
+                            file_path = future_to_file[future]
+                            filename = os.path.basename(file_path)
+
+                            with astap_counter_lock:
+                                astap_completed_count += 1
+                                current_completed = astap_completed_count
+
+                            # 更新进度显示
+                            progress_text = f"ASTAP处理中 ({current_completed}/{len(files_without_wcs)}): 并行处理中..."
+                            self.root.after(0, lambda t=progress_text: self.batch_progress_label.config(text=t))
+
+                            try:
+                                result = future.result()
+                                
+                                # 记录日志
+                                self._log(f"\n[{current_completed}/{len(files_without_wcs)}] {filename}")
+
+                                # 检查result是否为字典（正确处理ASTAP结果）
+                                if isinstance(result, dict) and 'success' in result:
+                                    if result['success']:
+                                        # ASTAP处理成功，重新检查WCS
+                                        from astropy.io import fits as astropy_fits
+                                        with astropy_fits.open(file_path) as hdul:
+                                            header = hdul[0].header
+                                            has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
+
+                                        if has_wcs:
+                                            files_with_wcs.append(file_path)
+                                            astap_success_count += 1
+                                            self._log(f"  ✓ ASTAP处理成功，已添加WCS信息")
+                                            # 更新状态为ASTAP成功
+                                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                                f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
+                                        else:
+                                            astap_fail_count += 1
+                                            self._log(f"  ✗ ASTAP处理完成但未添加WCS信息")
+                                            # 更新状态为ASTAP失败
+                                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
+                                    else:
+                                        astap_fail_count += 1
+                                        error_msg = result.get('message', '未知错误') if isinstance(result, dict) else str(result)
+                                        self._log(f"  ✗ ASTAP处理失败: {error_msg}")
+                                        # 更新状态为ASTAP失败
+                                        self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
+                                            f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
+                                else:
+                                    # 处理意外返回类型
+                                    astap_fail_count += 1
+                                    error_msg = f"意外的返回类型: {type(result)}"
+                                    self._log(f"  ✗ ASTAP处理失败: {error_msg}")
+                                    # 更新状态为ASTAP失败
+                                    self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
+                                        f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
+
+                                # 更新统计信息
+                                stats_text = f"ASTAP已完成: {current_completed}/{len(files_without_wcs)} | 成功: {astap_success_count} | 失败: {astap_fail_count}"
+                                self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
+
+                            except Exception as e:
+                                astap_fail_count += 1
+                                self._log(f"  ✗ ASTAP处理异常: {str(e)}")
+                                self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
+                                    f, BatchStatusWidget.STATUS_ASTAP_FAILED, err))
 
                     self._log(f"ASTAP处理完成，现在共有 {len(files_with_wcs)} 个文件包含WCS信息")
+                    self._log(f"ASTAP处理统计: 成功 {astap_success_count} 个，失败 {astap_fail_count} 个")
                 else:
                     self._log("警告: ASTAP处理器不可用，无法添加WCS信息")
 
