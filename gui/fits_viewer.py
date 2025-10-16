@@ -3274,6 +3274,34 @@ class FitsImageViewer:
 
         return info
 
+    def _draw_crosshair_on_axis(self, ax, image_shape, color='lime', linewidth=1, size=10, gap=5):
+        """
+        在matplotlib axis上绘制空心十字准星
+
+        Args:
+            ax: matplotlib axis对象
+            image_shape: 图像形状 (height, width) 或 (height, width, channels)
+            color: 十字准星颜色，默认lime（亮绿色）
+            linewidth: 线条粗细，默认1
+            size: 十字准星臂长，默认10像素
+            gap: 中心空隙大小，默认5像素
+        """
+        # 获取图像中心坐标
+        h, w = image_shape[0], image_shape[1]
+        center_x, center_y = w / 2, h / 2
+
+        # 绘制水平线（左右两段）
+        ax.plot([center_x - gap - size, center_x - gap], [center_y, center_y],
+                color=color, linewidth=linewidth, linestyle='-')
+        ax.plot([center_x + gap, center_x + gap + size], [center_y, center_y],
+                color=color, linewidth=linewidth, linestyle='-')
+
+        # 绘制垂直线（上下两段）
+        ax.plot([center_x, center_x], [center_y - gap - size, center_y - gap],
+                color=color, linewidth=linewidth, linestyle='-')
+        ax.plot([center_x, center_x], [center_y + gap, center_y + gap + size],
+                color=color, linewidth=linewidth, linestyle='-')
+
     def _show_cutouts_in_main_display(self, reference_img, aligned_img, detection_img, file_info=None):
         """
         在主界面显示三张cutout图片
@@ -3359,6 +3387,8 @@ class FitsImageViewer:
             )
             self._blink_ax.set_title("Reference ⇄ Aligned (闪烁)", fontsize=10, fontweight='bold')
             self._blink_ax.axis('off')
+            # 添加十字准星
+            self._draw_crosshair_on_axis(self._blink_ax, ref_array.shape)
 
             # 显示aligned图像（可点击切换）
             self._click_ax = axes[1]
@@ -3372,11 +3402,15 @@ class FitsImageViewer:
             total_images = len(self._click_images)
             self._click_ax.set_title(f"Aligned (1/{total_images}) - 点击切换", fontsize=10, fontweight='bold')
             self._click_ax.axis('off')
+            # 添加十字准星
+            self._draw_crosshair_on_axis(self._click_ax, aligned_array.shape)
 
             # 显示detection图像
             axes[2].imshow(detection_array, cmap='gray' if len(detection_array.shape) == 2 else None)
             axes[2].set_title("Detection (检测结果)", fontsize=10, fontweight='bold')
             axes[2].axis('off')
+            # 添加十字准星
+            self._draw_crosshair_on_axis(axes[2], detection_array.shape)
 
             # 调整子图间距
             self.figure.tight_layout()
