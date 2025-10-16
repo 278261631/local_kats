@@ -156,7 +156,7 @@ def main():
 
     # 高级选项
     parser.add_argument('--gaussian-sigma', type=float, default=1.0, help='高斯模糊参数（默认1.0）')
-    parser.add_argument('--diff-threshold', type=float, default=0.1, help='差异检测阈值（默认0.1）')
+    parser.add_argument('--diff-threshold', type=float, default=0.0, help='差异检测阈值（默认0.0）')
     parser.add_argument('--orb-features', type=int, default=1000, help='ORB特征点数量（默认1000）')
     parser.add_argument('--fast-threshold', type=int, default=20, help='FAST角点检测阈值（默认20）')
     

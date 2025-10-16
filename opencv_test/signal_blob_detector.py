@@ -980,7 +980,7 @@ class SignalBlobDetector:
 
         print(f"保存分析报告: {txt_output}")
     
-    def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.1,
+    def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.0,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
                          stretch_method='percentile', percentile_low=99.95, fast_mode=False):
         """
@@ -990,7 +990,7 @@ class SignalBlobDetector:
             fits_path: difference.fits文件路径
             output_dir: 输出目录
             use_peak_stretch: 是否使用峰值拉伸（已废弃，使用stretch_method，默认None表示由stretch_method决定）
-            detection_threshold: 检测阈值，默认0.1（拉伸后数据范围0-1）
+            detection_threshold: 检测阈值，默认0.0（拉伸后数据范围0-1）
             reference_fits: 参考图像（模板）FITS文件路径
             aligned_fits: 对齐图像（下载）FITS文件路径
             remove_bright_lines: 是否去除亮线，默认True
@@ -1103,8 +1103,8 @@ def main():
     parser.add_argument('fits_file', nargs='?',
                        default='aligned_comparison_20251004_151632_difference.fits',
                        help='FITS 文件路径（difference.fits）')
-    parser.add_argument('--threshold', type=float, default=0.1,
-                       help='检测阈值（拉伸后的值），默认 0.1，推荐范围 0.1-0.5')
+    parser.add_argument('--threshold', type=float, default=0.0,
+                       help='检测阈值（拉伸后的值），默认 0.0，推荐范围 0.0-0.5')
     parser.add_argument('--min-area', type=float, default=1,
                        help='最小面积，默认 1')
     parser.add_argument('--max-area', type=float, default=1000,
@@ -1178,4 +1178,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

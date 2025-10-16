@@ -713,8 +713,8 @@ def main():
                        help='包含已对齐FITS文件的输入目录')
     parser.add_argument('--output', '-o',
                        help='输出目录（默认自动生成时间戳目录）')
-    parser.add_argument('--threshold', '-t', type=float, default=0.1,
-                       help='差异检测阈值（默认0.1）')
+    parser.add_argument('--threshold', '-t', type=float, default=0.0,
+                       help='差异检测阈值（默认0.0）')
     parser.add_argument('--gaussian-sigma', '-g', type=float, default=1.0,
                        help='高斯模糊参数（默认1.0）')
 
