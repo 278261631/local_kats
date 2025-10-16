@@ -472,13 +472,13 @@ class SignalBlobDetector:
         for i, blob in enumerate(blobs, 1):
             cx, cy = blob['center']
 
-            # 绘制大空心圆（绿色）
-            cv2.circle(color_image, (int(cx), int(cy)), 20, (0, 255, 0), 2)
+            # 绘制小空心圆（绿色，细线）
+            cv2.circle(color_image, (int(cx), int(cy)), 8, (0, 255, 0), 1)
 
-            # 标注序号（远离中心，只标注前50个）
+            # 标注序号（远离中心，只标注前50个，小字体细线）
             if i <= 50:
-                cv2.putText(color_image, str(i), (int(cx)+25, int(cy)-25),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                cv2.putText(color_image, str(i), (int(cx)+10, int(cy)-10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
 
         return color_image
     
