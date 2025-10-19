@@ -213,6 +213,17 @@ class FitsWebDownloaderGUI:
         self.diff_output_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
 
         ttk.Button(diff_output_frame, text="选择输出目录", command=self._select_diff_output_dir).pack(side=tk.RIGHT)
+
+        # detected保存目录选择
+        detected_frame = ttk.Frame(download_frame)
+        detected_frame.pack(fill=tk.X, pady=(5, 5))
+
+        ttk.Label(detected_frame, text="Detected保存目录:").pack(side=tk.LEFT)
+        self.detected_dir_var = tk.StringVar()
+        self.detected_dir_entry = ttk.Entry(detected_frame, textvariable=self.detected_dir_var, width=50)
+        self.detected_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+
+        ttk.Button(detected_frame, text="选择保存目录", command=self._select_detected_dir).pack(side=tk.RIGHT)
         
         # 下载参数
         params_frame = ttk.Frame(download_frame)
@@ -366,6 +377,14 @@ class FitsWebDownloaderGUI:
             diff_output_dir = last_selected.get("diff_output_directory", "")
             if diff_output_dir:
                 self.diff_output_dir_var.set(diff_output_dir)
+
+            detected_dir = last_selected.get("detected_directory", "")
+            if detected_dir:
+                self.detected_dir_var.set(detected_dir)
+            elif diff_output_dir:
+                # 如果没有设置detected目录，但有diff输出目录，自动设置为diff输出目录下的detected子目录
+                detected_dir = os.path.join(diff_output_dir, "detected")
+                self.detected_dir_var.set(detected_dir)
 
             self._log("配置加载完成")
 
@@ -736,6 +755,26 @@ class FitsWebDownloaderGUI:
             self.config_manager.update_last_selected(diff_output_directory=directory)
             self._log(f"diff输出根目录已设置: {directory}")
             self._log(f"diff结果将保存到: {directory}/系统名/日期/天区/文件名/")
+
+            # 自动设置detected目录为diff输出根目录下的detected子目录
+            detected_dir = os.path.join(directory, "detected")
+            self.detected_dir_var.set(detected_dir)
+            self.config_manager.update_last_selected(detected_directory=detected_dir)
+            self._log(f"detected保存目录已自动设置: {detected_dir}")
+
+    def _select_detected_dir(self):
+        """选择detected保存目录"""
+        # 获取当前目录作为初始目录
+        current_dir = self.detected_dir_var.get()
+        initial_dir = current_dir if current_dir and os.path.exists(current_dir) else os.path.expanduser("~")
+
+        directory = filedialog.askdirectory(title="选择detected保存目录", initialdir=initial_dir)
+        if directory:
+            self.detected_dir_var.set(directory)
+            # 保存到配置
+            self.config_manager.update_last_selected(detected_directory=directory)
+            self._log(f"detected保存目录已设置: {directory}")
+            self._log(f"检测结果将保存到: {directory}/YYYYMMDD/saved_HHMMSS_NNN/")
             
     def _get_selected_files(self):
         """获取选中的文件"""

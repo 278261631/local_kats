@@ -4134,53 +4134,98 @@ class FitsImageViewer:
             # 生成时间戳
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            # 创建保存目录：output/saved_detection_YYYYMMDD_HHMMSS_N/
-            save_dir = os.path.join(self.last_output_dir, f"saved_detection_{timestamp}_{detection_num}")
-            os.makedirs(save_dir, exist_ok=True)
+            # 获取detected根目录
+            detected_root = None
+
+            # 优先从配置管理器获取detected目录
+            if self.config_manager:
+                last_selected = self.config_manager.get_last_selected()
+                detected_dir = last_selected.get("detected_directory", "")
+                if detected_dir and os.path.exists(os.path.dirname(detected_dir)):
+                    # 配置的detected目录直接作为根目录
+                    detected_root = Path(detected_dir)
+                    self.logger.info(f"使用配置的detected目录: {detected_root}")
+
+            # 如果配置中没有或目录不存在，尝试从diff_output目录推断
+            if not detected_root:
+                self.logger.info("配置中没有detected目录，从diff_output目录推断")
+                # 路径结构: diff_output/系统名/日期/天区/文件名/detection_xxx
+                # 需要找到diff_output目录
+                current_path = Path(self.last_output_dir)
+                diff_output_root = None
+
+                # 向上查找，直到找到包含多个系统目录的根目录
+                for parent in current_path.parents:
+                    # 检查是否是diff_output根目录（通常名为diff_output或包含系统名子目录）
+                    if parent.name == 'diff_output' or (parent.parent and parent.parent.name == 'diff_output'):
+                        diff_output_root = parent if parent.name == 'diff_output' else parent.parent
+                        break
+
+                # 如果没找到，使用last_output_dir的上5级目录
+                if not diff_output_root:
+                    diff_output_root = current_path.parents[4] if len(list(current_path.parents)) > 4 else current_path.parent
+
+                # 在diff_output根目录下创建detected目录
+                detected_root = diff_output_root / "detected"
+                self.logger.info(f"推断的detected目录: {detected_root}")
+
+            # 创建带日期的子目录：detected/YYYYMMDD/
+            date_str = datetime.now().strftime("%Y%m%d")
+            detected_date_dir = detected_root / date_str
+
+            # 创建保存目录：detected/YYYYMMDD/saved_HHMMSS_NNN/
+            save_dir = detected_date_dir / f"saved_{timestamp[9:]}_{detection_num}"
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            self.logger.info(f"最终保存目录: {save_dir}")
 
             self.logger.info(f"开始保存检测结果 #{detection_num} 到: {save_dir}")
 
             # 1. 收集并保存参数信息
-            params_file = os.path.join(save_dir, "detection_parameters.txt")
-            self._save_detection_parameters(params_file, detection_num, timestamp)
+            params_file = save_dir / "detection_parameters.txt"
+            self._save_detection_parameters(str(params_file), detection_num, timestamp)
 
             # 2. 复制cutout图片
             import shutil
-            shutil.copy2(reference_img, os.path.join(save_dir, os.path.basename(reference_img)))
-            shutil.copy2(aligned_img, os.path.join(save_dir, os.path.basename(aligned_img)))
-            shutil.copy2(detection_img, os.path.join(save_dir, os.path.basename(detection_img)))
+            shutil.copy2(reference_img, str(save_dir / os.path.basename(reference_img)))
+            shutil.copy2(aligned_img, str(save_dir / os.path.basename(aligned_img)))
+            shutil.copy2(detection_img, str(save_dir / os.path.basename(detection_img)))
             self.logger.info("已复制cutout图片")
 
             # 3. 查找并复制noise_cleaned_aligned.fits文件
             parent_dir = Path(self.last_output_dir)
             noise_cleaned_files = list(parent_dir.glob("*noise_cleaned_aligned.fits"))
             for fits_file in noise_cleaned_files:
-                shutil.copy2(str(fits_file), os.path.join(save_dir, fits_file.name))
+                shutil.copy2(str(fits_file), str(save_dir / fits_file.name))
             self.logger.info(f"已复制 {len(noise_cleaned_files)} 个noise_cleaned_aligned.fits文件")
 
             # 4. 查找并复制aligned_comparison文件
             aligned_comparison_files = list(parent_dir.glob("aligned_comparison_*"))
             for comp_file in aligned_comparison_files:
                 if comp_file.is_file():
-                    shutil.copy2(str(comp_file), os.path.join(save_dir, comp_file.name))
+                    shutil.copy2(str(comp_file), str(save_dir / comp_file.name))
             self.logger.info(f"已复制 {len(aligned_comparison_files)} 个aligned_comparison文件")
 
             # 5. 复制整个cutouts目录
-            cutouts_src = os.path.join(self.last_output_dir, "cutouts")
-            if os.path.exists(cutouts_src):
-                cutouts_dst = os.path.join(save_dir, "cutouts")
-                if os.path.exists(cutouts_dst):
-                    shutil.rmtree(cutouts_dst)
-                shutil.copytree(cutouts_src, cutouts_dst)
+            cutouts_src = parent_dir / "cutouts"
+            if cutouts_src.exists():
+                cutouts_dst = save_dir / "cutouts"
+                if cutouts_dst.exists():
+                    shutil.rmtree(str(cutouts_dst))
+                shutil.copytree(str(cutouts_src), str(cutouts_dst))
                 self.logger.info("已复制cutouts目录")
 
-            # 显示成功消息
-            messagebox.showinfo("成功", f"检测结果 #{detection_num} 已保存到:\n{save_dir}")
+            # 合并成一个弹窗：显示成功消息并询问是否打开
+            result = messagebox.askquestion(
+                "保存成功",
+                f"检测结果 #{detection_num} 已保存到:\n{save_dir}\n\n是否打开保存目录？",
+                icon='info'
+            )
+
             self.logger.info(f"检测结果保存完成: {save_dir}")
 
-            # 询问是否打开保存目录
-            if messagebox.askyesno("打开目录", "是否打开保存目录？"):
-                self._open_directory_in_explorer(save_dir)
+            if result == 'yes':
+                self._open_directory_in_explorer(str(save_dir))
 
         except Exception as e:
             error_msg = f"保存检测结果失败: {str(e)}"

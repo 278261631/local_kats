@@ -33,7 +33,8 @@ class ConfigManager:
                 "k_number": "K096",
                 "download_directory": "",
                 "template_directory": "",
-                "diff_output_directory": ""
+                "diff_output_directory": "",
+                "detected_directory": ""
             },
             "download_settings": {
                 "max_workers": 1,
