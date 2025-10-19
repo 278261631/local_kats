@@ -20,6 +20,7 @@ from astropy.stats import sigma_clipped_stats
 import logging
 from pathlib import Path
 from typing import Optional, Tuple, Callable
+from datetime import datetime, timedelta
 from diff_orb_integration import DiffOrbIntegration
 
 # 添加项目根目录到路径以导入dss_cds_downloader
@@ -379,6 +380,11 @@ class FitsImageViewer:
         ttk.Label(toolbar_frame6, text="查询结果:").pack(side=tk.LEFT, padx=(5, 2))
         self.skybot_result_label = ttk.Label(toolbar_frame6, text="未查询", foreground="gray")
         self.skybot_result_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 保存检测结果按钮
+        self.save_detection_button = ttk.Button(toolbar_frame6, text="保存检测结果",
+                                               command=self._save_detection_result, state="disabled")
+        self.save_detection_button.pack(side=tk.LEFT, padx=(10, 5))
 
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
@@ -2280,6 +2286,8 @@ class FitsImageViewer:
         if hasattr(self, 'skybot_button'):
             self.skybot_button.config(state="disabled")
             self.skybot_result_label.config(text="未查询", foreground="gray")
+        if hasattr(self, 'save_detection_button'):
+            self.save_detection_button.config(state="disabled")
 
         # 清除输出目录
         self.last_output_dir = None
@@ -2559,6 +2567,10 @@ class FitsImageViewer:
         # 启用Skybot查询按钮（只要有cutout就可以启用）
         if hasattr(self, 'skybot_button'):
             self.skybot_button.config(state="normal")
+
+        # 启用保存检测结果按钮（只要有cutout就可以启用）
+        if hasattr(self, 'save_detection_button'):
+            self.save_detection_button.config(state="normal")
 
         # 提取文件信息（使用左侧选中的文件名）
         selected_filename = ""
@@ -4080,5 +4092,167 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"获取旋转角度失败: {str(e)}")
             return 0.0
+
+    def _save_detection_result(self):
+        """保存当前显示的检测结果到output文件夹"""
+        try:
+            # 检查是否有当前显示的cutout
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                messagebox.showwarning("警告", "请先执行差分检测并显示检测结果")
+                return
+
+            if not hasattr(self, '_current_cutout_index'):
+                messagebox.showwarning("警告", "没有当前显示的检测结果")
+                return
+
+            # 获取当前cutout的信息
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            reference_img = current_cutout['reference']
+            aligned_img = current_cutout['aligned']
+            detection_img = current_cutout['detection']
+
+            # 获取输出目录（last_output_dir）
+            if not self.last_output_dir or not os.path.exists(self.last_output_dir):
+                messagebox.showwarning("警告", "无法找到输出目录")
+                return
+
+            # 从cutout文件名提取检测目标编号
+            # 文件名格式: 001_RA285.123456_DEC43.567890_GY5_K096_1_reference.png
+            # 或: 001_X1234_Y5678_GY5_K096_1_reference.png
+            reference_basename = os.path.basename(reference_img)
+            import re
+
+            # 提取序号（前3位数字）
+            match = re.match(r'(\d{3})_', reference_basename)
+            if not match:
+                messagebox.showerror("错误", f"无法解析检测结果文件名: {reference_basename}")
+                self.logger.error(f"文件名格式不匹配: {reference_basename}")
+                return
+
+            detection_num = match.group(1)
+
+            # 生成时间戳
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # 创建保存目录：output/saved_detection_YYYYMMDD_HHMMSS_N/
+            save_dir = os.path.join(self.last_output_dir, f"saved_detection_{timestamp}_{detection_num}")
+            os.makedirs(save_dir, exist_ok=True)
+
+            self.logger.info(f"开始保存检测结果 #{detection_num} 到: {save_dir}")
+
+            # 1. 收集并保存参数信息
+            params_file = os.path.join(save_dir, "detection_parameters.txt")
+            self._save_detection_parameters(params_file, detection_num, timestamp)
+
+            # 2. 复制cutout图片
+            import shutil
+            shutil.copy2(reference_img, os.path.join(save_dir, os.path.basename(reference_img)))
+            shutil.copy2(aligned_img, os.path.join(save_dir, os.path.basename(aligned_img)))
+            shutil.copy2(detection_img, os.path.join(save_dir, os.path.basename(detection_img)))
+            self.logger.info("已复制cutout图片")
+
+            # 3. 查找并复制noise_cleaned_aligned.fits文件
+            parent_dir = Path(self.last_output_dir)
+            noise_cleaned_files = list(parent_dir.glob("*noise_cleaned_aligned.fits"))
+            for fits_file in noise_cleaned_files:
+                shutil.copy2(str(fits_file), os.path.join(save_dir, fits_file.name))
+            self.logger.info(f"已复制 {len(noise_cleaned_files)} 个noise_cleaned_aligned.fits文件")
+
+            # 4. 查找并复制aligned_comparison文件
+            aligned_comparison_files = list(parent_dir.glob("aligned_comparison_*"))
+            for comp_file in aligned_comparison_files:
+                if comp_file.is_file():
+                    shutil.copy2(str(comp_file), os.path.join(save_dir, comp_file.name))
+            self.logger.info(f"已复制 {len(aligned_comparison_files)} 个aligned_comparison文件")
+
+            # 5. 复制整个cutouts目录
+            cutouts_src = os.path.join(self.last_output_dir, "cutouts")
+            if os.path.exists(cutouts_src):
+                cutouts_dst = os.path.join(save_dir, "cutouts")
+                if os.path.exists(cutouts_dst):
+                    shutil.rmtree(cutouts_dst)
+                shutil.copytree(cutouts_src, cutouts_dst)
+                self.logger.info("已复制cutouts目录")
+
+            # 显示成功消息
+            messagebox.showinfo("成功", f"检测结果 #{detection_num} 已保存到:\n{save_dir}")
+            self.logger.info(f"检测结果保存完成: {save_dir}")
+
+            # 询问是否打开保存目录
+            if messagebox.askyesno("打开目录", "是否打开保存目录？"):
+                self._open_directory_in_explorer(save_dir)
+
+        except Exception as e:
+            error_msg = f"保存检测结果失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            messagebox.showerror("错误", error_msg)
+
+    def _save_detection_parameters(self, params_file, detection_num, timestamp):
+        """保存检测参数到文本文件"""
+        try:
+            with open(params_file, 'w', encoding='utf-8') as f:
+                f.write("=" * 60 + "\n")
+                f.write(f"检测结果参数信息 - 检测目标 #{detection_num}\n")
+                f.write("=" * 60 + "\n\n")
+
+                # 基本信息
+                f.write(f"检测时间: {timestamp[:8]}-{timestamp[9:]}\n")
+                f.write(f"检测编号: {detection_num}\n")
+                f.write(f"保存时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+                # 文件信息
+                if self.selected_file_path:
+                    f.write(f"选中文件: {os.path.basename(self.selected_file_path)}\n")
+                    f.write(f"文件路径: {self.selected_file_path}\n\n")
+
+                # 坐标信息（从显示框读取）
+                f.write("坐标信息:\n")
+                f.write(f"  度格式: {self.coord_deg_entry.get()}\n")
+                f.write(f"  时分秒: {self.coord_hms_entry.get()}\n")
+                f.write(f"  紧凑格式: {self.coord_compact_entry.get()}\n\n")
+
+                # 时间信息
+                f.write("时间信息:\n")
+                f.write(f"  UTC: {self.time_utc_entry.get()}\n")
+                f.write(f"  北京时间: {self.time_beijing_entry.get()}\n")
+                f.write(f"  本地时间: {self.time_local_entry.get()}\n\n")
+
+                # GPS信息
+                if self.config_manager:
+                    gps_settings = self.config_manager.get_gps_settings()
+                    f.write("GPS信息:\n")
+                    f.write(f"  纬度: {gps_settings.get('latitude', 'N/A')}°\n")
+                    f.write(f"  经度: {gps_settings.get('longitude', 'N/A')}°\n\n")
+
+                # MPC信息
+                if self.config_manager:
+                    mpc_settings = self.config_manager.get_mpc_settings()
+                    f.write("MPC信息:\n")
+                    f.write(f"  观测站代码: {mpc_settings.get('mpc_code', 'N/A')}\n\n")
+
+                # Diff处理参数
+                if self.config_manager:
+                    batch_settings = self.config_manager.get_batch_process_settings()
+                    f.write("Diff处理参数:\n")
+                    f.write(f"  降噪方法: {batch_settings.get('noise_method', 'N/A')}\n")
+                    f.write(f"  对齐方法: {batch_settings.get('alignment_method', 'N/A')}\n")
+                    f.write(f"  去除亮线: {batch_settings.get('remove_bright_lines', 'N/A')}\n")
+                    f.write(f"  快速模式: {batch_settings.get('fast_mode', 'N/A')}\n")
+                    f.write(f"  拉伸方法: {batch_settings.get('stretch_method', 'N/A')}\n")
+                    f.write(f"  百分位参数: {batch_settings.get('percentile_low', 'N/A')}\n")
+                    f.write(f"  最大锯齿比率: {batch_settings.get('max_jaggedness_ratio', 'N/A')}\n\n")
+
+                # Skybot查询结果
+                skybot_result = self.skybot_result_label.cget("text")
+                f.write(f"Skybot查询结果: {skybot_result}\n\n")
+
+                f.write("=" * 60 + "\n")
+                f.write("参数文件结束\n")
+                f.write("=" * 60 + "\n")
+
+            self.logger.info(f"参数文件已保存: {params_file}")
+
+        except Exception as e:
+            self.logger.error(f"保存参数文件失败: {str(e)}")
 
 
