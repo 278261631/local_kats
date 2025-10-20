@@ -275,9 +275,115 @@ class SignalBlobDetector:
 
         return mask, threshold
     
-    def detect_blobs_from_mask(self, mask, original_data):
+    def detect_blobs_from_mask(self, mask, original_data, detection_method='contour'):
         """
         从掩码中检测斑点
+
+        Args:
+            mask: 二值掩码
+            original_data: 原始数据
+            detection_method: 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
+        """
+        if detection_method == 'simple_blob':
+            return self._detect_blobs_simple_blob_detector(mask, original_data)
+        else:
+            return self._detect_blobs_contour(mask, original_data)
+
+    def _detect_blobs_simple_blob_detector(self, mask, original_data):
+        """
+        使用SimpleBlobDetector检测斑点
+        """
+        # 形态学操作，去除小噪点
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        mask_cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel)
+
+        # 设置SimpleBlobDetector参数
+        params = cv2.SimpleBlobDetector_Params()
+
+        # 面积过滤
+        params.filterByArea = True
+        params.minArea = self.min_area
+        params.maxArea = self.max_area
+
+        # 圆度过滤
+        params.filterByCircularity = True
+        params.minCircularity = self.min_circularity
+
+        # 惯性过滤（椭圆度）
+        params.filterByInertia = True
+        params.minInertiaRatio = 0.5  # 0.5表示椭圆长短轴比至少为1:2
+
+        # 凸度过滤
+        params.filterByConvexity = True
+        params.minConvexity = 0.8
+
+        # 颜色过滤（检测亮斑）
+        params.filterByColor = True
+        params.blobColor = 255
+
+        # 创建检测器
+        detector = cv2.SimpleBlobDetector_create(params)
+
+        # 检测斑点
+        keypoints = detector.detect(mask_cleaned)
+
+        print(f"\n使用SimpleBlobDetector检测到 {len(keypoints)} 个斑点")
+
+        # 估计背景噪声水平
+        background_mask = (mask_cleaned == 0)
+        if np.sum(background_mask) > 0:
+            background_values = original_data[background_mask]
+            background_median = np.median(background_values)
+            background_mad = np.median(np.abs(background_values - background_median))
+            background_sigma = 1.4826 * background_mad
+        else:
+            background_median = np.median(original_data)
+            background_sigma = np.std(original_data)
+
+        print(f"背景噪声: median={background_median:.6f}, sigma={background_sigma:.6f}")
+
+        # 转换keypoints为blob格式
+        blobs = []
+        for kp in keypoints:
+            cx, cy = kp.pt
+            radius = kp.size / 2
+            area = np.pi * radius * radius
+
+            # 获取该区域的像素值
+            y_min = max(0, int(cy - radius))
+            y_max = min(original_data.shape[0], int(cy + radius) + 1)
+            x_min = max(0, int(cx - radius))
+            x_max = min(original_data.shape[1], int(cx + radius) + 1)
+
+            region = original_data[y_min:y_max, x_min:x_max]
+            if region.size > 0:
+                signal = np.max(region)
+                mean_signal = np.mean(region)
+                snr = (signal - background_median) / background_sigma if background_sigma > 0 else 0
+            else:
+                signal = 0
+                mean_signal = 0
+                snr = 0
+
+            blobs.append({
+                'center': (cx, cy),
+                'area': area,
+                'circularity': 1.0,  # SimpleBlobDetector已经过滤了圆度
+                'signal': signal,
+                'mean_signal': mean_signal,
+                'snr': snr,
+                'jaggedness_ratio': 1.0,  # SimpleBlobDetector检测的斑点默认为圆形
+                'hull_vertices': 0,
+                'poly_vertices': 0
+            })
+
+        print(f"SimpleBlobDetector检测完成，共 {len(blobs)} 个斑点")
+        return blobs
+
+    def _detect_blobs_contour(self, mask, original_data):
+        """
+        使用轮廓检测斑点（原版方法）
         """
         # 形态学操作，去除小噪点
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -983,7 +1089,7 @@ class SignalBlobDetector:
     
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.0,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
-                         stretch_method='percentile', percentile_low=99.95, fast_mode=False):
+                         stretch_method='percentile', percentile_low=99.95, fast_mode=False, detection_method='contour'):
         """
         处理 FITS 文件的完整流程
 
@@ -998,6 +1104,7 @@ class SignalBlobDetector:
             stretch_method: 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸（默认）
             percentile_low: 百分位数起点，默认99.95，终点使用最大值
             fast_mode: 快速模式，不生成hull和poly可视化图片，默认False
+            detection_method: 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
         """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
@@ -1057,7 +1164,7 @@ class SignalBlobDetector:
         print(f"信号像素: {signal_pixels} ({signal_pixels/mask.size*100:.3f}%)")
 
         # 检测斑点
-        blobs = self.detect_blobs_from_mask(mask, stretched_data_no_lines)
+        blobs = self.detect_blobs_from_mask(mask, stretched_data_no_lines, detection_method=detection_method)
 
         threshold_info = {
             'threshold': detection_threshold,
@@ -1129,6 +1236,9 @@ def main():
                        help='对齐图像（下载）FITS文件路径')
     parser.add_argument('--fast-mode', action='store_true',
                        help='快速模式，不生成hull和poly可视化图片（默认生成）')
+    parser.add_argument('--detection-method', type=str, default='contour',
+                       choices=['contour', 'simple_blob'],
+                       help='检测方法: contour=轮廓检测（默认）, simple_blob=SimpleBlobDetector')
 
     args = parser.parse_args()
 
@@ -1174,7 +1284,8 @@ def main():
                               remove_bright_lines=args.remove_lines,
                               stretch_method=args.stretch_method,
                               percentile_low=args.percentile_low,
-                              fast_mode=args.fast_mode)
+                              fast_mode=args.fast_mode,
+                              detection_method=args.detection_method)
 
 
 if __name__ == "__main__":

@@ -357,7 +357,7 @@ class AlignedFITSComparator:
 
         return template_file, aligned_file
 
-    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, max_jaggedness_ratio=2.0, fast_mode=False):
+    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, max_jaggedness_ratio=2.0, fast_mode=False, detection_method='contour'):
         """
         对difference.fits执行signal_blob_detector检测
 
@@ -371,6 +371,7 @@ class AlignedFITSComparator:
             percentile_low: 百分位数起点，默认99.95
             max_jaggedness_ratio: 最大锯齿比率，默认2.0
             fast_mode: 快速模式，不生成hull和poly可视化图片，默认False
+            detection_method: 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
 
         Returns:
             dict: 检测结果信息
@@ -391,8 +392,8 @@ class AlignedFITSComparator:
                 detector_script,
                 diff_fits_path,
                 '--threshold', '0.0',
-                '--min-area', '1',
-                '--max-area', '1000',
+                '--min-area', '5',
+                '--max-area', '400',
                 '--min-circularity', '0.79',
                 '--max-jaggedness-ratio', str(max_jaggedness_ratio)
             ]
@@ -415,6 +416,9 @@ class AlignedFITSComparator:
             # 添加快速模式参数
             if fast_mode:
                 cmd.append('--fast-mode')
+
+            # 添加检测方法参数
+            cmd.extend(['--detection-method', detection_method])
 
             self.logger.info(f"执行命令: {' '.join(cmd)}")
 
@@ -448,7 +452,7 @@ class AlignedFITSComparator:
             self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
             return {'success': False, 'error': str(e)}
 
-    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0):
+    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0, detection_method='contour'):
         """
         处理已对齐FITS文件的差异比较
 
@@ -460,6 +464,7 @@ class AlignedFITSComparator:
             percentile_low (float): 百分位数起点，默认99.95
             fast_mode (bool): 快速模式，减少中间文件输出，默认False
             max_jaggedness_ratio (float): 最大锯齿比率，默认2.0
+            detection_method (str): 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
 
         Returns:
             dict: 处理结果信息
@@ -632,7 +637,8 @@ class AlignedFITSComparator:
             stretch_method=stretch_method,
             percentile_low=percentile_low,
             max_jaggedness_ratio=max_jaggedness_ratio,
-            fast_mode=fast_mode
+            fast_mode=fast_mode,
+            detection_method=detection_method
         )
 
         # 快速模式：检测完成后删除差异FITS文件

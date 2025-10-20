@@ -212,6 +212,21 @@ class FitsImageViewer:
         jaggedness_entry = ttk.Entry(jaggedness_frame, textvariable=self.jaggedness_ratio_var, width=6)
         jaggedness_entry.pack(side=tk.LEFT, padx=(2, 0))
 
+        # 检测方法单选框架
+        detection_method_frame = ttk.Frame(toolbar_frame2)
+        detection_method_frame.pack(side=tk.LEFT, padx=(10, 0))
+
+        ttk.Label(detection_method_frame, text="检测方法:").pack(side=tk.LEFT)
+        self.detection_method_var = tk.StringVar(value="contour")
+
+        detection_contour_radio = ttk.Radiobutton(detection_method_frame, text="轮廓",
+                                                  variable=self.detection_method_var, value="contour")
+        detection_contour_radio.pack(side=tk.LEFT, padx=(2, 0))
+
+        detection_blob_radio = ttk.Radiobutton(detection_method_frame, text="SimpleBlobDetector",
+                                               variable=self.detection_method_var, value="simple_blob")
+        detection_blob_radio.pack(side=tk.LEFT, padx=(2, 0))
+
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
@@ -566,7 +581,11 @@ class FitsImageViewer:
             max_jaggedness_ratio = batch_settings.get('max_jaggedness_ratio', 2.0)
             self.jaggedness_ratio_var.set(str(max_jaggedness_ratio))
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}")
+            # 检测方法
+            detection_method = batch_settings.get('detection_method', 'contour')
+            self.detection_method_var.set(detection_method)
+
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -599,6 +618,9 @@ class FitsImageViewer:
 
             # 绑定锯齿比率输入框
             self.jaggedness_ratio_var.trace('w', self._on_jaggedness_ratio_change)
+
+            # 绑定检测方法单选框
+            self.detection_method_var.trace('w', self._on_batch_settings_change)
 
             self.logger.info("批量处理参数控件事件已绑定")
 
@@ -634,16 +656,20 @@ class FitsImageViewer:
             elif self.stretch_method_var.get() == 'percentile':
                 stretch_method = 'percentile'
 
+            # 获取检测方法
+            detection_method = self.detection_method_var.get()
+
             # 保存到配置文件
             self.config_manager.update_batch_process_settings(
                 noise_method=noise_method,
                 alignment_method=alignment_method,
                 remove_bright_lines=self.remove_lines_var.get(),
                 fast_mode=self.fast_mode_var.get(),
-                stretch_method=stretch_method
+                stretch_method=stretch_method,
+                detection_method=detection_method
             )
 
-            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}")
+            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}")
 
         except Exception as e:
             self.logger.error(f"保存批量处理参数失败: {str(e)}")
@@ -2019,6 +2045,10 @@ class FitsImageViewer:
                 self.logger.warning(f"锯齿比率输入无效，使用默认值2.0: {e}")
                 max_jaggedness_ratio = 2.0
 
+            # 获取检测方法
+            detection_method = self.detection_method_var.get()
+            self.logger.info(f"检测方法: {detection_method}")
+
             # 更新进度：开始执行Diff
             filename = os.path.basename(self.selected_file_path)
             self.parent_frame.after(0, lambda f=filename: self.diff_progress_label.config(
@@ -2031,7 +2061,8 @@ class FitsImageViewer:
                                               stretch_method=stretch_method,
                                               percentile_low=percentile_low,
                                               fast_mode=fast_mode,
-                                              max_jaggedness_ratio=max_jaggedness_ratio)
+                                              max_jaggedness_ratio=max_jaggedness_ratio,
+                                              detection_method=detection_method)
 
             if result and result.get('success'):
                 # 更新进度：处理完成
