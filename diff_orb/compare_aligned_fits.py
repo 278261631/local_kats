@@ -390,7 +390,7 @@ class AlignedFITSComparator:
                 sys.executable,
                 detector_script,
                 diff_fits_path,
-                '--threshold', '0.1',
+                '--threshold', '0.0',
                 '--min-area', '1',
                 '--max-area', '1000',
                 '--min-circularity', '0.79',
