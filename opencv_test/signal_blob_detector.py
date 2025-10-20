@@ -312,7 +312,7 @@ class SignalBlobDetector:
 
         # 惯性过滤（椭圆度）
         params.filterByInertia = True
-        params.minInertiaRatio = 0.5  # 0.5表示椭圆长短轴比至少为1:2
+        params.minInertiaRatio = 0.8  # 0.8表示椭圆长短轴比至少为1:1.25
 
         # 凸度过滤
         params.filterByConvexity = True
@@ -433,6 +433,34 @@ class SignalBlobDetector:
             eps = 0.01 * cv2.arcLength(contour, True)
             poly = cv2.approxPolyDP(contour, eps, True)
 
+            # 计算凸度 (Convexity)
+            hull_area = cv2.contourArea(hull)
+            if hull_area > 0:
+                convexity = area / hull_area
+            else:
+                convexity = 0
+
+            # 凸度过滤 (>0.8)
+            if convexity <= 0.8:
+                continue
+
+            # 计算惯性比率 (Inertia Ratio)
+            # 使用拟合椭圆计算惯性比率
+            if len(contour) >= 5:  # 至少需要5个点才能拟合椭圆
+                ellipse = cv2.fitEllipse(contour)
+                major_axis = max(ellipse[1])
+                minor_axis = min(ellipse[1])
+                if major_axis > 0:
+                    inertia_ratio = minor_axis / major_axis
+                else:
+                    inertia_ratio = 0
+            else:
+                inertia_ratio = 1.0  # 点太少，假设为圆形
+
+            # 惯性比率过滤 (>0.8)
+            if inertia_ratio <= 0.8:
+                continue
+
             # 计算锯齿比率
             hull_vertices = len(hull)
             poly_vertices = len(poly)
@@ -469,6 +497,8 @@ class SignalBlobDetector:
                 'center': (cx, cy),
                 'area': area,
                 'circularity': circularity,
+                'convexity': convexity,
+                'inertia_ratio': inertia_ratio,
                 'jaggedness_ratio': jaggedness_ratio,
                 'hull_vertices': hull_vertices,
                 'poly_vertices': poly_vertices,
@@ -535,19 +565,21 @@ class SignalBlobDetector:
             return
 
         print(f"\n检测到的斑点详细信息（已排序：综合得分=(圆度^2)×2000×面积归一化）:")
-        print(f"{'序号':<6} {'综合得分':<10} {'面积':<10} {'圆度':<10} {'锯齿比':<10} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<10} {'Y坐标':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12}")
-        print("-" * 140)
+        print(f"{'序号':<6} {'综合得分':<10} {'面积':<10} {'圆度':<10} {'凸度':<10} {'惯性比':<10} {'锯齿比':<10} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<10} {'Y坐标':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12}")
+        print("-" * 160)
 
         for i, blob in enumerate(blobs, 1):
             cx, cy = blob['center']
             quality_score = blob.get('quality_score', 0)
             snr = blob.get('snr', 0)
             max_snr = blob.get('max_snr', 0)
+            convexity = blob.get('convexity', 0)
+            inertia = blob.get('inertia_ratio', 0)
             jaggedness = blob.get('jaggedness_ratio', 0)
             hull_verts = blob.get('hull_vertices', 0)
             poly_verts = blob.get('poly_vertices', 0)
             print(f"{i:<6} {quality_score:<10.3f} {blob['area']:<10.1f} {blob['circularity']:<10.3f} "
-                  f"{jaggedness:<10.3f} {hull_verts:<10} {poly_verts:<10} "
+                  f"{convexity:<10.3f} {inertia:<10.3f} {jaggedness:<10.3f} {hull_verts:<10} {poly_verts:<10} "
                   f"{cx:<10.2f} {cy:<10.2f} {snr:<10.2f} {max_snr:<10.2f} {blob['mean_signal']:<12.6f}")
 
         # 统计信息
@@ -555,6 +587,8 @@ class SignalBlobDetector:
         areas = [b['area'] for b in blobs]
         signals = [b['mean_signal'] for b in blobs]
         circularities = [b['circularity'] for b in blobs]
+        convexities = [b.get('convexity', 0) for b in blobs]
+        inertia_ratios = [b.get('inertia_ratio', 0) for b in blobs]
         jaggedness_ratios = [b.get('jaggedness_ratio', 0) for b in blobs]
         snrs = [b.get('snr', 0) for b in blobs]
 
@@ -563,6 +597,8 @@ class SignalBlobDetector:
         print(f"  - 综合得分: {np.mean(quality_scores):.3f} ± {np.std(quality_scores):.3f} (范围: {np.min(quality_scores):.3f} - {np.max(quality_scores):.3f})")
         print(f"  - 面积: {np.mean(areas):.2f} ± {np.std(areas):.2f} (范围: {np.min(areas):.2f} - {np.max(areas):.2f})")
         print(f"  - 圆度: {np.mean(circularities):.3f} ± {np.std(circularities):.3f} (范围: {np.min(circularities):.3f} - {np.max(circularities):.3f})")
+        print(f"  - 凸度: {np.mean(convexities):.3f} ± {np.std(convexities):.3f} (范围: {np.min(convexities):.3f} - {np.max(convexities):.3f})")
+        print(f"  - 惯性比: {np.mean(inertia_ratios):.3f} ± {np.std(inertia_ratios):.3f} (范围: {np.min(inertia_ratios):.3f} - {np.max(inertia_ratios):.3f})")
         print(f"  - 锯齿比: {np.mean(jaggedness_ratios):.3f} ± {np.std(jaggedness_ratios):.3f} (范围: {np.min(jaggedness_ratios):.3f} - {np.max(jaggedness_ratios):.3f})")
         print(f"  - SNR: {np.mean(snrs):.2f} ± {np.std(snrs):.2f} (范围: {np.min(snrs):.2f} - {np.max(snrs):.2f})")
         print(f"  - 平均信号: {np.mean(signals):.6f} ± {np.std(signals):.6f}")
