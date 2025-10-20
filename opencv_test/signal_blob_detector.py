@@ -441,7 +441,7 @@ class SignalBlobDetector:
                 convexity = 0
 
             # 凸度过滤 (>0.8)
-            if convexity <= 0.8:
+            if convexity <= 0.6:
                 continue
 
             # 计算惯性比率 (Inertia Ratio)
@@ -458,7 +458,7 @@ class SignalBlobDetector:
                 inertia_ratio = 1.0  # 点太少，假设为圆形
 
             # 惯性比率过滤 (>0.8)
-            if inertia_ratio <= 0.8:
+            if inertia_ratio <= 0.6:
                 continue
 
             # 计算锯齿比率
@@ -487,6 +487,10 @@ class SignalBlobDetector:
             signal_values = original_data[mask_region > 0]
             mean_signal = np.mean(signal_values)
             max_signal = np.max(signal_values)
+
+            # 亮度过滤：最大信号值必须超过50（拉伸后的数据范围是0-255）
+            if max_signal * 255 <= 20:
+                continue
 
             # 计算SNR（信噪比）
             # SNR = (信号 - 背景) / 背景噪声
