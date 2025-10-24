@@ -569,8 +569,8 @@ class SignalBlobDetector:
             return
 
         print(f"\n检测到的斑点详细信息（已排序：综合得分=(圆度^2)×2000×面积归一化）:")
-        print(f"{'序号':<6} {'综合得分':<10} {'面积':<10} {'圆度':<10} {'凸度':<10} {'惯性比':<10} {'锯齿比':<10} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<10} {'Y坐标':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12}")
-        print("-" * 160)
+        print(f"{'序号':<6} {'综合得分':<10} {'面积':<10} {'圆度':<10} {'凸度':<10} {'惯性比':<10} {'锯齿比':<10} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<10} {'Y坐标':<10} {'SNR':<10} {'最大SNR':<10} {'平均信号':<12} {'Aligned中心7x7SNR':<16}")
+        print("-" * 186)
 
         for i, blob in enumerate(blobs, 1):
             cx, cy = blob['center']
@@ -582,9 +582,15 @@ class SignalBlobDetector:
             jaggedness = blob.get('jaggedness_ratio', 0)
             hull_verts = blob.get('hull_vertices', 0)
             poly_verts = blob.get('poly_vertices', 0)
+            aligned_center_snr = blob.get('aligned_center_7x7_snr', None)
+
+            # 格式化aligned SNR值
+            aligned_center_str = f"{aligned_center_snr:<16.2f}" if aligned_center_snr is not None else f"{'N/A':<16}"
+
             print(f"{i:<6} {quality_score:<10.3f} {blob['area']:<10.1f} {blob['circularity']:<10.3f} "
                   f"{convexity:<10.3f} {inertia:<10.3f} {jaggedness:<10.3f} {hull_verts:<10} {poly_verts:<10} "
-                  f"{cx:<10.2f} {cy:<10.2f} {snr:<10.2f} {max_snr:<10.2f} {blob['mean_signal']:<12.6f}")
+                  f"{cx:<10.2f} {cy:<10.2f} {snr:<10.2f} {max_snr:<10.2f} {blob['mean_signal']:<12.6f} "
+                  f"{aligned_center_str}")
 
         # 统计信息
         quality_scores = [b.get('quality_score', 0) for b in blobs]
@@ -776,6 +782,16 @@ class SignalBlobDetector:
 
         half_size = cutout_size // 2
 
+        # 如果有aligned_data，预先计算整体背景噪声用于SNR计算
+        aligned_background_median = None
+        aligned_background_sigma = None
+        if aligned_data is not None:
+            # 使用整个aligned图像计算背景噪声
+            aligned_background_median = np.median(aligned_data)
+            aligned_mad = np.median(np.abs(aligned_data - aligned_background_median))
+            aligned_background_sigma = 1.4826 * aligned_mad
+            print(f"Aligned图像背景噪声: median={aligned_background_median:.6f}, sigma={aligned_background_sigma:.6f}")
+
         for i, blob in enumerate(blobs, 1):
             cx, cy = blob['center']
             cx, cy = int(cx), int(cy)
@@ -810,6 +826,42 @@ class SignalBlobDetector:
             y1 = max(0, cy - half_size)
             x2 = min(original_data.shape[1], cx + half_size)
             y2 = min(original_data.shape[0], cy + half_size)
+
+            # 计算aligned.png中心7x7像素的SNR
+            aligned_center_7x7_snr = None
+            if aligned_data is not None and aligned_background_median is not None and aligned_background_sigma is not None:
+                # 提取aligned数据的cutout区域
+                aligned_cutout = aligned_data[y1:y2, x1:x2]
+
+                # 计算cutout区域的背景（排除中心区域）
+                cutout_height, cutout_width = aligned_cutout.shape
+                center_cutout_x = cutout_width // 2
+                center_cutout_y = cutout_height // 2
+
+                # 创建背景掩码（排除中心7x7区域）
+                background_mask = np.ones_like(aligned_cutout, dtype=bool)
+                y_start = max(0, center_cutout_y - 3)
+                y_end = min(cutout_height, center_cutout_y + 4)
+                x_start = max(0, center_cutout_x - 3)
+                x_end = min(cutout_width, center_cutout_x + 4)
+                background_mask[y_start:y_end, x_start:x_end] = False
+
+                # 计算背景区域的统计信息
+                if np.sum(background_mask) > 0:
+                    background_values = aligned_cutout[background_mask]
+                    cutout_background_median = np.median(background_values)
+                    cutout_background_mad = np.median(np.abs(background_values - cutout_background_median))
+                    cutout_background_sigma = 1.4826 * cutout_background_mad
+
+                    # 计算中心7x7区域的信号
+                    center_7x7 = aligned_cutout[y_start:y_end, x_start:x_end]
+                    if center_7x7.size > 0:
+                        center_mean_signal = np.mean(center_7x7)
+                        # 计算相对于cutout背景的SNR
+                        aligned_center_7x7_snr = (center_mean_signal - cutout_background_median) / (cutout_background_sigma + 1e-10)
+
+            # 将SNR信息添加到blob中
+            blob['aligned_center_7x7_snr'] = aligned_center_7x7_snr
 
             # 提取参考图像截图（模板图像）- 使用局部拉伸
             if reference_data is not None:
@@ -1109,8 +1161,8 @@ class SignalBlobDetector:
             f.write("\n")
 
             f.write(f"检测到 {len(blobs)} 个斑点（按综合得分排序：(圆度^2)×2000×面积归一化）\n\n")
-            f.write(f"{'序号':<6} {'综合得分':<12} {'面积':<12} {'圆度':<12} {'锯齿比':<12} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<12} {'Y坐标':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14}\n")
-            f.write("-" * 162 + "\n")
+            f.write(f"{'序号':<6} {'综合得分':<12} {'面积':<12} {'圆度':<12} {'锯齿比':<12} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<12} {'Y坐标':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14} {'Aligned中心7x7SNR':<18}\n")
+            f.write("-" * 194 + "\n")
 
             for i, blob in enumerate(blobs, 1):
                 cx, cy = blob['center']
@@ -1120,10 +1172,16 @@ class SignalBlobDetector:
                 jaggedness_ratio = blob.get('jaggedness_ratio', 0)
                 hull_vertices = blob.get('hull_vertices', 0)
                 poly_vertices = blob.get('poly_vertices', 0)
+                aligned_center_snr = blob.get('aligned_center_7x7_snr', None)
+
+                # 格式化aligned SNR值
+                aligned_center_str = f"{aligned_center_snr:<18.2f}" if aligned_center_snr is not None else f"{'N/A':<18}"
+
                 f.write(f"{i:<6} {quality_score:<12.4f} {blob['area']:<12.2f} {blob['circularity']:<12.4f} "
                        f"{jaggedness_ratio:<12.4f} {hull_vertices:<10} {poly_vertices:<10} "
                        f"{cx:<12.4f} {cy:<12.4f} {snr:<12.2f} {max_snr:<12.2f} "
-                       f"{blob['mean_signal']:<14.8f} {blob['max_signal']:<14.8f}\n")
+                       f"{blob['mean_signal']:<14.8f} {blob['max_signal']:<14.8f} "
+                       f"{aligned_center_str}\n")
 
         print(f"保存分析报告: {txt_output}")
     
