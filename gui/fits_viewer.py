@@ -1226,12 +1226,23 @@ class FitsImageViewer:
                                     if in_data_section and line_stripped:
                                         # 尝试解析数据行
                                         parts = line_stripped.split()
-                                        if len(parts) >= 2:
+                                        if len(parts) >= 14:  # 需要至少14列才能读取Aligned中心7x7SNR
                                             try:
-                                                # 第一列是序号，第二列是综合得分
+                                                # 第一列是序号，第二列是综合得分，第14列是Aligned中心7x7SNR
                                                 seq = int(parts[0])  # 验证第一列是数字
                                                 score = float(parts[1])
-                                                if score > 6.0:
+                                                aligned_snr_str = parts[13]  # 第14列（索引13）
+
+                                                # 解析Aligned SNR（可能是数字或"N/A"）
+                                                aligned_snr = None
+                                                if aligned_snr_str != 'N/A':
+                                                    try:
+                                                        aligned_snr = float(aligned_snr_str)
+                                                    except ValueError:
+                                                        aligned_snr = None
+
+                                                # 判断条件：综合得分 > 6.0 且 Aligned中心7x7SNR > 2
+                                                if score > 6.0 and aligned_snr is not None and aligned_snr > 2.0:
                                                     high_score_count += 1
                                             except (ValueError, IndexError):
                                                 continue
@@ -1682,8 +1693,8 @@ class FitsImageViewer:
                                         if detection_count == 0:
                                             is_empty_detection = True
                                         else:
-                                            # 解析每一行检测结果，计算综合评分 > 6.0 的数量
-                                            # 格式: 序号 综合得分 面积 圆度 ...
+                                            # 解析每一行检测结果，计算综合评分 > 6.0 且 Aligned中心7x7SNR > 2 的数量
+                                            # 格式: 序号 综合得分 面积 圆度 ... Aligned中心7x7SNR
                                             lines = content.split('\n')
                                             in_data_section = False
                                             for line in lines:
@@ -1702,18 +1713,29 @@ class FitsImageViewer:
                                                 if in_data_section and line_stripped:
                                                     # 尝试解析数据行
                                                     parts = line_stripped.split()
-                                                    if len(parts) >= 2:
+                                                    if len(parts) >= 14:  # 需要至少14列才能读取Aligned中心7x7SNR
                                                         try:
-                                                            # 第一列是序号，第二列是综合得分
+                                                            # 第一列是序号，第二列是综合得分，第14列是Aligned中心7x7SNR
                                                             seq = int(parts[0])  # 验证第一列是数字
                                                             score = float(parts[1])
-                                                            if score > 6.0:
+                                                            aligned_snr_str = parts[13]  # 第14列（索引13）
+
+                                                            # 解析Aligned SNR（可能是数字或"N/A"）
+                                                            aligned_snr = None
+                                                            if aligned_snr_str != 'N/A':
+                                                                try:
+                                                                    aligned_snr = float(aligned_snr_str)
+                                                                except ValueError:
+                                                                    aligned_snr = None
+
+                                                            # 判断条件：综合得分 > 6.0 且 Aligned中心7x7SNR > 2
+                                                            if score > 6.0 and aligned_snr is not None and aligned_snr > 2.0:
                                                                 high_score_count += 1
-                                                                self.logger.debug(f"    找到高分: 序号{seq}, 得分{score}")
+                                                                self.logger.debug(f"    找到高分: 序号{seq}, 得分{score}, Aligned SNR{aligned_snr}")
                                                         except (ValueError, IndexError):
                                                             continue
 
-                                            self.logger.info(f"  高分检测数量 (>6.0): {high_score_count}")
+                                            self.logger.info(f"  高分检测数量 (综合得分>6.0 且 Aligned SNR>2): {high_score_count}")
                             else:
                                 self.logger.warning(f"  未找到 analysis.txt 文件")
 
