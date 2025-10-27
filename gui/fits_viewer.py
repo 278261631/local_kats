@@ -250,7 +250,7 @@ class FitsImageViewer:
         sort_by_frame.pack(side=tk.LEFT, padx=(10, 0))
 
         ttk.Label(sort_by_frame, text="排序:").pack(side=tk.LEFT)
-        self.sort_by_var = tk.StringVar(value="quality_score")
+        self.sort_by_var = tk.StringVar(value="aligned_snr")
         sort_by_combo = ttk.Combobox(sort_by_frame, textvariable=self.sort_by_var,
                                      values=["quality_score", "aligned_snr", "snr"],
                                      state="readonly", width=12)

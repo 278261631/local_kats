@@ -1357,7 +1357,7 @@ Diff统计:
             messagebox.showerror("错误", f"打开目录失败: {str(e)}")
 
     def _process_single_diff(self, download_file, template_dir, noise_methods, alignment_method,
-                            remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by='quality_score'):
+                            remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by='aligned_snr'):
         """
         处理单个文件的diff操作（线程安全）
 

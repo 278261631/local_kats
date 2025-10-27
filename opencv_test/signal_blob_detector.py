@@ -590,7 +590,7 @@ class SignalBlobDetector:
 
         print(f"  已计算 {calculated_count}/{len(blobs)} 个 blob 的 Aligned SNR")
 
-    def sort_blobs(self, blobs, image_shape, sort_by='quality_score'):
+    def sort_blobs(self, blobs, image_shape, sort_by='aligned_snr'):
         """
         对斑点进行排序
 
@@ -598,8 +598,8 @@ class SignalBlobDetector:
             blobs: 斑点列表
             image_shape: 图像尺寸
             sort_by: 排序依据
-                - 'quality_score': 综合得分（默认）
-                - 'aligned_snr': Aligned中心7x7 SNR
+                - 'quality_score': 综合得分
+                - 'aligned_snr': Aligned中心7x7 SNR（默认）
                 - 'snr': 差异图像 SNR
         """
         if not blobs:
@@ -1285,7 +1285,7 @@ class SignalBlobDetector:
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.0,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
                          stretch_method='percentile', percentile_low=99.95, fast_mode=False, detection_method='contour',
-                         sort_by='quality_score'):
+                         sort_by='aligned_snr'):
         """
         处理 FITS 文件的完整流程
 
@@ -1443,9 +1443,9 @@ def main():
     parser.add_argument('--detection-method', type=str, default='contour',
                        choices=['contour', 'simple_blob'],
                        help='检测方法: contour=轮廓检测（默认）, simple_blob=SimpleBlobDetector')
-    parser.add_argument('--sort-by', type=str, default='quality_score',
+    parser.add_argument('--sort-by', type=str, default='aligned_snr',
                        choices=['quality_score', 'aligned_snr', 'snr'],
-                       help='排序方式: quality_score=综合得分（默认）, aligned_snr=Aligned中心7x7 SNR, snr=差异图像SNR')
+                       help='排序方式: quality_score=综合得分, aligned_snr=Aligned中心7x7 SNR（默认）, snr=差异图像SNR')
 
     args = parser.parse_args()
 
