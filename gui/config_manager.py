@@ -52,7 +52,9 @@ class ConfigManager:
                 "stretch_method": "percentile",  # 拉伸方法: percentile, minmax, asinh（GUI默认值：percentile）
                 "percentile_low": 99.95,  # 百分位参数（GUI默认值：99.95）
                 "max_jaggedness_ratio": 1.2,  # 最大锯齿比率（GUI默认值：1.2）
-                "detection_method": "contour"  # 检测方法: contour, simple_blob（GUI默认值：contour）
+                "detection_method": "contour",  # 检测方法: contour, simple_blob（GUI默认值：contour）
+                "score_threshold": 3.0,  # 综合得分阈值（GUI默认值：3.0）
+                "aligned_snr_threshold": 2.0  # Aligned SNR阈值（GUI默认值：2.0）
             },
             "dss_flip_settings": {
                 "flip_vertical": True,  # 上下翻转DSS（默认值：True）

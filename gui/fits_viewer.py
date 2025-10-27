@@ -227,6 +227,24 @@ class FitsImageViewer:
                                                variable=self.detection_method_var, value="simple_blob")
         detection_blob_radio.pack(side=tk.LEFT, padx=(2, 0))
 
+        # 综合得分阈值输入框架
+        score_threshold_frame = ttk.Frame(toolbar_frame2)
+        score_threshold_frame.pack(side=tk.LEFT, padx=(10, 0))
+
+        ttk.Label(score_threshold_frame, text="综合得分>").pack(side=tk.LEFT)
+        self.score_threshold_var = tk.StringVar(value="3.0")
+        score_threshold_entry = ttk.Entry(score_threshold_frame, textvariable=self.score_threshold_var, width=6)
+        score_threshold_entry.pack(side=tk.LEFT, padx=(2, 0))
+
+        # Aligned SNR阈值输入框架
+        aligned_snr_frame = ttk.Frame(toolbar_frame2)
+        aligned_snr_frame.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Label(aligned_snr_frame, text="Aligned SNR>").pack(side=tk.LEFT)
+        self.aligned_snr_threshold_var = tk.StringVar(value="2.0")
+        aligned_snr_entry = ttk.Entry(aligned_snr_frame, textvariable=self.aligned_snr_threshold_var, width=6)
+        aligned_snr_entry.pack(side=tk.LEFT, padx=(2, 0))
+
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
@@ -585,7 +603,15 @@ class FitsImageViewer:
             detection_method = batch_settings.get('detection_method', 'contour')
             self.detection_method_var.set(detection_method)
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}")
+            # 综合得分阈值
+            score_threshold = batch_settings.get('score_threshold', 3.0)
+            self.score_threshold_var.set(str(score_threshold))
+
+            # Aligned SNR阈值
+            aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+            self.aligned_snr_threshold_var.set(str(aligned_snr_threshold))
+
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -621,6 +647,12 @@ class FitsImageViewer:
 
             # 绑定检测方法单选框
             self.detection_method_var.trace('w', self._on_batch_settings_change)
+
+            # 绑定综合得分阈值输入框
+            self.score_threshold_var.trace('w', self._on_score_threshold_change)
+
+            # 绑定Aligned SNR阈值输入框
+            self.aligned_snr_threshold_var.trace('w', self._on_aligned_snr_threshold_change)
 
             self.logger.info("批量处理参数控件事件已绑定")
 
@@ -725,6 +757,58 @@ class FitsImageViewer:
             self.logger.warning(f"无效的锯齿比率值: {self.jaggedness_ratio_var.get()}")
         except Exception as e:
             self.logger.error(f"保存锯齿比率参数失败: {str(e)}")
+
+    def _on_score_threshold_change(self, *args):
+        """综合得分阈值参数变化时保存到配置文件（延迟保存）"""
+        if not self.config_manager:
+            return
+
+        # 取消之前的延迟保存任务
+        if hasattr(self, '_score_save_timer'):
+            self.parent_frame.after_cancel(self._score_save_timer)
+
+        # 设置新的延迟保存任务（1秒后保存）
+        self._score_save_timer = self.parent_frame.after(1000, self._save_score_threshold)
+
+    def _save_score_threshold(self):
+        """保存综合得分阈值参数到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            score_threshold = float(self.score_threshold_var.get())
+            self.config_manager.update_batch_process_settings(score_threshold=score_threshold)
+            self.logger.info(f"综合得分阈值参数已保存: {score_threshold}")
+        except ValueError:
+            self.logger.warning(f"无效的综合得分阈值值: {self.score_threshold_var.get()}")
+        except Exception as e:
+            self.logger.error(f"保存综合得分阈值参数失败: {str(e)}")
+
+    def _on_aligned_snr_threshold_change(self, *args):
+        """Aligned SNR阈值参数变化时保存到配置文件（延迟保存）"""
+        if not self.config_manager:
+            return
+
+        # 取消之前的延迟保存任务
+        if hasattr(self, '_aligned_snr_save_timer'):
+            self.parent_frame.after_cancel(self._aligned_snr_save_timer)
+
+        # 设置新的延迟保存任务（1秒后保存）
+        self._aligned_snr_save_timer = self.parent_frame.after(1000, self._save_aligned_snr_threshold)
+
+    def _save_aligned_snr_threshold(self):
+        """保存Aligned SNR阈值参数到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            aligned_snr_threshold = float(self.aligned_snr_threshold_var.get())
+            self.config_manager.update_batch_process_settings(aligned_snr_threshold=aligned_snr_threshold)
+            self.logger.info(f"Aligned SNR阈值参数已保存: {aligned_snr_threshold}")
+        except ValueError:
+            self.logger.warning(f"无效的Aligned SNR阈值值: {self.aligned_snr_threshold_var.get()}")
+        except Exception as e:
+            self.logger.error(f"保存Aligned SNR阈值参数失败: {str(e)}")
 
     def _load_dss_flip_settings(self):
         """从配置文件加载DSS翻转设置"""
@@ -1241,8 +1325,19 @@ class FitsImageViewer:
                                                     except ValueError:
                                                         aligned_snr = None
 
-                                                # 判断条件：综合得分 > 6.0 且 Aligned中心7x7SNR > 2
-                                                if score > 6.0 and aligned_snr is not None and aligned_snr > 2.0:
+                                                # 获取配置的阈值
+                                                score_threshold = 3.0  # 默认综合得分阈值
+                                                aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
+                                                if self.config_manager:
+                                                    try:
+                                                        batch_settings = self.config_manager.get_batch_process_settings()
+                                                        score_threshold = batch_settings.get('score_threshold', 3.0)
+                                                        aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+                                                    except Exception:
+                                                        pass
+
+                                                # 判断条件：综合得分 > score_threshold 且 Aligned SNR > aligned_snr_threshold
+                                                if score > score_threshold and aligned_snr is not None and aligned_snr > aligned_snr_threshold:
                                                     high_score_count += 1
                                             except (ValueError, IndexError):
                                                 continue
@@ -1728,14 +1823,35 @@ class FitsImageViewer:
                                                                 except ValueError:
                                                                     aligned_snr = None
 
-                                                            # 判断条件：综合得分 > 6.0 且 Aligned中心7x7SNR > 2
-                                                            if score > 6.0 and aligned_snr is not None and aligned_snr > 2.0:
+                                                            # 获取配置的阈值
+                                                            score_threshold = 3.0  # 默认综合得分阈值
+                                                            aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
+                                                            if self.config_manager:
+                                                                try:
+                                                                    batch_settings = self.config_manager.get_batch_process_settings()
+                                                                    score_threshold = batch_settings.get('score_threshold', 3.0)
+                                                                    aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+                                                                except Exception:
+                                                                    pass
+
+                                                            # 判断条件：综合得分 > score_threshold 且 Aligned SNR > aligned_snr_threshold
+                                                            if score > score_threshold and aligned_snr is not None and aligned_snr > aligned_snr_threshold:
                                                                 high_score_count += 1
                                                                 self.logger.debug(f"    找到高分: 序号{seq}, 得分{score}, Aligned SNR{aligned_snr}")
                                                         except (ValueError, IndexError):
                                                             continue
 
-                                            self.logger.info(f"  高分检测数量 (综合得分>6.0 且 Aligned SNR>2): {high_score_count}")
+                                            # 获取配置的阈值用于日志显示
+                                            score_threshold_for_log = 3.0
+                                            aligned_snr_threshold_for_log = 2.0
+                                            if self.config_manager:
+                                                try:
+                                                    batch_settings = self.config_manager.get_batch_process_settings()
+                                                    score_threshold_for_log = batch_settings.get('score_threshold', 3.0)
+                                                    aligned_snr_threshold_for_log = batch_settings.get('aligned_snr_threshold', 2.0)
+                                                except Exception:
+                                                    pass
+                                            self.logger.info(f"  高分检测数量 (综合得分>{score_threshold_for_log} 且 Aligned SNR>{aligned_snr_threshold_for_log}): {high_score_count}")
                             else:
                                 self.logger.warning(f"  未找到 analysis.txt 文件")
 
