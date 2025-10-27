@@ -1356,6 +1356,89 @@ Diff统计:
             self._log(f"打开批量输出目录失败: {str(e)}")
             messagebox.showerror("错误", f"打开目录失败: {str(e)}")
 
+    def _get_thread_safe_diff_output_directory(self, file_path: str) -> str:
+        """
+        线程安全地获取diff操作的输出目录
+
+        Args:
+            file_path: FITS文件路径
+
+        Returns:
+            str: 输出目录路径
+        """
+        from datetime import datetime
+        import re
+
+        # 获取配置的根目录
+        base_output_dir = ""
+        if self.fits_viewer.get_diff_output_dir_callback:
+            base_output_dir = self.fits_viewer.get_diff_output_dir_callback()
+
+        # 如果没有配置，使用下载文件所在目录
+        if not base_output_dir or not os.path.exists(base_output_dir):
+            base_output_dir = os.path.dirname(file_path)
+
+        # 尝试从文件名、文件路径解析系统名、日期、天区信息
+        system_name = "Unknown"
+        date_str = datetime.now().strftime("%Y%m%d")
+        sky_region = "Unknown"
+
+        # 从文件名解析
+        try:
+            filename = os.path.basename(file_path)
+            # 文件名格式: GY3_K073-2_No Filter_60S_Bin2_UTC20250719_171814_-12.8C_.fit
+            # 提取系统名 (GY开头+数字)
+            system_match = re.search(r'(GY\d+)', filename, re.IGNORECASE)
+            if system_match:
+                system_name = system_match.group(1).upper()
+
+            # 提取天区 (K开头+数字)
+            sky_match = re.search(r'(K\d{3})', filename, re.IGNORECASE)
+            if sky_match:
+                sky_region = sky_match.group(1).upper()
+
+            # 提取日期 (UTC后面的日期)
+            date_match = re.search(r'UTC(\d{8})', filename)
+            if date_match:
+                date_str = date_match.group(1)
+        except Exception as e:
+            self._log(f"从文件名解析信息失败: {e}")
+
+        # 从文件路径解析（如果文件名未获取完整信息）
+        if system_name == "Unknown" or sky_region == "Unknown":
+            try:
+                # 文件路径格式: .../系统名/日期/天区/文件名
+                path_parts = file_path.replace('\\', '/').split('/')
+
+                # 从路径中查找符合模式的部分
+                for i, part in enumerate(path_parts):
+                    # 查找日期格式 (YYYYMMDD)
+                    if re.match(r'^\d{8}$', part) and i > 0:
+                        if system_name == "Unknown":
+                            system_name = path_parts[i-1]  # 日期前一级是系统名
+                        date_str = part
+                        if i + 1 < len(path_parts):
+                            # 查找天区格式 (K开头+数字)
+                            next_part = path_parts[i+1]
+                            if re.match(r'^K\d{3}', next_part):
+                                sky_region = next_part
+                        break
+            except Exception as e:
+                self._log(f"从文件路径解析信息失败: {e}")
+
+        # 从选中文件名生成子目录名（不带时间戳，避免重复执行）
+        filename = os.path.basename(file_path)
+        name_without_ext = os.path.splitext(filename)[0]
+        subdir_name = name_without_ext
+
+        # 构建完整输出目录：根目录/系统名/日期/天区/文件名/
+        output_dir = os.path.join(base_output_dir, system_name, date_str, sky_region, subdir_name)
+
+        # 创建目录
+        os.makedirs(output_dir, exist_ok=True)
+
+        return output_dir
+
     def _process_single_diff(self, download_file, template_dir, noise_methods, alignment_method,
                             remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by='aligned_snr'):
         """
@@ -1380,11 +1463,8 @@ Diff统计:
                 result_dict['message'] = "未找到模板"
                 return result_dict
 
-            # 设置当前处理的文件（让输出目录名称包含文件名）
-            self.fits_viewer.selected_file_path = download_file
-
-            # 获取输出目录
-            output_dir = self.fits_viewer._get_diff_output_directory()
+            # 线程安全：直接生成输出目录，不依赖共享的selected_file_path
+            output_dir = self._get_thread_safe_diff_output_directory(download_file)
 
             # 检查是否已存在结果
             if os.path.exists(output_dir):
