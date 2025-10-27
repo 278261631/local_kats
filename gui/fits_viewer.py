@@ -1313,7 +1313,20 @@ class FitsImageViewer:
                             if detection_count == 0:
                                 is_empty_detection = True
                             else:
-                                # 解析每一行检测结果，计算综合评分 > 6.0 的数量
+                                # 获取配置的阈值和排序方式
+                                score_threshold = 3.0  # 默认综合得分阈值
+                                aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
+                                sort_by = 'aligned_snr'  # 默认排序方式
+                                if self.config_manager:
+                                    try:
+                                        batch_settings = self.config_manager.get_batch_process_settings()
+                                        score_threshold = batch_settings.get('score_threshold', 3.0)
+                                        aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+                                        sort_by = batch_settings.get('sort_by', 'aligned_snr')
+                                    except Exception:
+                                        pass
+
+                                # 解析每一行检测结果
                                 lines = content.split('\n')
                                 in_data_section = False
                                 for line in lines:
@@ -1347,19 +1360,18 @@ class FitsImageViewer:
                                                     except ValueError:
                                                         aligned_snr = None
 
-                                                # 获取配置的阈值
-                                                score_threshold = 3.0  # 默认综合得分阈值
-                                                aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
-                                                if self.config_manager:
-                                                    try:
-                                                        batch_settings = self.config_manager.get_batch_process_settings()
-                                                        score_threshold = batch_settings.get('score_threshold', 3.0)
-                                                        aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
-                                                    except Exception:
-                                                        pass
+                                                # 根据排序方式决定判断条件
+                                                is_high_score = False
+                                                if sort_by == 'aligned_snr':
+                                                    # 使用 aligned_snr 排序时，只判断 aligned_snr > 阈值
+                                                    if aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                                        is_high_score = True
+                                                else:
+                                                    # 使用其他排序方式时，判断综合得分 > score_threshold 且 Aligned SNR > aligned_snr_threshold
+                                                    if score > score_threshold and aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                                        is_high_score = True
 
-                                                # 判断条件：综合得分 > score_threshold 且 Aligned SNR > aligned_snr_threshold
-                                                if score > score_threshold and aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                                if is_high_score:
                                                     high_score_count += 1
                                             except (ValueError, IndexError):
                                                 continue
@@ -1810,7 +1822,20 @@ class FitsImageViewer:
                                         if detection_count == 0:
                                             is_empty_detection = True
                                         else:
-                                            # 解析每一行检测结果，计算综合评分 > 6.0 且 Aligned中心7x7SNR > 2 的数量
+                                            # 获取配置的阈值和排序方式
+                                            score_threshold = 3.0  # 默认综合得分阈值
+                                            aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
+                                            sort_by = 'aligned_snr'  # 默认排序方式
+                                            if self.config_manager:
+                                                try:
+                                                    batch_settings = self.config_manager.get_batch_process_settings()
+                                                    score_threshold = batch_settings.get('score_threshold', 3.0)
+                                                    aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+                                                    sort_by = batch_settings.get('sort_by', 'aligned_snr')
+                                                except Exception:
+                                                    pass
+
+                                            # 解析每一行检测结果
                                             # 格式: 序号 综合得分 面积 圆度 ... Aligned中心7x7SNR
                                             lines = content.split('\n')
                                             in_data_section = False
@@ -1845,35 +1870,41 @@ class FitsImageViewer:
                                                                 except ValueError:
                                                                     aligned_snr = None
 
-                                                            # 获取配置的阈值
-                                                            score_threshold = 3.0  # 默认综合得分阈值
-                                                            aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
-                                                            if self.config_manager:
-                                                                try:
-                                                                    batch_settings = self.config_manager.get_batch_process_settings()
-                                                                    score_threshold = batch_settings.get('score_threshold', 3.0)
-                                                                    aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
-                                                                except Exception:
-                                                                    pass
+                                                            # 根据排序方式决定判断条件
+                                                            is_high_score = False
+                                                            if sort_by == 'aligned_snr':
+                                                                # 使用 aligned_snr 排序时，只判断 aligned_snr > 阈值
+                                                                if aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                                                    is_high_score = True
+                                                            else:
+                                                                # 使用其他排序方式时，判断综合得分 > score_threshold 且 Aligned SNR > aligned_snr_threshold
+                                                                if score > score_threshold and aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                                                    is_high_score = True
 
-                                                            # 判断条件：综合得分 > score_threshold 且 Aligned SNR > aligned_snr_threshold
-                                                            if score > score_threshold and aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                                            if is_high_score:
                                                                 high_score_count += 1
                                                                 self.logger.debug(f"    找到高分: 序号{seq}, 得分{score}, Aligned SNR{aligned_snr}")
                                                         except (ValueError, IndexError):
                                                             continue
 
-                                            # 获取配置的阈值用于日志显示
+                                            # 获取配置的阈值和排序方式用于日志显示
                                             score_threshold_for_log = 3.0
                                             aligned_snr_threshold_for_log = 2.0
+                                            sort_by_for_log = 'aligned_snr'
                                             if self.config_manager:
                                                 try:
                                                     batch_settings = self.config_manager.get_batch_process_settings()
                                                     score_threshold_for_log = batch_settings.get('score_threshold', 3.0)
                                                     aligned_snr_threshold_for_log = batch_settings.get('aligned_snr_threshold', 2.0)
+                                                    sort_by_for_log = batch_settings.get('sort_by', 'aligned_snr')
                                                 except Exception:
                                                     pass
-                                            self.logger.info(f"  高分检测数量 (综合得分>{score_threshold_for_log} 且 Aligned SNR>{aligned_snr_threshold_for_log}): {high_score_count}")
+
+                                            # 根据排序方式显示不同的日志信息
+                                            if sort_by_for_log == 'aligned_snr':
+                                                self.logger.info(f"  高分检测数量 (Aligned SNR>{aligned_snr_threshold_for_log}): {high_score_count}")
+                                            else:
+                                                self.logger.info(f"  高分检测数量 (综合得分>{score_threshold_for_log} 且 Aligned SNR>{aligned_snr_threshold_for_log}): {high_score_count}")
                             else:
                                 self.logger.warning(f"  未找到 analysis.txt 文件")
 
