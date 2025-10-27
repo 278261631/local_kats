@@ -69,7 +69,7 @@ class ConfigManager:
                 "mpc_code": "N87"  # MPC观测站代码（默认值：N87）
             },
             "query_settings": {
-                "search_radius": 0.02  # 搜索半径（度）（默认值：0.02）
+                "search_radius": 0.01  # 搜索半径（度）（默认值：0.01）
             },
             "display_settings": {
                 "default_display_mode": "linear",

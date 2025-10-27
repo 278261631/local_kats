@@ -420,7 +420,7 @@ class FitsImageViewer:
 
         # 搜索半径设置
         ttk.Label(toolbar_frame6, text="搜索半径(°):").pack(side=tk.LEFT, padx=(5, 2))
-        self.search_radius_var = tk.StringVar(value="0.02")
+        self.search_radius_var = tk.StringVar(value="0.01")
         self.search_radius_entry = ttk.Entry(toolbar_frame6, textvariable=self.search_radius_var, width=6)
         self.search_radius_entry.pack(side=tk.LEFT, padx=(0, 5))
 
@@ -1065,8 +1065,8 @@ class FitsImageViewer:
         try:
             query_settings = self.config_manager.get_query_settings()
 
-            # 加载搜索半径，默认值：0.02度
-            search_radius = query_settings.get('search_radius', 0.02)
+            # 加载搜索半径，默认值：0.01度
+            search_radius = query_settings.get('search_radius', 0.01)
 
             self.search_radius_var.set(str(search_radius))
 
@@ -1075,7 +1075,7 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"加载查询设置失败: {str(e)}")
             # 使用默认值
-            self.search_radius_var.set("0.02")
+            self.search_radius_var.set("0.01")
 
     def _save_query_settings(self):
         """保存查询设置到配置文件"""
@@ -4026,8 +4026,8 @@ class FitsImageViewer:
             try:
                 search_radius = float(self.search_radius_var.get())
             except ValueError:
-                self.logger.warning(f"无效的搜索半径: {self.search_radius_var.get()}，使用默认值0.02")
-                search_radius = 0.02
+                self.logger.warning(f"无效的搜索半径: {self.search_radius_var.get()}，使用默认值0.01")
+                search_radius = 0.01
 
             query_info = f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, MPC={mpc_code}, GPS=({latitude}°N, {longitude}°E), 半径={search_radius}°"
             self.logger.info(query_info)
@@ -4152,7 +4152,7 @@ class FitsImageViewer:
                 self.log_callback(exception_msg, "ERROR")
             self.skybot_result_label.config(text="查询出错", foreground="red")
 
-    def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.02):
+    def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.01):
         """
         执行Skybot查询
 
@@ -4163,7 +4163,7 @@ class FitsImageViewer:
             mpc_code: MPC观测站代码
             latitude: 纬度（度，仅用于日志）
             longitude: 经度（度，仅用于日志）
-            search_radius: 搜索半径（度，默认0.02）
+            search_radius: 搜索半径（度，默认0.01）
 
         Returns:
             查询结果表，如果失败返回None
@@ -4289,8 +4289,8 @@ class FitsImageViewer:
             try:
                 search_radius = float(self.search_radius_var.get())
             except ValueError:
-                self.logger.warning(f"无效的搜索半径: {self.search_radius_var.get()}，使用默认值0.02")
-                search_radius = 0.02
+                self.logger.warning(f"无效的搜索半径: {self.search_radius_var.get()}，使用默认值0.01")
+                search_radius = 0.01
 
             query_info = f"准备查询VSX: RA={ra}°, Dec={dec}°, 星等限制≤{mag_limit}, 半径={search_radius}°"
             self.logger.info(query_info)
@@ -4410,7 +4410,7 @@ class FitsImageViewer:
                 self.log_callback(exception_msg, "ERROR")
             self.vsx_result_label.config(text="查询出错", foreground="red")
 
-    def _perform_vsx_query(self, ra, dec, mag_limit=16.0, search_radius=0.02):
+    def _perform_vsx_query(self, ra, dec, mag_limit=16.0, search_radius=0.01):
         """
         执行VSX变星查询
 
@@ -4418,7 +4418,7 @@ class FitsImageViewer:
             ra: 赤经（度）
             dec: 赤纬（度）
             mag_limit: 星等限制（只返回最大星等≤此值的变星）
-            search_radius: 搜索半径（度，默认0.02）
+            search_radius: 搜索半径（度，默认0.01）
 
         Returns:
             查询结果表，如果失败返回None
