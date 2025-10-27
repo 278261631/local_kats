@@ -425,6 +425,12 @@ class FitsImageViewer:
         self.skybot_result_label = ttk.Label(toolbar_frame6, text="未查询", foreground="gray")
         self.skybot_result_label.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 变星星等限制
+        ttk.Label(toolbar_frame6, text="变星星等≤:").pack(side=tk.LEFT, padx=(10, 2))
+        self.vsx_mag_limit_var = tk.StringVar(value="16.0")
+        self.vsx_mag_limit_entry = ttk.Entry(toolbar_frame6, textvariable=self.vsx_mag_limit_var, width=6)
+        self.vsx_mag_limit_entry.pack(side=tk.LEFT, padx=(0, 5))
+
         # 变星查询按钮
         self.vsx_button = ttk.Button(toolbar_frame6, text="查询变星(VSX)",
                                      command=self._query_vsx, state="disabled")
@@ -4208,7 +4214,14 @@ class FitsImageViewer:
             ra = float(file_info['ra'])
             dec = float(file_info['dec'])
 
-            query_info = f"准备查询VSX: RA={ra}°, Dec={dec}°"
+            # 获取星等限制
+            try:
+                mag_limit = float(self.vsx_mag_limit_var.get())
+            except ValueError:
+                self.logger.warning(f"无效的星等限制: {self.vsx_mag_limit_var.get()}，使用默认值16.0")
+                mag_limit = 16.0
+
+            query_info = f"准备查询VSX: RA={ra}°, Dec={dec}°, 星等限制≤{mag_limit}"
             self.logger.info(query_info)
             # 输出到日志标签页
             if self.log_callback:
@@ -4217,7 +4230,7 @@ class FitsImageViewer:
             self.vsx_result_label.config(text="查询中...", foreground="orange")
 
             # 执行VSX查询
-            results = self._perform_vsx_query(ra, dec)
+            results = self._perform_vsx_query(ra, dec, mag_limit)
 
             if results is not None:
                 count = len(results)
@@ -4326,13 +4339,14 @@ class FitsImageViewer:
                 self.log_callback(exception_msg, "ERROR")
             self.vsx_result_label.config(text="查询出错", foreground="red")
 
-    def _perform_vsx_query(self, ra, dec):
+    def _perform_vsx_query(self, ra, dec, mag_limit=16.0):
         """
         执行VSX变星查询
 
         Args:
             ra: 赤经（度）
             dec: 赤纬（度）
+            mag_limit: 星等限制（只返回最大星等≤此值的变星）
 
         Returns:
             查询结果表，如果失败返回None
@@ -4341,6 +4355,7 @@ class FitsImageViewer:
             from astroquery.vizier import Vizier
             from astropy.coordinates import SkyCoord
             import astropy.units as u
+            import numpy as np
 
             # 创建坐标对象
             coord = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
@@ -4351,14 +4366,17 @@ class FitsImageViewer:
             param_header = f"VSX查询参数:"
             param_coord = f"  坐标: RA={ra}°, Dec={dec}°"
             param_radius = f"  搜索半径: {search_radius}"
+            param_mag = f"  星等限制: ≤{mag_limit}"
 
             self.logger.info(param_header)
             self.logger.info(param_coord)
             self.logger.info(param_radius)
+            self.logger.info(param_mag)
             if self.log_callback:
                 self.log_callback(param_header, "INFO")
                 self.log_callback(param_coord, "INFO")
                 self.log_callback(param_radius, "INFO")
+                self.log_callback(param_mag, "INFO")
 
             # 执行查询，使用VizieR查询VSX目录
             # VSX目录在VizieR中的标识是 "B/vsx/vsx"
@@ -4368,7 +4386,42 @@ class FitsImageViewer:
 
                 if results and len(results) > 0:
                     # VizieR返回的是TableList，取第一个表
-                    return results[0]
+                    table = results[0]
+
+                    # 应用星等过滤
+                    # VSX中的星等列名可能是 'max' (最大星等，即最亮时)
+                    if 'max' in table.colnames and len(table) > 0:
+                        # 过滤掉最大星等(最亮时)大于限制的变星
+                        # 注意：需要处理masked值和无效值
+                        try:
+                            # 创建有效的掩码
+                            valid_mask = np.ones(len(table), dtype=bool)
+
+                            for i, mag_val in enumerate(table['max']):
+                                try:
+                                    # 尝试转换为浮点数
+                                    if hasattr(mag_val, 'mask') and mag_val.mask:
+                                        # 如果是masked值，保留该行（不过滤）
+                                        continue
+                                    mag_float = float(mag_val)
+                                    if mag_float > mag_limit:
+                                        valid_mask[i] = False
+                                except (ValueError, TypeError):
+                                    # 如果无法转换，保留该行（不过滤）
+                                    continue
+
+                            table = table[valid_mask]
+                            filter_msg = f"星等过滤后剩余 {len(table)} 个变星"
+                            self.logger.info(filter_msg)
+                            if self.log_callback:
+                                self.log_callback(filter_msg, "INFO")
+                        except Exception as e:
+                            filter_error = f"星等过滤失败: {str(e)}，返回未过滤结果"
+                            self.logger.warning(filter_error)
+                            if self.log_callback:
+                                self.log_callback(filter_error, "WARNING")
+
+                    return table
                 else:
                     # 返回空表而不是None，表示查询成功但无结果
                     from astropy.table import Table
