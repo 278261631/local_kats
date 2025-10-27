@@ -1357,7 +1357,7 @@ Diff统计:
             messagebox.showerror("错误", f"打开目录失败: {str(e)}")
 
     def _process_single_diff(self, download_file, template_dir, noise_methods, alignment_method,
-                            remove_bright_lines, stretch_method, percentile_low, fast_mode):
+                            remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by='quality_score'):
         """
         处理单个文件的diff操作（线程安全）
 
@@ -1406,7 +1406,8 @@ Diff统计:
                 remove_bright_lines=remove_bright_lines,
                 stretch_method=stretch_method,
                 percentile_low=percentile_low,
-                fast_mode=fast_mode
+                fast_mode=fast_mode,
+                sort_by=sort_by
             )
 
             if diff_result and diff_result.get('success'):
@@ -1785,7 +1786,10 @@ Diff统计:
                 except:
                     percentile_low = 99.95
 
-            self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}")
+            # 获取排序方式参数
+            sort_by = self.fits_viewer.sort_by_var.get()
+
+            self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}, 排序方式={sort_by}")
             self._log(f"使用 {thread_count} 个线程并行处理")
 
             # 使用线程池并行处理
@@ -1809,7 +1813,7 @@ Diff统计:
                     future = executor.submit(
                         self._process_single_diff,
                         download_file, template_dir, noise_methods, alignment_method,
-                        remove_bright_lines, stretch_method, percentile_low, fast_mode
+                        remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by
                     )
                     future_to_file[future] = download_file
 
@@ -2372,7 +2376,10 @@ Diff统计:
             except:
                 percentile_low = 99.95
 
-        self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}")
+        # 获取排序方式参数
+        sort_by = self.fits_viewer.sort_by_var.get()
+
+        self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}, 排序方式={sort_by}")
         self._log(f"使用 {thread_count} 个线程并行处理")
 
         # 使用线程池并行处理
@@ -2396,7 +2403,7 @@ Diff统计:
                 future = executor.submit(
                     self._process_single_diff,
                     download_file, template_dir, noise_methods, alignment_method,
-                    remove_bright_lines, stretch_method, percentile_low, fast_mode
+                    remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by
                 )
                 future_to_file[future] = download_file
 
