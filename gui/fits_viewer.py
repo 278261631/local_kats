@@ -425,6 +425,16 @@ class FitsImageViewer:
         self.skybot_result_label = ttk.Label(toolbar_frame6, text="未查询", foreground="gray")
         self.skybot_result_label.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 变星查询按钮
+        self.vsx_button = ttk.Button(toolbar_frame6, text="查询变星(VSX)",
+                                     command=self._query_vsx, state="disabled")
+        self.vsx_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        # 变星查询结果显示
+        ttk.Label(toolbar_frame6, text="变星:").pack(side=tk.LEFT, padx=(5, 2))
+        self.vsx_result_label = ttk.Label(toolbar_frame6, text="未查询", foreground="gray")
+        self.vsx_result_label.pack(side=tk.LEFT, padx=(0, 5))
+
         # 保存检测结果按钮
         self.save_detection_button = ttk.Button(toolbar_frame6, text="保存检测结果",
                                                command=self._save_detection_result, state="disabled")
@@ -2513,6 +2523,9 @@ class FitsImageViewer:
         if hasattr(self, 'skybot_button'):
             self.skybot_button.config(state="disabled")
             self.skybot_result_label.config(text="未查询", foreground="gray")
+        if hasattr(self, 'vsx_button'):
+            self.vsx_button.config(state="disabled")
+            self.vsx_result_label.config(text="未查询", foreground="gray")
         if hasattr(self, 'save_detection_button'):
             self.save_detection_button.config(state="disabled")
 
@@ -2794,6 +2807,10 @@ class FitsImageViewer:
         # 启用Skybot查询按钮（只要有cutout就可以启用）
         if hasattr(self, 'skybot_button'):
             self.skybot_button.config(state="normal")
+
+        # 启用变星查询按钮（只要有cutout就可以启用）
+        if hasattr(self, 'vsx_button'):
+            self.vsx_button.config(state="normal")
 
         # 启用保存检测结果按钮（只要有cutout就可以启用）
         if hasattr(self, 'save_detection_button'):
@@ -4157,6 +4174,229 @@ class FitsImageViewer:
                 self.log_callback(exec_error_msg, "ERROR")
             return None
 
+    def _query_vsx(self):
+        """使用VSX查询变星数据"""
+        try:
+            # 检查是否有当前显示的cutout
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.warning("请先执行差分检测并显示检测结果")
+                return
+
+            if not hasattr(self, '_current_cutout_index'):
+                self.logger.warning("没有当前显示的检测结果")
+                return
+
+            # 获取当前cutout的信息
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            reference_img = current_cutout['reference']
+            aligned_img = current_cutout['aligned']
+            detection_img = current_cutout['detection']
+
+            # 提取文件信息（包含RA/DEC）
+            selected_filename = ""
+            if self.selected_file_path:
+                selected_filename = os.path.basename(self.selected_file_path)
+
+            file_info = self._extract_file_info(reference_img, aligned_img, detection_img, selected_filename)
+
+            # 检查是否有RA/DEC信息
+            if not file_info.get('ra') or not file_info.get('dec'):
+                self.logger.error("无法获取目标的RA/DEC坐标信息")
+                self.vsx_result_label.config(text="坐标缺失", foreground="red")
+                return
+
+            ra = float(file_info['ra'])
+            dec = float(file_info['dec'])
+
+            query_info = f"准备查询VSX: RA={ra}°, Dec={dec}°"
+            self.logger.info(query_info)
+            # 输出到日志标签页
+            if self.log_callback:
+                self.log_callback(query_info, "INFO")
+
+            self.vsx_result_label.config(text="查询中...", foreground="orange")
+
+            # 执行VSX查询
+            results = self._perform_vsx_query(ra, dec)
+
+            if results is not None:
+                count = len(results)
+                if count > 0:
+                    self.vsx_result_label.config(text=f"找到 {count} 个", foreground="green")
+                    success_msg = f"VSX查询成功，找到 {count} 个变星"
+                    self.logger.info(success_msg)
+                    if self.log_callback:
+                        self.log_callback(success_msg, "INFO")
+
+                    # 输出详细结果到日志
+                    separator = "=" * 80
+                    header = "VSX查询结果详情:"
+                    self.logger.info(separator)
+                    self.logger.info(header)
+                    self.logger.info(separator)
+                    if self.log_callback:
+                        self.log_callback(separator, "INFO")
+                        self.log_callback(header, "INFO")
+                        self.log_callback(separator, "INFO")
+
+                    # 获取列名
+                    colnames = results.colnames
+                    colnames_msg = f"可用列: {', '.join(colnames)}"
+                    self.logger.info(colnames_msg)
+                    if self.log_callback:
+                        self.log_callback(colnames_msg, "INFO")
+
+                    for i, row in enumerate(results, 1):
+                        vstar_header = f"\n第 {i} 个变星:"
+                        self.logger.info(vstar_header)
+                        if self.log_callback:
+                            self.log_callback(vstar_header, "INFO")
+
+                        # 使用字典访问方式，并处理可能不存在的列
+                        try:
+                            # 常见的列名
+                            if 'Name' in colnames:
+                                msg = f"  名称: {row['Name']}"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
+                            if 'Type' in colnames:
+                                msg = f"  类型: {row['Type']}"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
+                            if 'RAJ2000' in colnames:
+                                msg = f"  RA: {row['RAJ2000']}°"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
+                            if 'DEJ2000' in colnames:
+                                msg = f"  DEC: {row['DEJ2000']}°"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
+                            if 'max' in colnames:
+                                msg = f"  最大星等: {row['max']}"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
+                            if 'min' in colnames:
+                                msg = f"  最小星等: {row['min']}"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
+                            if 'Period' in colnames:
+                                msg = f"  周期: {row['Period']} 天"
+                                self.logger.info(msg)
+                                if self.log_callback:
+                                    self.log_callback(msg, "INFO")
+
+                            # 输出所有列（用于调试）
+                            full_data_msg = f"  完整数据: {dict(zip(colnames, row))}"
+                            self.logger.info(full_data_msg)
+                            if self.log_callback:
+                                self.log_callback(full_data_msg, "INFO")
+
+                        except Exception as e:
+                            error_msg = f"  解析第 {i} 个变星数据失败: {e}"
+                            self.logger.error(error_msg)
+                            if self.log_callback:
+                                self.log_callback(error_msg, "ERROR")
+
+                    self.logger.info(separator)
+                    if self.log_callback:
+                        self.log_callback(separator, "INFO")
+                else:
+                    self.vsx_result_label.config(text="未找到", foreground="blue")
+                    not_found_msg = "VSX查询完成，未找到变星"
+                    self.logger.info(not_found_msg)
+                    if self.log_callback:
+                        self.log_callback(not_found_msg, "INFO")
+            else:
+                self.vsx_result_label.config(text="查询失败", foreground="red")
+                error_msg = "VSX查询失败"
+                self.logger.error(error_msg)
+                if self.log_callback:
+                    self.log_callback(error_msg, "ERROR")
+
+        except Exception as e:
+            exception_msg = f"VSX查询失败: {str(e)}"
+            self.logger.error(exception_msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(exception_msg, "ERROR")
+            self.vsx_result_label.config(text="查询出错", foreground="red")
+
+    def _perform_vsx_query(self, ra, dec):
+        """
+        执行VSX变星查询
+
+        Args:
+            ra: 赤经（度）
+            dec: 赤纬（度）
+
+        Returns:
+            查询结果表，如果失败返回None
+        """
+        try:
+            from astroquery.vizier import Vizier
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+
+            # 创建坐标对象
+            coord = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
+
+            # 设置搜索半径（默认0.1度，与Skybot查询保持一致）
+            search_radius = 0.1 * u.degree
+
+            param_header = f"VSX查询参数:"
+            param_coord = f"  坐标: RA={ra}°, Dec={dec}°"
+            param_radius = f"  搜索半径: {search_radius}"
+
+            self.logger.info(param_header)
+            self.logger.info(param_coord)
+            self.logger.info(param_radius)
+            if self.log_callback:
+                self.log_callback(param_header, "INFO")
+                self.log_callback(param_coord, "INFO")
+                self.log_callback(param_radius, "INFO")
+
+            # 执行查询，使用VizieR查询VSX目录
+            # VSX目录在VizieR中的标识是 "B/vsx/vsx"
+            v = Vizier(columns=['**'], row_limit=-1)  # 获取所有列，不限制行数
+            try:
+                results = v.query_region(coord, radius=search_radius, catalog="B/vsx/vsx")
+
+                if results and len(results) > 0:
+                    # VizieR返回的是TableList，取第一个表
+                    return results[0]
+                else:
+                    # 返回空表而不是None，表示查询成功但无结果
+                    from astropy.table import Table
+                    return Table()
+
+            except Exception as e:
+                error_msg = f"VSX查询失败: {str(e)}"
+                self.logger.error(error_msg)
+                if self.log_callback:
+                    self.log_callback(error_msg, "ERROR")
+                return None
+
+        except ImportError as e:
+            import_error_msg = "astroquery未安装或导入失败，请安装: pip install astroquery"
+            detail_error_msg = f"详细错误: {e}"
+            self.logger.error(import_error_msg)
+            self.logger.error(detail_error_msg)
+            if self.log_callback:
+                self.log_callback(import_error_msg, "ERROR")
+                self.log_callback(detail_error_msg, "ERROR")
+            return None
+        except Exception as e:
+            exec_error_msg = f"VSX查询执行失败: {str(e)}"
+            self.logger.error(exec_error_msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(exec_error_msg, "ERROR")
+            return None
+
     def _get_fits_rotation_angle(self, fits_path):
         """
         从FITS文件的WCS信息中提取旋转角度
@@ -4516,7 +4756,11 @@ class FitsImageViewer:
 
                 # Skybot查询结果
                 skybot_result = self.skybot_result_label.cget("text")
-                f.write(f"Skybot查询结果: {skybot_result}\n\n")
+                f.write(f"Skybot查询结果: {skybot_result}\n")
+
+                # VSX查询结果
+                vsx_result = self.vsx_result_label.cget("text")
+                f.write(f"VSX查询结果: {vsx_result}\n\n")
 
                 f.write("=" * 60 + "\n")
                 f.write("参数文件结束\n")
