@@ -45,7 +45,8 @@
     "max_jaggedness_ratio": 1.2,
     "detection_method": "contour",
     "score_threshold": 3.0,
-    "aligned_snr_threshold": 2.0
+    "aligned_snr_threshold": 2.0,
+    "sort_by": "quality_score"
   },
   "display_settings": {
     "default_display_mode": "linear",
@@ -54,5 +55,5 @@
   },
   "url_template_type": "standard",
   "_note": "URL模板现在从独立的config/url_config.json文件中读取，请修改该文件来配置URL",
-  "_batch_process_note": "batch_process_settings包含批量处理的配置: thread_count(线程数,默认4), noise_method(降噪方式,median/gaussian/none,默认median), alignment_method(对齐方式,orb/ecc,默认ecc), remove_bright_lines(去除亮线,默认true), fast_mode(快速模式,默认true), stretch_method(拉伸方法,percentile/minmax,默认percentile), percentile_low(百分位参数,默认99.95), max_jaggedness_ratio(最大锯齿比率,默认1.2), detection_method(检测方法,contour/simple_blob,默认contour), score_threshold(综合得分阈值,默认3.0), aligned_snr_threshold(Aligned SNR阈值,默认2.0)"
+  "_batch_process_note": "batch_process_settings包含批量处理的配置: thread_count(线程数,默认4), noise_method(降噪方式,median/gaussian/none,默认median), alignment_method(对齐方式,orb/ecc,默认ecc), remove_bright_lines(去除亮线,默认true), fast_mode(快速模式,默认true), stretch_method(拉伸方法,percentile/minmax,默认percentile), percentile_low(百分位参数,默认99.95), max_jaggedness_ratio(最大锯齿比率,默认1.2), detection_method(检测方法,contour/simple_blob,默认contour), score_threshold(综合得分阈值,默认3.0), aligned_snr_threshold(Aligned SNR阈值,默认2.0), sort_by(排序方式,quality_score/aligned_snr/snr,默认quality_score)"
 }

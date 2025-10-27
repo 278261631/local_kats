@@ -520,45 +520,140 @@ class SignalBlobDetector:
 
         return blobs
     
-    def sort_blobs(self, blobs, image_shape):
+    def calculate_aligned_snr(self, blobs, aligned_data, cutout_size=100):
+        """
+        在排序前计算所有 blob 的 aligned_center_7x7_snr
+
+        Args:
+            blobs: 检测到的斑点列表
+            aligned_data: 对齐图像数据（完整图像）
+            cutout_size: 截图大小（默认100x100）
+        """
+        if not blobs or aligned_data is None:
+            return
+
+        print(f"\n计算 Aligned 中心 7x7 SNR（用于排序）...")
+
+        # 计算整体背景噪声
+        aligned_background_median = np.median(aligned_data)
+        aligned_mad = np.median(np.abs(aligned_data - aligned_background_median))
+        aligned_background_sigma = 1.4826 * aligned_mad
+        print(f"  Aligned图像背景噪声: median={aligned_background_median:.6f}, sigma={aligned_background_sigma:.6f}")
+
+        half_size = cutout_size // 2
+        calculated_count = 0
+
+        for blob in blobs:
+            cx, cy = blob['center']
+            cx, cy = int(cx), int(cy)
+
+            # 计算截图区域
+            x1 = max(0, cx - half_size)
+            y1 = max(0, cy - half_size)
+            x2 = min(aligned_data.shape[1], cx + half_size)
+            y2 = min(aligned_data.shape[0], cy + half_size)
+
+            # 提取aligned数据的cutout区域
+            aligned_cutout = aligned_data[y1:y2, x1:x2]
+
+            # 计算cutout区域的背景（排除中心区域）
+            cutout_height, cutout_width = aligned_cutout.shape
+            center_cutout_x = cutout_width // 2
+            center_cutout_y = cutout_height // 2
+
+            # 创建背景掩码（排除中心7x7区域）
+            background_mask = np.ones_like(aligned_cutout, dtype=bool)
+            y_start = max(0, center_cutout_y - 3)
+            y_end = min(cutout_height, center_cutout_y + 4)
+            x_start = max(0, center_cutout_x - 3)
+            x_end = min(cutout_width, center_cutout_x + 4)
+            background_mask[y_start:y_end, x_start:x_end] = False
+
+            # 计算背景区域的统计信息
+            aligned_center_7x7_snr = None
+            if np.sum(background_mask) > 0:
+                background_values = aligned_cutout[background_mask]
+                cutout_background_median = np.median(background_values)
+                cutout_background_mad = np.median(np.abs(background_values - cutout_background_median))
+                cutout_background_sigma = 1.4826 * cutout_background_mad
+
+                # 计算中心7x7区域的信号
+                center_7x7 = aligned_cutout[y_start:y_end, x_start:x_end]
+                if center_7x7.size > 0:
+                    center_mean_signal = np.mean(center_7x7)
+                    # 计算相对于cutout背景的SNR
+                    aligned_center_7x7_snr = (center_mean_signal - cutout_background_median) / (cutout_background_sigma + 1e-10)
+                    calculated_count += 1
+
+            # 将SNR信息添加到blob中
+            blob['aligned_center_7x7_snr'] = aligned_center_7x7_snr
+
+        print(f"  已计算 {calculated_count}/{len(blobs)} 个 blob 的 Aligned SNR")
+
+    def sort_blobs(self, blobs, image_shape, sort_by='quality_score'):
         """
         对斑点进行排序
-        规则：面积和圆度的综合得分作为第一判断依据
+
+        Args:
+            blobs: 斑点列表
+            image_shape: 图像尺寸
+            sort_by: 排序依据
+                - 'quality_score': 综合得分（默认）
+                - 'aligned_snr': Aligned中心7x7 SNR
+                - 'snr': 差异图像 SNR
         """
         if not blobs:
             return blobs
 
-        # 计算图像中心
-        img_center_y, img_center_x = image_shape[0] / 2, image_shape[1] / 2
+        # 根据排序方式选择不同的排序逻辑
+        if sort_by == 'aligned_snr':
+            # 按 aligned_center_7x7_snr 降序排序（None值放到最后）
+            sorted_blobs = sorted(blobs,
+                                 key=lambda b: b.get('aligned_center_7x7_snr') if b.get('aligned_center_7x7_snr') is not None else -999999,
+                                 reverse=True)
+            print(f"  排序方式: Aligned 中心 7x7 SNR（降序）")
 
-        # 为每个斑点计算综合得分
-        for blob in blobs:
-            cx, cy = blob['center']
-            distance = np.sqrt((cx - img_center_x)**2 + (cy - img_center_y)**2)
-            blob['distance_to_center'] = distance
+        elif sort_by == 'snr':
+            # 按差异图像 SNR 降序排序（None值放到最后）
+            sorted_blobs = sorted(blobs,
+                                 key=lambda b: b.get('snr') if b.get('snr') is not None else -999999,
+                                 reverse=True)
+            print(f"  排序方式: 差异图像 SNR（降序）")
 
-            # 计算面积和圆度的综合得分（非线性）
-            # 面积归一化：假设合理面积范围是 min_area 到 max_area，映射到0-1
-            area_normalized = (blob['area'] - self.min_area) / (self.max_area - self.min_area + 1e-10)
-            area_normalized = np.clip(area_normalized, 0, 1)
+        else:
+            # 默认：按综合得分排序
+            # 计算图像中心
+            img_center_y, img_center_x = image_shape[0] / 2, image_shape[1] / 2
 
-            # 圆度已经是0-1范围
-            circularity = blob['circularity']
+            # 为每个斑点计算综合得分
+            for blob in blobs:
+                cx, cy = blob['center']
+                distance = np.sqrt((cx - img_center_x)**2 + (cy - img_center_y)**2)
+                blob['distance_to_center'] = distance
 
-            # 非线性综合得分：让圆度占更大比例
-            # 方案：(圆度^2) × 2000 × 面积归一化(0-1)
-            # 圆度的2次方：让圆度差异被适度放大
-            # - 圆度0.9: 0.9^2 = 0.81
-            # - 圆度0.95: 0.95^2 = 0.90
-            # - 圆度0.99: 0.99^2 = 0.98
-            # 乘以2000：大幅放大圆度的影响力
-            # 乘以归一化面积(0-1)：让面积也有一定影响
+                # 计算面积和圆度的综合得分（非线性）
+                # 面积归一化：假设合理面积范围是 min_area 到 max_area，映射到0-1
+                area_normalized = (blob['area'] - self.min_area) / (self.max_area - self.min_area + 1e-10)
+                area_normalized = np.clip(area_normalized, 0, 1)
 
-            # 综合得分：(圆度^2) × 2000 × 面积归一化(0-1)
-            blob['quality_score'] = (circularity ** 2) * 2000 * area_normalized
+                # 圆度已经是0-1范围
+                circularity = blob['circularity']
 
-        # 排序：综合得分降序（大的在前）
-        sorted_blobs = sorted(blobs, key=lambda b: -b['quality_score'])
+                # 非线性综合得分：让圆度占更大比例
+                # 方案：(圆度^2) × 2000 × 面积归一化(0-1)
+                # 圆度的2次方：让圆度差异被适度放大
+                # - 圆度0.9: 0.9^2 = 0.81
+                # - 圆度0.95: 0.95^2 = 0.90
+                # - 圆度0.99: 0.99^2 = 0.98
+                # 乘以2000：大幅放大圆度的影响力
+                # 乘以归一化面积(0-1)：让面积也有一定影响
+
+                # 综合得分：(圆度^2) × 2000 × 面积归一化(0-1)
+                blob['quality_score'] = (circularity ** 2) * 2000 * area_normalized
+
+            # 排序：综合得分降序（大的在前）
+            sorted_blobs = sorted(blobs, key=lambda b: -b['quality_score'])
+            print(f"  排序方式: 综合得分（降序）")
 
         return sorted_blobs
 
@@ -827,9 +922,11 @@ class SignalBlobDetector:
             x2 = min(original_data.shape[1], cx + half_size)
             y2 = min(original_data.shape[0], cy + half_size)
 
-            # 计算aligned.png中心7x7像素的SNR
-            aligned_center_7x7_snr = None
-            if aligned_data is not None and aligned_background_median is not None and aligned_background_sigma is not None:
+            # 计算aligned.png中心7x7像素的SNR（如果尚未计算）
+            aligned_center_7x7_snr = blob.get('aligned_center_7x7_snr')
+
+            # 只有在尚未计算时才计算（避免重复计算）
+            if aligned_center_7x7_snr is None and aligned_data is not None and aligned_background_median is not None and aligned_background_sigma is not None:
                 # 提取aligned数据的cutout区域
                 aligned_cutout = aligned_data[y1:y2, x1:x2]
 
@@ -860,8 +957,8 @@ class SignalBlobDetector:
                         # 计算相对于cutout背景的SNR
                         aligned_center_7x7_snr = (center_mean_signal - cutout_background_median) / (cutout_background_sigma + 1e-10)
 
-            # 将SNR信息添加到blob中
-            blob['aligned_center_7x7_snr'] = aligned_center_7x7_snr
+                # 将SNR信息添加到blob中
+                blob['aligned_center_7x7_snr'] = aligned_center_7x7_snr
 
             # 提取参考图像截图（模板图像）- 使用局部拉伸
             if reference_data is not None:
@@ -1187,7 +1284,8 @@ class SignalBlobDetector:
     
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.0,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
-                         stretch_method='percentile', percentile_low=99.95, fast_mode=False, detection_method='contour'):
+                         stretch_method='percentile', percentile_low=99.95, fast_mode=False, detection_method='contour',
+                         sort_by='quality_score'):
         """
         处理 FITS 文件的完整流程
 
@@ -1203,6 +1301,7 @@ class SignalBlobDetector:
             percentile_low: 百分位数起点，默认99.95，终点使用最大值
             fast_mode: 快速模式，不生成hull和poly可视化图片，默认False
             detection_method: 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
+            sort_by: 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
         """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
@@ -1277,8 +1376,15 @@ class SignalBlobDetector:
             threshold_info['peak_value'] = value1
             threshold_info['end_value'] = value2
 
+        # 输出排序前的 blob 总数
+        print(f"\n排序前检测到的 blob 总数: {len(blobs)}")
+
+        # 如果需要按 aligned_snr 排序，提前计算 SNR
+        if sort_by == 'aligned_snr' and aligned_data is not None:
+            self.calculate_aligned_snr(blobs, aligned_data)
+
         # 排序斑点
-        blobs = self.sort_blobs(blobs, data.shape)
+        blobs = self.sort_blobs(blobs, data.shape, sort_by=sort_by)
 
         # 打印信息
         self.print_blob_info(blobs)
@@ -1337,6 +1443,9 @@ def main():
     parser.add_argument('--detection-method', type=str, default='contour',
                        choices=['contour', 'simple_blob'],
                        help='检测方法: contour=轮廓检测（默认）, simple_blob=SimpleBlobDetector')
+    parser.add_argument('--sort-by', type=str, default='quality_score',
+                       choices=['quality_score', 'aligned_snr', 'snr'],
+                       help='排序方式: quality_score=综合得分（默认）, aligned_snr=Aligned中心7x7 SNR, snr=差异图像SNR')
 
     args = parser.parse_args()
 
@@ -1383,7 +1492,8 @@ def main():
                               stretch_method=args.stretch_method,
                               percentile_low=args.percentile_low,
                               fast_mode=args.fast_mode,
-                              detection_method=args.detection_method)
+                              detection_method=args.detection_method,
+                              sort_by=args.sort_by)
 
 
 if __name__ == "__main__":

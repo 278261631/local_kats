@@ -245,6 +245,17 @@ class FitsImageViewer:
         aligned_snr_entry = ttk.Entry(aligned_snr_frame, textvariable=self.aligned_snr_threshold_var, width=6)
         aligned_snr_entry.pack(side=tk.LEFT, padx=(2, 0))
 
+        # 排序方式下拉框架
+        sort_by_frame = ttk.Frame(toolbar_frame2)
+        sort_by_frame.pack(side=tk.LEFT, padx=(10, 0))
+
+        ttk.Label(sort_by_frame, text="排序:").pack(side=tk.LEFT)
+        self.sort_by_var = tk.StringVar(value="quality_score")
+        sort_by_combo = ttk.Combobox(sort_by_frame, textvariable=self.sort_by_var,
+                                     values=["quality_score", "aligned_snr", "snr"],
+                                     state="readonly", width=12)
+        sort_by_combo.pack(side=tk.LEFT, padx=(2, 0))
+
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
@@ -611,7 +622,11 @@ class FitsImageViewer:
             aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
             self.aligned_snr_threshold_var.set(str(aligned_snr_threshold))
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}")
+            # 排序方式
+            sort_by = batch_settings.get('sort_by', 'quality_score')
+            self.sort_by_var.set(sort_by)
+
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -654,6 +669,9 @@ class FitsImageViewer:
             # 绑定Aligned SNR阈值输入框
             self.aligned_snr_threshold_var.trace('w', self._on_aligned_snr_threshold_change)
 
+            # 绑定排序方式下拉框
+            self.sort_by_var.trace('w', self._on_batch_settings_change)
+
             self.logger.info("批量处理参数控件事件已绑定")
 
         except Exception as e:
@@ -691,6 +709,9 @@ class FitsImageViewer:
             # 获取检测方法
             detection_method = self.detection_method_var.get()
 
+            # 获取排序方式
+            sort_by = self.sort_by_var.get()
+
             # 保存到配置文件
             self.config_manager.update_batch_process_settings(
                 noise_method=noise_method,
@@ -698,10 +719,11 @@ class FitsImageViewer:
                 remove_bright_lines=self.remove_lines_var.get(),
                 fast_mode=self.fast_mode_var.get(),
                 stretch_method=stretch_method,
-                detection_method=detection_method
+                detection_method=detection_method,
+                sort_by=sort_by
             )
 
-            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}")
+            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}")
 
         except Exception as e:
             self.logger.error(f"保存批量处理参数失败: {str(e)}")
@@ -2187,6 +2209,10 @@ class FitsImageViewer:
             detection_method = self.detection_method_var.get()
             self.logger.info(f"检测方法: {detection_method}")
 
+            # 获取排序方式
+            sort_by = self.sort_by_var.get()
+            self.logger.info(f"排序方式: {sort_by}")
+
             # 更新进度：开始执行Diff
             filename = os.path.basename(self.selected_file_path)
             self.parent_frame.after(0, lambda f=filename: self.diff_progress_label.config(
@@ -2200,7 +2226,8 @@ class FitsImageViewer:
                                               percentile_low=percentile_low,
                                               fast_mode=fast_mode,
                                               max_jaggedness_ratio=max_jaggedness_ratio,
-                                              detection_method=detection_method)
+                                              detection_method=detection_method,
+                                              sort_by=sort_by)
 
             if result and result.get('success'):
                 # 更新进度：处理完成

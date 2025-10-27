@@ -150,7 +150,7 @@ class DiffOrbIntegration:
             self.logger.error(f"查找模板文件时出错: {str(e)}")
             return None
     
-    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95, fast_mode: bool = False, max_jaggedness_ratio: float = 2.0, detection_method: str = 'contour') -> Optional[Dict]:
+    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95, fast_mode: bool = False, max_jaggedness_ratio: float = 2.0, detection_method: str = 'contour', sort_by: str = 'quality_score') -> Optional[Dict]:
         """
         执行diff操作
 
@@ -166,6 +166,7 @@ class DiffOrbIntegration:
             fast_mode (bool): 快速模式，减少中间文件输出，默认False
             max_jaggedness_ratio (float): 最大锯齿比率，默认2.0
             detection_method (str): 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
+            sort_by (str): 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
 
         Returns:
             Optional[Dict]: 处理结果字典，包含输出文件路径等信息
@@ -258,7 +259,8 @@ class DiffOrbIntegration:
                 percentile_low=percentile_low,  # 传递百分位数参数
                 fast_mode=fast_mode,  # 传递快速模式参数
                 max_jaggedness_ratio=max_jaggedness_ratio,  # 传递锯齿比率参数
-                detection_method=detection_method  # 传递检测方法参数
+                detection_method=detection_method,  # 传递检测方法参数
+                sort_by=sort_by  # 传递排序方式参数
             )
 
             if result:
