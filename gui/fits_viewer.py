@@ -118,6 +118,9 @@ class FitsImageViewer:
         # 从配置文件加载MPC代码设置
         self._load_mpc_settings()
 
+        # 从配置文件加载查询设置
+        self._load_query_settings()
+
         # 延迟执行首次刷新（确保界面完全创建后）
         self.parent_frame.after(100, self._first_time_refresh)
         
@@ -414,6 +417,17 @@ class FitsImageViewer:
         self.save_mpc_button = ttk.Button(toolbar_frame6, text="保存MPC",
                                          command=self._save_mpc_settings)
         self.save_mpc_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 搜索半径设置
+        ttk.Label(toolbar_frame6, text="搜索半径(°):").pack(side=tk.LEFT, padx=(5, 2))
+        self.search_radius_var = tk.StringVar(value="0.02")
+        self.search_radius_entry = ttk.Entry(toolbar_frame6, textvariable=self.search_radius_var, width=6)
+        self.search_radius_entry.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 保存搜索半径按钮
+        self.save_search_radius_button = ttk.Button(toolbar_frame6, text="保存半径",
+                                                   command=self._save_query_settings)
+        self.save_search_radius_button.pack(side=tk.LEFT, padx=(0, 10))
 
         # Skybot查询按钮
         self.skybot_button = ttk.Button(toolbar_frame6, text="查询小行星(Skybot)",
@@ -1042,6 +1056,48 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"保存MPC代码设置失败: {str(e)}")
+
+    def _load_query_settings(self):
+        """从配置文件加载查询设置"""
+        if not self.config_manager:
+            return
+
+        try:
+            query_settings = self.config_manager.get_query_settings()
+
+            # 加载搜索半径，默认值：0.02度
+            search_radius = query_settings.get('search_radius', 0.02)
+
+            self.search_radius_var.set(str(search_radius))
+
+            self.logger.info(f"查询设置已加载: 搜索半径={search_radius}°")
+
+        except Exception as e:
+            self.logger.error(f"加载查询设置失败: {str(e)}")
+            # 使用默认值
+            self.search_radius_var.set("0.02")
+
+    def _save_query_settings(self):
+        """保存查询设置到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            search_radius = float(self.search_radius_var.get())
+
+            if search_radius <= 0:
+                self.logger.error("搜索半径必须大于0")
+                return
+
+            # 保存到配置文件
+            self.config_manager.update_query_settings(search_radius=search_radius)
+
+            self.logger.info(f"查询设置已保存: 搜索半径={search_radius}°")
+
+        except ValueError:
+            self.logger.error(f"无效的搜索半径: {self.search_radius_var.get()}")
+        except Exception as e:
+            self.logger.error(f"保存查询设置失败: {str(e)}")
 
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""
@@ -3966,7 +4022,14 @@ class FitsImageViewer:
             if not mpc_code:
                 mpc_code = 'N87'  # 默认值
 
-            query_info = f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, MPC={mpc_code}, GPS=({latitude}°N, {longitude}°E)"
+            # 获取搜索半径
+            try:
+                search_radius = float(self.search_radius_var.get())
+            except ValueError:
+                self.logger.warning(f"无效的搜索半径: {self.search_radius_var.get()}，使用默认值0.02")
+                search_radius = 0.02
+
+            query_info = f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, MPC={mpc_code}, GPS=({latitude}°N, {longitude}°E), 半径={search_radius}°"
             self.logger.info(query_info)
             # 输出到日志标签页
             if self.log_callback:
@@ -3975,7 +4038,7 @@ class FitsImageViewer:
             self.skybot_result_label.config(text="查询中...", foreground="orange")
 
             # 执行Skybot查询
-            results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude)
+            results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
 
             if results is not None:
                 count = len(results)
@@ -4089,7 +4152,7 @@ class FitsImageViewer:
                 self.log_callback(exception_msg, "ERROR")
             self.skybot_result_label.config(text="查询出错", foreground="red")
 
-    def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude):
+    def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.02):
         """
         执行Skybot查询
 
@@ -4100,6 +4163,7 @@ class FitsImageViewer:
             mpc_code: MPC观测站代码
             latitude: 纬度（度，仅用于日志）
             longitude: 经度（度，仅用于日志）
+            search_radius: 搜索半径（度，默认0.02）
 
         Returns:
             查询结果表，如果失败返回None
@@ -4116,15 +4180,15 @@ class FitsImageViewer:
             # 创建坐标对象
             coord = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
 
-            # 设置搜索半径（默认0.1度）
-            search_radius = 0.1 * u.degree
+            # 设置搜索半径
+            search_radius_u = search_radius * u.degree
 
             param_header = f"Skybot查询参数:"
             param_coord = f"  坐标: RA={ra}°, Dec={dec}°"
             param_time = f"  时间: {obs_time.iso}"
             param_station = f"  观测站: MPC code {mpc_code}"
             param_gps = f"  (GPS参考: 经度={longitude}°, 纬度={latitude}°)"
-            param_radius = f"  搜索半径: {search_radius}"
+            param_radius = f"  搜索半径: {search_radius}°"
 
             self.logger.info(param_header)
             self.logger.info(param_coord)
@@ -4143,7 +4207,7 @@ class FitsImageViewer:
 
             # 执行查询，使用MPC观测站代码
             try:
-                results = Skybot.cone_search(coord, search_radius, obs_time, location=mpc_code)
+                results = Skybot.cone_search(coord, search_radius_u, obs_time, location=mpc_code)
                 return results
             except RuntimeError as e:
                 # RuntimeError通常表示"未找到小行星"，这是正常情况
@@ -4221,7 +4285,14 @@ class FitsImageViewer:
                 self.logger.warning(f"无效的星等限制: {self.vsx_mag_limit_var.get()}，使用默认值16.0")
                 mag_limit = 16.0
 
-            query_info = f"准备查询VSX: RA={ra}°, Dec={dec}°, 星等限制≤{mag_limit}"
+            # 获取搜索半径
+            try:
+                search_radius = float(self.search_radius_var.get())
+            except ValueError:
+                self.logger.warning(f"无效的搜索半径: {self.search_radius_var.get()}，使用默认值0.02")
+                search_radius = 0.02
+
+            query_info = f"准备查询VSX: RA={ra}°, Dec={dec}°, 星等限制≤{mag_limit}, 半径={search_radius}°"
             self.logger.info(query_info)
             # 输出到日志标签页
             if self.log_callback:
@@ -4230,7 +4301,7 @@ class FitsImageViewer:
             self.vsx_result_label.config(text="查询中...", foreground="orange")
 
             # 执行VSX查询
-            results = self._perform_vsx_query(ra, dec, mag_limit)
+            results = self._perform_vsx_query(ra, dec, mag_limit, search_radius)
 
             if results is not None:
                 count = len(results)
@@ -4339,7 +4410,7 @@ class FitsImageViewer:
                 self.log_callback(exception_msg, "ERROR")
             self.vsx_result_label.config(text="查询出错", foreground="red")
 
-    def _perform_vsx_query(self, ra, dec, mag_limit=16.0):
+    def _perform_vsx_query(self, ra, dec, mag_limit=16.0, search_radius=0.02):
         """
         执行VSX变星查询
 
@@ -4347,6 +4418,7 @@ class FitsImageViewer:
             ra: 赤经（度）
             dec: 赤纬（度）
             mag_limit: 星等限制（只返回最大星等≤此值的变星）
+            search_radius: 搜索半径（度，默认0.02）
 
         Returns:
             查询结果表，如果失败返回None
@@ -4360,12 +4432,12 @@ class FitsImageViewer:
             # 创建坐标对象
             coord = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
 
-            # 设置搜索半径（默认0.1度，与Skybot查询保持一致）
-            search_radius = 0.1 * u.degree
+            # 设置搜索半径
+            search_radius_u = search_radius * u.degree
 
             param_header = f"VSX查询参数:"
             param_coord = f"  坐标: RA={ra}°, Dec={dec}°"
-            param_radius = f"  搜索半径: {search_radius}"
+            param_radius = f"  搜索半径: {search_radius}°"
             param_mag = f"  星等限制: ≤{mag_limit}"
 
             self.logger.info(param_header)
@@ -4382,7 +4454,7 @@ class FitsImageViewer:
             # VSX目录在VizieR中的标识是 "B/vsx/vsx"
             v = Vizier(columns=['**'], row_limit=-1)  # 获取所有列，不限制行数
             try:
-                results = v.query_region(coord, radius=search_radius, catalog="B/vsx/vsx")
+                results = v.query_region(coord, radius=search_radius_u, catalog="B/vsx/vsx")
 
                 if results and len(results) > 0:
                     # VizieR返回的是TableList，取第一个表

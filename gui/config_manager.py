@@ -68,6 +68,9 @@ class ConfigManager:
             "mpc_settings": {
                 "mpc_code": "N87"  # MPC观测站代码（默认值：N87）
             },
+            "query_settings": {
+                "search_radius": 0.02  # 搜索半径（度）（默认值：0.02）
+            },
             "display_settings": {
                 "default_display_mode": "linear",
                 "default_colormap": "gray",
@@ -244,6 +247,24 @@ class ConfigManager:
         for key, value in kwargs.items():
             if key == "mpc_code":
                 self.config["mpc_settings"][key] = value
+        self.save_config()
+
+    def get_query_settings(self) -> Dict[str, Any]:
+        """获取查询设置"""
+        # 如果配置中没有查询设置，使用默认值
+        if "query_settings" not in self.config:
+            self.config["query_settings"] = self.default_config["query_settings"].copy()
+            self.save_config()
+        return self.config["query_settings"]
+
+    def update_query_settings(self, **kwargs):
+        """更新查询设置"""
+        if "query_settings" not in self.config:
+            self.config["query_settings"] = self.default_config["query_settings"].copy()
+
+        for key, value in kwargs.items():
+            if key == "search_radius":
+                self.config["query_settings"][key] = value
         self.save_config()
 
     def get_url_template_type(self) -> str:
