@@ -9,6 +9,7 @@ import sys
 import logging
 import tempfile
 import shutil
+import time
 from typing import Optional, Dict, Tuple
 from pathlib import Path
 
@@ -186,6 +187,10 @@ class DiffOrbIntegration:
         self.error_logger = ErrorLogger(error_log_path, self.gui_callback)
 
         try:
+            # 记录总体开始时间
+            total_start_time = time.time()
+            timing_stats = {}
+
             self.error_logger.log_info("开始diff操作", {
                 "参考文件": os.path.basename(template_file),
                 "待比较文件": os.path.basename(download_file),
@@ -196,6 +201,7 @@ class DiffOrbIntegration:
             })
 
             # 验证输入文件
+            validation_start = time.time()
             if not os.path.exists(download_file):
                 error_msg = f"下载文件不存在"
                 self.logger.error(f"{error_msg}: {download_file}")
@@ -208,17 +214,24 @@ class DiffOrbIntegration:
                 self.error_logger.log_error(error_msg, context={"文件路径": template_file})
                 return None
 
+            timing_stats['文件验证'] = time.time() - validation_start
+            self.logger.info(f"⏱️  文件验证耗时: {timing_stats['文件验证']:.3f}秒")
+
             self.logger.info(f"开始diff操作:")
             self.logger.info(f"  参考文件 (模板): {os.path.basename(template_file)}")
             self.logger.info(f"  待比较文件 (下载): {os.path.basename(download_file)}")
             self.logger.info(f"  输出目录: {output_dir}")
 
             # 步骤0: 噪点处理
+            noise_start = time.time()
             processed_download_file, processed_template_file = self._preprocess_noise_removal(
                 download_file, template_file, output_dir, noise_methods
             )
+            timing_stats['噪点处理'] = time.time() - noise_start
+            self.logger.info(f"⏱️  步骤0 噪点处理耗时: {timing_stats['噪点处理']:.3f}秒")
 
             # 步骤1: 根据选择的对齐方式进行图像对齐
+            alignment_start = time.time()
             self.logger.info(f"步骤1: 执行图像对齐（方式: {alignment_method}）...")
 
             if alignment_method == 'wcs':
@@ -235,6 +248,9 @@ class DiffOrbIntegration:
                     show_visualization=False  # 在GUI中不显示matplotlib窗口
                 )
 
+            timing_stats['图像对齐'] = time.time() - alignment_start
+            self.logger.info(f"⏱️  步骤1 图像对齐耗时: {timing_stats['图像对齐']:.3f}秒")
+
             if not alignment_result or not alignment_result.get('alignment_success'):
                 error_msg = "图像对齐失败"
                 self.logger.error(error_msg)
@@ -248,6 +264,7 @@ class DiffOrbIntegration:
             self.error_logger.log_info("图像对齐成功")
 
             # 步骤2: 使用已对齐文件进行差异比较
+            diff_comparison_start = time.time()
             self.logger.info("步骤2: 执行已对齐文件差异比较...")
             self.error_logger.log_info("开始差异比较")
 
@@ -263,21 +280,48 @@ class DiffOrbIntegration:
                 sort_by=sort_by  # 传递排序方式参数
             )
 
+            timing_stats['差异比较'] = time.time() - diff_comparison_start
+            self.logger.info(f"⏱️  步骤2 差异比较耗时: {timing_stats['差异比较']:.3f}秒")
+
             if result:
+                # 快速模式：删除中间文件
+                cleanup_start = time.time()
+                if fast_mode:
+                    self._cleanup_intermediate_files(output_dir, template_file, download_file)
+                    timing_stats['清理中间文件'] = time.time() - cleanup_start
+                    self.logger.info(f"⏱️  清理中间文件耗时: {timing_stats['清理中间文件']:.3f}秒")
+
+                # 收集输出文件信息
+                collect_start = time.time()
+                output_files = self._collect_output_files(output_dir)
+                timing_stats['收集输出文件'] = time.time() - collect_start
+                self.logger.info(f"⏱️  收集输出文件耗时: {timing_stats['收集输出文件']:.3f}秒")
+
+                # 计算总耗时
+                total_time = time.time() - total_start_time
+                timing_stats['总耗时'] = total_time
+
+                # 输出耗时统计摘要
+                self.logger.info("=" * 60)
+                self.logger.info("⏱️  耗时统计摘要:")
+                self.logger.info(f"  文件验证: {timing_stats.get('文件验证', 0):.3f}秒")
+                self.logger.info(f"  步骤0 噪点处理: {timing_stats.get('噪点处理', 0):.3f}秒")
+                self.logger.info(f"  步骤1 图像对齐: {timing_stats.get('图像对齐', 0):.3f}秒")
+                self.logger.info(f"  步骤2 差异比较: {timing_stats.get('差异比较', 0):.3f}秒")
+                if fast_mode:
+                    self.logger.info(f"  清理中间文件: {timing_stats.get('清理中间文件', 0):.3f}秒")
+                self.logger.info(f"  收集输出文件: {timing_stats.get('收集输出文件', 0):.3f}秒")
+                self.logger.info(f"  总耗时: {total_time:.3f}秒")
+                self.logger.info("=" * 60)
+
                 self.logger.info(f"diff操作成功完成")
                 self.logger.info(f"  对齐成功: {result.get('alignment_success', False)}")
                 self.logger.info(f"  检测到新亮点: {result.get('new_bright_spots', 0)} 个")
 
                 self.error_logger.log_info("diff操作成功完成", {
-                    "检测到新亮点": result.get('new_bright_spots', 0)
+                    "检测到新亮点": result.get('new_bright_spots', 0),
+                    "总耗时": f"{total_time:.3f}秒"
                 })
-
-                # 快速模式：删除中间文件
-                if fast_mode:
-                    self._cleanup_intermediate_files(output_dir, template_file, download_file)
-
-                # 收集输出文件信息
-                output_files = self._collect_output_files(output_dir)
 
                 # 关闭错误日志记录器
                 self.error_logger.close()
@@ -291,7 +335,8 @@ class DiffOrbIntegration:
                     'reference_file': template_file,
                     'compared_file': download_file,
                     'fast_mode': fast_mode,
-                    'error_log_file': error_log_path
+                    'error_log_file': error_log_path,
+                    'timing_stats': timing_stats  # 添加耗时统计信息
                 }
             else:
                 error_msg = "diff操作失败"
@@ -520,6 +565,7 @@ class DiffOrbIntegration:
 
         try:
             # 处理下载文件（观测文件）
+            download_process_start = time.time()
             self.logger.info(f"处理观测文件: {os.path.basename(download_file)}")
 
             # 对每种降噪方式进行处理
@@ -528,6 +574,7 @@ class DiffOrbIntegration:
             final_noise_mask = None
 
             for method in noise_methods:
+                method_start = time.time()
                 self.logger.info(f"  使用 {method} 方法处理观测文件")
                 download_result = process_fits_simple(
                     download_file,
@@ -535,6 +582,8 @@ class DiffOrbIntegration:
                     threshold=4.0,
                     output_dir=output_dir
                 )
+                method_time = time.time() - method_start
+                self.logger.info(f"  ⏱️  {method} 方法处理观测文件耗时: {method_time:.3f}秒")
 
                 if download_result and len(download_result) >= 3:
                     repaired_data, noise_data, noise_mask = download_result
@@ -631,6 +680,9 @@ class DiffOrbIntegration:
             else:
                 self.logger.warning("观测文件噪点处理失败，使用原始文件")
 
+            download_process_time = time.time() - download_process_start
+            self.logger.info(f"⏱️  观测文件噪点处理总耗时: {download_process_time:.3f}秒")
+
         except Exception as e:
             self.logger.error(f"处理观测文件时出错: {str(e)}")
             self.logger.warning("使用原始观测文件")
@@ -638,6 +690,7 @@ class DiffOrbIntegration:
 
         try:
             # 处理模板文件
+            template_process_start = time.time()
             self.logger.info(f"处理模板文件: {os.path.basename(template_file)}")
 
             # 对每种降噪方式进行处理
@@ -646,6 +699,7 @@ class DiffOrbIntegration:
             final_noise_mask = None
 
             for method in noise_methods:
+                method_start = time.time()
                 self.logger.info(f"  使用 {method} 方法处理模板文件")
                 self.logger.info(f"  输入文件: {template_file}")
 
@@ -663,6 +717,9 @@ class DiffOrbIntegration:
                     threshold=4.0,
                     output_dir=output_dir
                 )
+
+                method_time = time.time() - method_start
+                self.logger.info(f"  ⏱️  {method} 方法处理模板文件耗时: {method_time:.3f}秒")
 
                 if template_result and len(template_result) >= 3:
                     repaired_data, noise_data, noise_mask = template_result
@@ -773,6 +830,9 @@ class DiffOrbIntegration:
             else:
                 self.logger.warning("模板文件噪点处理失败，使用原始文件")
 
+            template_process_time = time.time() - template_process_start
+            self.logger.info(f"⏱️  模板文件噪点处理总耗时: {template_process_time:.3f}秒")
+
         except Exception as e:
             self.logger.error(f"处理模板文件时出错: {str(e)}")
             self.logger.warning("使用原始模板文件")
@@ -881,11 +941,13 @@ class DiffOrbIntegration:
             import numpy as np
             from scipy.ndimage import map_coordinates
 
+            wcs_align_start = time.time()
             self.logger.info("开始基于WCS信息的图像对齐...")
             self.logger.info(f"模板文件: {template_file}")
             self.logger.info(f"下载文件: {download_file}")
 
             # 读取两个文件的WCS信息
+            read_template_start = time.time()
             self.logger.info("=" * 60)
             self.logger.info("步骤1.1: 读取模板文件WCS信息")
             self.logger.info("=" * 60)
@@ -910,6 +972,10 @@ class DiffOrbIntegration:
                 self.logger.info(f"模板中心像素: ({center_x:.1f}, {center_y:.1f})")
                 self.logger.info(f"模板中心天球坐标: RA={center_coord.ra.deg:.6f}°, DEC={center_coord.dec.deg:.6f}°")
 
+            read_template_time = time.time() - read_template_start
+            self.logger.info(f"⏱️  读取模板文件WCS信息耗时: {read_template_time:.3f}秒")
+
+            read_download_start = time.time()
             self.logger.info("=" * 60)
             self.logger.info("步骤1.2: 读取下载文件WCS信息")
             self.logger.info("=" * 60)
@@ -934,6 +1000,9 @@ class DiffOrbIntegration:
                 self.logger.info(f"下载中心像素: ({center_x:.1f}, {center_y:.1f})")
                 self.logger.info(f"下载中心天球坐标: RA={center_coord.ra.deg:.6f}°, DEC={center_coord.dec.deg:.6f}°")
 
+            read_download_time = time.time() - read_download_start
+            self.logger.info(f"⏱️  读取下载文件WCS信息耗时: {read_download_time:.3f}秒")
+
             # 检查WCS信息是否有效
             if not template_wcs.has_celestial or not download_wcs.has_celestial:
                 self.logger.error("=" * 60)
@@ -945,6 +1014,7 @@ class DiffOrbIntegration:
                 return None
 
             # 验证WCS质量
+            validate_start = time.time()
             self.logger.info("=" * 60)
             self.logger.info("步骤1.3: 验证WCS质量和兼容性")
             self.logger.info("=" * 60)
@@ -958,6 +1028,10 @@ class DiffOrbIntegration:
                 self.logger.error("=" * 60)
                 return None
 
+            validate_time = time.time() - validate_start
+            self.logger.info(f"⏱️  WCS质量验证耗时: {validate_time:.3f}秒")
+
+            transform_start = time.time()
             self.logger.info("WCS信息验证通过，开始坐标变换...")
 
             # 创建模板图像的像素坐标网格
@@ -969,6 +1043,9 @@ class DiffOrbIntegration:
 
             # 将天体坐标转换为下载图像的像素坐标
             download_x, download_y = download_wcs.world_to_pixel(template_coords)
+
+            transform_time = time.time() - transform_start
+            self.logger.info(f"⏱️  坐标变换耗时: {transform_time:.3f}秒")
 
             # 检查有效坐标范围
             valid_mask = (
@@ -986,6 +1063,7 @@ class DiffOrbIntegration:
                 return self._align_using_features(template_file, download_file, output_dir)
 
             # 使用插值将下载图像重采样到模板图像的坐标系
+            resample_start = time.time()
             self.logger.info("执行图像重采样...")
 
             # 创建坐标数组用于插值
@@ -1000,6 +1078,10 @@ class DiffOrbIntegration:
                 prefilter=False
             ).reshape(template_shape)
 
+            resample_time = time.time() - resample_start
+            self.logger.info(f"⏱️  图像重采样耗时: {resample_time:.3f}秒")
+
+            save_start = time.time()
             self.logger.info("WCS对齐完成，保存对齐后的文件...")
 
             # 保存对齐后的文件
@@ -1018,7 +1100,12 @@ class DiffOrbIntegration:
             aligned_header['HISTORY'] = 'Aligned using WCS information'
             fits.writeto(aligned_download_file, aligned_download_data, header=aligned_header, overwrite=True)
 
+            save_time = time.time() - save_start
+            self.logger.info(f"⏱️  保存对齐文件耗时: {save_time:.3f}秒")
+
             # 创建结果字典
+            total_wcs_time = time.time() - wcs_align_start
+
             result = {
                 'alignment_success': True,
                 'alignment_method': 'wcs',
@@ -1031,6 +1118,17 @@ class DiffOrbIntegration:
                     'coordinate_system': template_wcs.wcs.ctype[0] if hasattr(template_wcs.wcs, 'ctype') else 'Unknown'
                 }
             }
+
+            self.logger.info("=" * 60)
+            self.logger.info("⏱️  WCS对齐耗时统计:")
+            self.logger.info(f"  读取模板WCS: {read_template_time:.3f}秒")
+            self.logger.info(f"  读取下载WCS: {read_download_time:.3f}秒")
+            self.logger.info(f"  WCS质量验证: {validate_time:.3f}秒")
+            self.logger.info(f"  坐标变换: {transform_time:.3f}秒")
+            self.logger.info(f"  图像重采样: {resample_time:.3f}秒")
+            self.logger.info(f"  保存对齐文件: {save_time:.3f}秒")
+            self.logger.info(f"  WCS对齐总耗时: {total_wcs_time:.3f}秒")
+            self.logger.info("=" * 60)
 
             self.logger.info(f"WCS对齐成功完成")
             self.logger.info(f"对齐后的模板文件: {os.path.basename(aligned_template_file)}")

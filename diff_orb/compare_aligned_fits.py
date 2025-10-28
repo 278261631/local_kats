@@ -20,6 +20,7 @@ from datetime import datetime
 import warnings
 import glob
 import subprocess
+import time
 
 # 忽略警告
 warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -134,25 +135,39 @@ class AlignedFITSComparator:
             tuple: (差异图像, 二值化差异图像, 新亮点信息, 重叠区域掩码)
         """
         # 创建重叠区域掩码
+        mask_start = time.time()
         overlap_mask = self.create_overlap_mask(img1, img2)
+        self.logger.debug(f"  ⏱️  创建重叠掩码耗时: {time.time() - mask_start:.3f}秒")
 
         # 标准化图像
+        norm_start = time.time()
         norm_img1 = self.normalize_image(img1)
         norm_img2 = self.normalize_image(img2)
+        self.logger.debug(f"  ⏱️  标准化图像耗时: {time.time() - norm_start:.3f}秒")
 
         # 应用高斯模糊减少噪声
+        blur_start = time.time()
         blurred_img1 = gaussian_filter(norm_img1, sigma=self.diff_params['gaussian_sigma'])
         blurred_img2 = gaussian_filter(norm_img2, sigma=self.diff_params['gaussian_sigma'])
+        self.logger.debug(f"  ⏱️  高斯模糊耗时: {time.time() - blur_start:.3f}秒")
 
         # 计算差异（只在重叠区域）
+        diff_start = time.time()
         diff_image = np.abs(blurred_img2 - blurred_img1) * overlap_mask
+        self.logger.debug(f"  ⏱️  计算差异耗时: {time.time() - diff_start:.3f}秒")
 
         # 二值化差异图像
+        binary_start = time.time()
         binary_diff = (diff_image > self.diff_params['diff_threshold']).astype(np.uint8)
+        self.logger.debug(f"  ⏱️  二值化耗时: {time.time() - binary_start:.3f}秒")
 
         # 查找连通区域（新亮点）
+        contour_start = time.time()
         contours, _ = cv2.findContours(binary_diff, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        self.logger.debug(f"  ⏱️  查找轮廓耗时: {time.time() - contour_start:.3f}秒")
 
+        # 筛选亮点
+        filter_start = time.time()
         bright_spots = []
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -169,6 +184,7 @@ class AlignedFITSComparator:
                             'area': area,
                             'contour': contour
                         })
+        self.logger.debug(f"  ⏱️  筛选亮点耗时: {time.time() - filter_start:.3f}秒")
 
         self.logger.info(f"检测到 {len(bright_spots)} 个新亮点")
 
@@ -474,19 +490,30 @@ class AlignedFITSComparator:
         Returns:
             dict: 处理结果信息
         """
+        # 记录总体开始时间
+        total_start_time = time.time()
+        timing_stats = {}
+
         # 设置输出目录
+        setup_start = time.time()
         if output_directory is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_directory = f"aligned_diff_results_{timestamp}"
 
         os.makedirs(output_directory, exist_ok=True)
+        timing_stats['设置输出目录'] = time.time() - setup_start
+        self.logger.info(f"⏱️  设置输出目录耗时: {timing_stats['设置输出目录']:.3f}秒")
 
         # 查找FITS文件
+        find_start = time.time()
         reference_file, aligned_file = self.find_aligned_fits_files(input_directory)
         if not reference_file or not aligned_file:
             return None
+        timing_stats['查找FITS文件'] = time.time() - find_start
+        self.logger.info(f"⏱️  查找FITS文件耗时: {timing_stats['查找FITS文件']:.3f}秒")
 
         # 加载FITS数据
+        load_start = time.time()
         self.logger.info("加载FITS文件...")
         ref_data = self.load_fits_data(reference_file)
         aligned_data = self.load_fits_data(aligned_file)
@@ -500,23 +527,36 @@ class AlignedFITSComparator:
             self.logger.error(f"图像尺寸不匹配: {ref_data.shape} vs {aligned_data.shape}")
             return None
 
+        timing_stats['加载FITS数据'] = time.time() - load_start
+        self.logger.info(f"⏱️  加载FITS数据耗时: {timing_stats['加载FITS数据']:.3f}秒")
+
         # 执行差异检测
+        diff_start = time.time()
         self.logger.info("执行差异检测...")
         diff_image, binary_diff, bright_spots, overlap_mask = self.detect_differences(ref_data, aligned_data)
+        timing_stats['差异检测'] = time.time() - diff_start
+        self.logger.info(f"⏱️  差异检测耗时: {timing_stats['差异检测']:.3f}秒")
 
         # 创建标记图像
+        mark_start = time.time()
         marked_image = self.create_marked_image(aligned_data, bright_spots)
+        timing_stats['创建标记图像'] = time.time() - mark_start
+        self.logger.info(f"⏱️  创建标记图像耗时: {timing_stats['创建标记图像']:.3f}秒")
 
         # 应用重叠掩码到所有输出图像（确保非重叠区域为黑色）
+        mask_start = time.time()
         self.logger.info("应用重叠掩码，确保非重叠区域为黑色...")
         ref_data = ref_data * overlap_mask
         aligned_data = aligned_data * overlap_mask
+        timing_stats['应用重叠掩码'] = time.time() - mask_start
+        self.logger.info(f"⏱️  应用重叠掩码耗时: {timing_stats['应用重叠掩码']:.3f}秒")
 
         # 生成输出文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_name = f"aligned_comparison_{timestamp}"
 
         # 保存FITS格式结果
+        save_fits_start = time.time()
         self.logger.info("保存FITS格式结果...")
 
         # 保存差异图像（FITS）
@@ -551,12 +591,19 @@ class AlignedFITSComparator:
             overlap_mask_fits_path = os.path.join(output_directory, f"{base_name}_overlap_mask.fits")
             self.save_fits_result(overlap_mask.astype(np.float32), overlap_mask_fits_path)
 
+        timing_stats['保存FITS文件'] = time.time() - save_fits_start
+        self.logger.info(f"⏱️  保存FITS文件耗时: {timing_stats['保存FITS文件']:.3f}秒")
+
         # 计算重叠区域边界框用于调试可视化
+        bbox_start = time.time()
         self.logger.info("计算对齐区域边界框...")
         overlap_bbox = self.get_overlap_bounding_box(overlap_mask)
+        timing_stats['计算边界框'] = time.time() - bbox_start
+        self.logger.info(f"⏱️  计算边界框耗时: {timing_stats['计算边界框']:.3f}秒")
 
         if not fast_mode:
             # 保存JPG格式结果
+            save_jpg_start = time.time()
             self.logger.info("保存JPG格式结果（包含对齐区域调试信息）...")
 
             # 保存参考图像（JPG）- 带对齐区域方框
@@ -629,10 +676,14 @@ class AlignedFITSComparator:
                         f.write(f"  位置: {spot['position']}\n")
                         f.write(f"  面积: {spot['area']:.1f} 像素\n")
                         f.write("\n")
+
+            timing_stats['保存JPG文件'] = time.time() - save_jpg_start
+            self.logger.info(f"⏱️  保存JPG文件耗时: {timing_stats['保存JPG文件']:.3f}秒")
         else:
             self.logger.info("快速模式：跳过中间文件保存")
 
         # 执行signal_blob_detector检测
+        blob_start = time.time()
         self.logger.info("执行signal_blob_detector检测...")
         blob_detection_result = self.run_signal_blob_detector(
             diff_fits_path, output_directory,
@@ -646,8 +697,11 @@ class AlignedFITSComparator:
             detection_method=detection_method,
             sort_by=sort_by
         )
+        timing_stats['信号检测'] = time.time() - blob_start
+        self.logger.info(f"⏱️  信号检测耗时: {timing_stats['信号检测']:.3f}秒")
 
         # 快速模式：检测完成后删除差异FITS文件
+        cleanup_start = time.time()
         if fast_mode and os.path.exists(diff_fits_path):
             try:
                 os.remove(diff_fits_path)
@@ -655,6 +709,10 @@ class AlignedFITSComparator:
                 diff_fits_path = None  # 标记为已删除
             except Exception as e:
                 self.logger.warning(f"快速模式：删除中间文件失败: {e}")
+
+        if fast_mode:
+            timing_stats['清理中间文件'] = time.time() - cleanup_start
+            self.logger.info(f"⏱️  清理中间文件耗时: {timing_stats['清理中间文件']:.3f}秒")
 
         # 返回处理结果
         output_files = {
@@ -686,6 +744,29 @@ class AlignedFITSComparator:
         if spots_txt_path:
             output_files['text'] = spots_txt_path
 
+        # 计算总耗时
+        total_time = time.time() - total_start_time
+        timing_stats['总耗时'] = total_time
+
+        # 输出耗时统计摘要
+        self.logger.info("=" * 60)
+        self.logger.info("⏱️  差异比较耗时统计摘要:")
+        self.logger.info(f"  设置输出目录: {timing_stats.get('设置输出目录', 0):.3f}秒")
+        self.logger.info(f"  查找FITS文件: {timing_stats.get('查找FITS文件', 0):.3f}秒")
+        self.logger.info(f"  加载FITS数据: {timing_stats.get('加载FITS数据', 0):.3f}秒")
+        self.logger.info(f"  差异检测: {timing_stats.get('差异检测', 0):.3f}秒")
+        self.logger.info(f"  创建标记图像: {timing_stats.get('创建标记图像', 0):.3f}秒")
+        self.logger.info(f"  应用重叠掩码: {timing_stats.get('应用重叠掩码', 0):.3f}秒")
+        self.logger.info(f"  保存FITS文件: {timing_stats.get('保存FITS文件', 0):.3f}秒")
+        self.logger.info(f"  计算边界框: {timing_stats.get('计算边界框', 0):.3f}秒")
+        if not fast_mode:
+            self.logger.info(f"  保存JPG文件: {timing_stats.get('保存JPG文件', 0):.3f}秒")
+        self.logger.info(f"  信号检测: {timing_stats.get('信号检测', 0):.3f}秒")
+        if fast_mode:
+            self.logger.info(f"  清理中间文件: {timing_stats.get('清理中间文件', 0):.3f}秒")
+        self.logger.info(f"  总耗时: {total_time:.3f}秒")
+        self.logger.info("=" * 60)
+
         result = {
             'success': True,
             'reference_file': reference_file,
@@ -695,7 +776,9 @@ class AlignedFITSComparator:
             'bright_spots_details': bright_spots,
             'blob_detection': blob_detection_result,
             'output_files': output_files,
-            'fast_mode': fast_mode
+            'fast_mode': fast_mode,
+            'timing_stats': timing_stats,  # 添加耗时统计信息
+            'alignment_success': True  # 添加对齐成功标志
         }
 
         return result
