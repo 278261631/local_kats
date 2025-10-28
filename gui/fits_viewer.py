@@ -47,8 +47,10 @@ class FitsImageViewer:
                  get_template_dir_callback: Optional[Callable] = None,
                  get_diff_output_dir_callback: Optional[Callable] = None,
                  get_url_selections_callback: Optional[Callable] = None,
-                 log_callback: Optional[Callable] = None):
+                 log_callback: Optional[Callable] = None,
+                 file_selection_frame: Optional[tk.Frame] = None):
         self.parent_frame = parent_frame
+        self.file_selection_frame = file_selection_frame  # 文件选择框架，用于添加按钮
         self.config_manager = config_manager
         self.current_fits_data = None
         self.current_header = None
@@ -134,22 +136,65 @@ class FitsImageViewer:
         toolbar_container = ttk.Frame(main_frame)
         toolbar_container.pack(fill=tk.X, pady=(0, 5))
 
-        # 第一行工具栏
+        # 如果有文件选择框架，将文件信息标签、显示图像、打开下载目录、检查WCS按钮添加到其中
+        if self.file_selection_frame:
+            # 文件信息标签
+            self.file_info_label = ttk.Label(self.file_selection_frame, text="未选择文件")
+            self.file_info_label.pack(side=tk.LEFT, padx=(20, 0))
+
+            # 显示图像按钮
+            self.display_button = ttk.Button(self.file_selection_frame, text="显示图像",
+                                           command=self._display_selected_image, state="disabled")
+            self.display_button.pack(side=tk.LEFT, padx=(10, 0))
+
+            # 打开目录按钮
+            self.open_dir_button = ttk.Button(self.file_selection_frame, text="打开下载目录",
+                                            command=self._open_download_directory)
+            self.open_dir_button.pack(side=tk.LEFT, padx=(10, 0))
+
+            # WCS检查按钮
+            self.wcs_check_button = ttk.Button(self.file_selection_frame, text="检查WCS",
+                                             command=self._check_directory_wcs, state="disabled")
+            self.wcs_check_button.pack(side=tk.LEFT, padx=(10, 0))
+
+            # 如果WCS检查器不可用，禁用按钮
+            if not self.wcs_checker:
+                self.wcs_check_button.config(state="disabled", text="WCS检查不可用")
+        else:
+            # 如果没有文件选择框架，创建一个独立的第一行工具栏来放置这些按钮
+            toolbar_frame0 = ttk.Frame(toolbar_container)
+            toolbar_frame0.pack(fill=tk.X, pady=(0, 2))
+
+            # 文件信息标签
+            self.file_info_label = ttk.Label(toolbar_frame0, text="未选择文件")
+            self.file_info_label.pack(side=tk.LEFT)
+
+            # 显示图像按钮
+            self.display_button = ttk.Button(toolbar_frame0, text="显示图像",
+                                           command=self._display_selected_image, state="disabled")
+            self.display_button.pack(side=tk.LEFT, padx=(10, 0))
+
+            # 打开目录按钮
+            self.open_dir_button = ttk.Button(toolbar_frame0, text="打开下载目录",
+                                            command=self._open_download_directory)
+            self.open_dir_button.pack(side=tk.LEFT, padx=(10, 0))
+
+            # WCS检查按钮
+            self.wcs_check_button = ttk.Button(toolbar_frame0, text="检查WCS",
+                                             command=self._check_directory_wcs, state="disabled")
+            self.wcs_check_button.pack(side=tk.LEFT, padx=(10, 0))
+
+            # 如果WCS检查器不可用，禁用按钮
+            if not self.wcs_checker:
+                self.wcs_check_button.config(state="disabled", text="WCS检查不可用")
+
+        # 第一行工具栏（降噪方式等）
         toolbar_frame1 = ttk.Frame(toolbar_container)
         toolbar_frame1.pack(fill=tk.X, pady=(0, 2))
 
-        # 文件信息标签
-        self.file_info_label = ttk.Label(toolbar_frame1, text="未选择文件")
-        self.file_info_label.pack(side=tk.LEFT)
-
-        # 显示图像按钮
-        self.display_button = ttk.Button(toolbar_frame1, text="显示图像",
-                                       command=self._display_selected_image, state="disabled")
-        self.display_button.pack(side=tk.LEFT, padx=(10, 0))
-
         # 降噪方式选择框架
         noise_frame = ttk.Frame(toolbar_frame1)
-        noise_frame.pack(side=tk.LEFT, padx=(5, 0))
+        noise_frame.pack(side=tk.LEFT, padx=(0, 0))
 
         # 降噪方式标签
         ttk.Label(noise_frame, text="降噪方式:").pack(side=tk.LEFT)
@@ -377,46 +422,47 @@ class FitsImageViewer:
         self.time_local_entry = ttk.Entry(toolbar_frame5, width=20)
         self.time_local_entry.pack(side=tk.LEFT, padx=(0, 10))
 
-        # GPS位置信息（第六行工具栏）
-        toolbar_frame6 = ttk.Frame(toolbar_container)
-        toolbar_frame6.pack(fill=tk.X, pady=2)
-
-        ttk.Label(toolbar_frame6, text="GPS位置:").pack(side=tk.LEFT, padx=(5, 2))
+        # GPS位置信息（移到第五行结尾）
+        ttk.Label(toolbar_frame5, text="  |  GPS:").pack(side=tk.LEFT, padx=(10, 2))
 
         # 纬度
-        ttk.Label(toolbar_frame6, text="纬度:").pack(side=tk.LEFT, padx=(5, 2))
+        ttk.Label(toolbar_frame5, text="纬度:").pack(side=tk.LEFT, padx=(5, 2))
         self.gps_lat_var = tk.StringVar(value="43.4")
-        self.gps_lat_entry = ttk.Entry(toolbar_frame6, textvariable=self.gps_lat_var, width=10)
+        self.gps_lat_entry = ttk.Entry(toolbar_frame5, textvariable=self.gps_lat_var, width=8)
         self.gps_lat_entry.pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Label(toolbar_frame6, text="N").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(toolbar_frame5, text="N").pack(side=tk.LEFT, padx=(0, 5))
 
         # 经度
-        ttk.Label(toolbar_frame6, text="经度:").pack(side=tk.LEFT, padx=(5, 2))
+        ttk.Label(toolbar_frame5, text="经度:").pack(side=tk.LEFT, padx=(5, 2))
         self.gps_lon_var = tk.StringVar(value="87.1")
-        self.gps_lon_entry = ttk.Entry(toolbar_frame6, textvariable=self.gps_lon_var, width=10)
+        self.gps_lon_entry = ttk.Entry(toolbar_frame5, textvariable=self.gps_lon_var, width=8)
         self.gps_lon_entry.pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Label(toolbar_frame6, text="E").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(toolbar_frame5, text="E").pack(side=tk.LEFT, padx=(0, 5))
 
         # 计算时区显示
-        ttk.Label(toolbar_frame6, text="时区:").pack(side=tk.LEFT, padx=(5, 2))
-        self.timezone_label = ttk.Label(toolbar_frame6, text="UTC+6", foreground="blue")
-        self.timezone_label.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(toolbar_frame5, text="时区:").pack(side=tk.LEFT, padx=(5, 2))
+        self.timezone_label = ttk.Label(toolbar_frame5, text="UTC+6", foreground="blue")
+        self.timezone_label.pack(side=tk.LEFT, padx=(0, 5))
 
         # 保存GPS按钮
-        self.save_gps_button = ttk.Button(toolbar_frame6, text="保存GPS",
+        self.save_gps_button = ttk.Button(toolbar_frame5, text="保存GPS",
                                          command=self._save_gps_settings)
-        self.save_gps_button.pack(side=tk.LEFT, padx=(5, 10))
+        self.save_gps_button.pack(side=tk.LEFT, padx=(5, 5))
 
         # MPC观测站代码
-        ttk.Label(toolbar_frame6, text="MPC代码:").pack(side=tk.LEFT, padx=(5, 2))
+        ttk.Label(toolbar_frame5, text="MPC:").pack(side=tk.LEFT, padx=(5, 2))
         self.mpc_code_var = tk.StringVar(value="N87")
-        self.mpc_code_entry = ttk.Entry(toolbar_frame6, textvariable=self.mpc_code_var, width=8)
-        self.mpc_code_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self.mpc_code_entry = ttk.Entry(toolbar_frame5, textvariable=self.mpc_code_var, width=6)
+        self.mpc_code_entry.pack(side=tk.LEFT, padx=(0, 2))
 
         # 保存MPC代码按钮
-        self.save_mpc_button = ttk.Button(toolbar_frame6, text="保存MPC",
+        self.save_mpc_button = ttk.Button(toolbar_frame5, text="保存MPC",
                                          command=self._save_mpc_settings)
-        self.save_mpc_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.save_mpc_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 查询设置和结果显示（第六行工具栏）
+        toolbar_frame6 = ttk.Frame(toolbar_container)
+        toolbar_frame6.pack(fill=tk.X, pady=2)
 
         # 搜索半径设置
         ttk.Label(toolbar_frame6, text="搜索半径(°):").pack(side=tk.LEFT, padx=(5, 2))
@@ -463,20 +509,6 @@ class FitsImageViewer:
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
             self.astap_button.config(state="disabled", text="ASTAP不可用")
-
-        # WCS检查按钮
-        self.wcs_check_button = ttk.Button(toolbar_frame2, text="检查WCS",
-                                         command=self._check_directory_wcs, state="disabled")
-        self.wcs_check_button.pack(side=tk.LEFT, padx=(5, 0))
-
-        # 如果WCS检查器不可用，禁用按钮
-        if not self.wcs_checker:
-            self.wcs_check_button.config(state="disabled", text="WCS检查不可用")
-
-        # 打开目录按钮
-        self.open_dir_button = ttk.Button(toolbar_frame2, text="打开下载目录",
-                                        command=self._open_download_directory)
-        self.open_dir_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # 创建主要内容区域（左右分割）
         content_frame = ttk.Frame(main_frame)

@@ -277,6 +277,7 @@ class FitsWebDownloaderGUI:
         ttk.Button(file_frame, text="选择其他FITS文件", command=self._select_fits_file).pack(side=tk.LEFT, padx=(10, 0))
 
         # 创建FITS查看器，传递配置管理器和回调函数
+        # 将file_frame传递给FitsImageViewer，以便在其中添加按钮
         self.fits_viewer = FitsImageViewer(
             self.viewer_frame,
             config_manager=self.config_manager,
@@ -284,7 +285,8 @@ class FitsWebDownloaderGUI:
             get_template_dir_callback=self._get_template_dir,
             get_diff_output_dir_callback=self._get_diff_output_dir,
             get_url_selections_callback=self._get_url_selections,
-            log_callback=self.get_error_logger_callback()  # 传递日志回调函数
+            log_callback=self.get_error_logger_callback(),  # 传递日志回调函数
+            file_selection_frame=file_frame  # 传递文件选择框架
         )
 
         # 设置diff_orb的GUI回调
