@@ -4001,6 +4001,10 @@ class FitsImageViewer:
     def _query_skybot(self):
         """使用Skybot查询小行星数据"""
         try:
+            # 立即重置结果标签，确保用户能看到查询状态变化
+            self.skybot_result_label.config(text="准备中...", foreground="gray")
+            self.skybot_result_label.update_idletasks()  # 强制刷新界面
+
             # 检查是否有当前显示的cutout
             if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
                 self.logger.warning("请先执行差分检测并显示检测结果")
@@ -4068,6 +4072,7 @@ class FitsImageViewer:
                 self.log_callback(query_info, "INFO")
 
             self.skybot_result_label.config(text="查询中...", foreground="orange")
+            self.skybot_result_label.update_idletasks()  # 强制刷新界面
 
             # 执行Skybot查询
             results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
@@ -4279,6 +4284,10 @@ class FitsImageViewer:
     def _query_vsx(self):
         """使用VSX查询变星数据"""
         try:
+            # 立即重置结果标签，确保用户能看到查询状态变化
+            self.vsx_result_label.config(text="准备中...", foreground="gray")
+            self.vsx_result_label.update_idletasks()  # 强制刷新界面
+
             # 检查是否有当前显示的cutout
             if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
                 self.logger.warning("请先执行差分检测并显示检测结果")
@@ -4331,6 +4340,7 @@ class FitsImageViewer:
                 self.log_callback(query_info, "INFO")
 
             self.vsx_result_label.config(text="查询中...", foreground="orange")
+            self.vsx_result_label.update_idletasks()  # 强制刷新界面
 
             # 执行VSX查询
             results = self._perform_vsx_query(ra, dec, mag_limit, search_radius)
