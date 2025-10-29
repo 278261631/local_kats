@@ -249,7 +249,9 @@ class FitsImageViewer:
 
         alignment_methods = [
             ("Rigid", "rigid", "刚体变换（平移+旋转）"),
-            ("WCS", "wcs", "基于WCS信息对齐")
+            ("WCS", "wcs", "基于WCS信息对齐"),
+            ("Astropy", "astropy_reproject", "Astropy Reproject对齐"),
+            ("SWarp", "swarp", "SWarp对齐")
         ]
 
         for text, value, tooltip in alignment_methods:
@@ -647,12 +649,14 @@ class FitsImageViewer:
 
             # 对齐方式
             alignment_method = batch_settings.get('alignment_method', 'orb')
-            if alignment_method == 'orb':
-                self.alignment_var.set('rigid')
-            elif alignment_method == 'ecc':
-                self.alignment_var.set('wcs')
-            else:
-                self.alignment_var.set('rigid')
+            # 映射配置文件中的值到GUI选项
+            alignment_mapping = {
+                'orb': 'rigid',
+                'ecc': 'wcs',
+                'astropy_reproject': 'astropy_reproject',
+                'swarp': 'swarp'
+            }
+            self.alignment_var.set(alignment_mapping.get(alignment_method, 'rigid'))
 
             # 去除亮线
             remove_bright_lines = batch_settings.get('remove_bright_lines', True)
@@ -763,12 +767,14 @@ class FitsImageViewer:
             elif self.hot_cold_var.get():
                 noise_method = 'gaussian'  # hot_cold也映射到gaussian
 
-            # 确定对齐方式
-            alignment_method = 'orb'
-            if self.alignment_var.get() == 'rigid':
-                alignment_method = 'orb'
-            elif self.alignment_var.get() == 'wcs':
-                alignment_method = 'ecc'
+            # 确定对齐方式 - 映射GUI选项到配置文件值
+            alignment_mapping = {
+                'rigid': 'orb',
+                'wcs': 'ecc',
+                'astropy_reproject': 'astropy_reproject',
+                'swarp': 'swarp'
+            }
+            alignment_method = alignment_mapping.get(self.alignment_var.get(), 'orb')
 
             # 确定拉伸方法
             stretch_method = 'percentile'

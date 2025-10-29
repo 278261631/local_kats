@@ -160,7 +160,7 @@ class DiffOrbIntegration:
             template_file (str): 模板文件路径（作为参考文件）
             output_dir (str): 输出目录，如果为None则自动创建
             noise_methods (list): 降噪方式列表，可选值：['outlier', 'hot_cold', 'adaptive_median']
-            alignment_method (str): 对齐方式，可选值：['rigid', 'wcs']
+            alignment_method (str): 对齐方式，可选值：['rigid', 'wcs', 'astropy_reproject', 'swarp']
             remove_bright_lines (bool): 是否去除亮线，默认True
             stretch_method (str): 拉伸方法，'peak'=峰值拉伸, 'percentile'=百分位数拉伸
             percentile_low (float): 百分位数起点，默认99.95
@@ -237,6 +237,16 @@ class DiffOrbIntegration:
             if alignment_method == 'wcs':
                 # 使用WCS对齐
                 alignment_result = self._align_using_wcs(
+                    processed_template_file, processed_download_file, output_dir
+                )
+            elif alignment_method == 'astropy_reproject':
+                # 使用Astropy Reproject对齐
+                alignment_result = self._align_using_astropy_reproject(
+                    processed_template_file, processed_download_file, output_dir
+                )
+            elif alignment_method == 'swarp':
+                # 使用SWarp对齐
+                alignment_result = self._align_using_swarp(
                     processed_template_file, processed_download_file, output_dir
                 )
             else:
@@ -1151,6 +1161,220 @@ class DiffOrbIntegration:
             self.logger.error(f"下载文件: {download_file}")
             self.logger.error("建议使用特征点对齐（Rigid）代替WCS对齐")
             self.logger.error("=" * 60)
+            return None
+
+    def _align_using_astropy_reproject(self, template_file: str, download_file: str, output_dir: str) -> Optional[Dict]:
+        """
+        使用Astropy Reproject进行图像对齐
+
+        Args:
+            template_file (str): 模板文件路径
+            download_file (str): 下载文件路径
+            output_dir (str): 输出目录
+
+        Returns:
+            Optional[Dict]: 对齐结果字典
+        """
+        try:
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            from reproject import reproject_interp
+            import numpy as np
+
+            reproject_start = time.time()
+            self.logger.info("开始使用Astropy Reproject进行图像对齐...")
+            self.logger.info(f"模板文件: {template_file}")
+            self.logger.info(f"下载文件: {download_file}")
+
+            # 读取模板文件
+            read_template_start = time.time()
+            with fits.open(template_file) as hdul_template:
+                template_header = hdul_template[0].header
+                template_data = hdul_template[0].data.astype(np.float64)
+                template_wcs = WCS(template_header)
+            read_template_time = time.time() - read_template_start
+            self.logger.info(f"⏱️  读取模板文件耗时: {read_template_time:.3f}秒")
+
+            # 读取下载文件
+            read_download_start = time.time()
+            with fits.open(download_file) as hdul_download:
+                download_header = hdul_download[0].header
+                download_data = hdul_download[0].data.astype(np.float64)
+                download_wcs = WCS(download_header)
+            read_download_time = time.time() - read_download_start
+            self.logger.info(f"⏱️  读取下载文件耗时: {read_download_time:.3f}秒")
+
+            # 检查WCS信息是否有效
+            if not template_wcs.has_celestial or not download_wcs.has_celestial:
+                self.logger.error("Astropy Reproject对齐失败：文件缺少有效的WCS天体坐标信息")
+                return None
+
+            # 使用reproject_interp进行重投影
+            reproject_calc_start = time.time()
+            self.logger.info("执行Astropy Reproject重投影...")
+            aligned_download_data, footprint = reproject_interp(
+                (download_data, download_wcs),
+                template_wcs,
+                shape_out=template_data.shape
+            )
+            reproject_calc_time = time.time() - reproject_calc_start
+            self.logger.info(f"⏱️  Reproject重投影耗时: {reproject_calc_time:.3f}秒")
+
+            # 保存对齐后的文件
+            save_start = time.time()
+            template_basename = os.path.splitext(os.path.basename(template_file))[0]
+            download_basename = os.path.splitext(os.path.basename(download_file))[0]
+
+            # 保存对齐后的模板文件（实际上就是原文件的副本）
+            aligned_template_file = os.path.join(output_dir, f"{template_basename}_aligned.fits")
+            fits.writeto(aligned_template_file, template_data, header=template_header, overwrite=True)
+
+            # 保存对齐后的下载文件
+            aligned_download_file = os.path.join(output_dir, f"{download_basename}_aligned.fits")
+            aligned_header = template_header.copy()
+            aligned_header['HISTORY'] = 'Aligned using Astropy Reproject'
+            fits.writeto(aligned_download_file, aligned_download_data, header=aligned_header, overwrite=True)
+
+            save_time = time.time() - save_start
+            self.logger.info(f"⏱️  保存对齐文件耗时: {save_time:.3f}秒")
+
+            total_reproject_time = time.time() - reproject_start
+
+            result = {
+                'alignment_success': True,
+                'alignment_method': 'astropy_reproject',
+                'template_aligned_file': aligned_template_file,
+                'download_aligned_file': aligned_download_file,
+                'output_directory': output_dir
+            }
+
+            self.logger.info("=" * 60)
+            self.logger.info("⏱️  Astropy Reproject对齐耗时统计:")
+            self.logger.info(f"  读取模板文件: {read_template_time:.3f}秒")
+            self.logger.info(f"  读取下载文件: {read_download_time:.3f}秒")
+            self.logger.info(f"  Reproject重投影: {reproject_calc_time:.3f}秒")
+            self.logger.info(f"  保存对齐文件: {save_time:.3f}秒")
+            self.logger.info(f"  总耗时: {total_reproject_time:.3f}秒")
+            self.logger.info("=" * 60)
+
+            self.logger.info(f"Astropy Reproject对齐成功完成")
+            return result
+
+        except ImportError as e:
+            self.logger.error(f"Astropy Reproject对齐失败：需要reproject库 - {str(e)}")
+            self.logger.error("请安装: pip install reproject")
+            return None
+        except Exception as e:
+            self.logger.error(f"Astropy Reproject对齐失败：{str(e)}")
+            return None
+
+    def _align_using_swarp(self, template_file: str, download_file: str, output_dir: str) -> Optional[Dict]:
+        """
+        使用SWarp进行图像对齐
+
+        Args:
+            template_file (str): 模板文件路径
+            download_file (str): 下载文件路径
+            output_dir (str): 输出目录
+
+        Returns:
+            Optional[Dict]: 对齐结果字典
+        """
+        try:
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            import subprocess
+            import numpy as np
+
+            swarp_start = time.time()
+            self.logger.info("开始使用SWarp进行图像对齐...")
+            self.logger.info(f"模板文件: {template_file}")
+            self.logger.info(f"下载文件: {download_file}")
+
+            # 检查swarp是否可用
+            try:
+                subprocess.run(['swarp', '-v'], capture_output=True, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                self.logger.error("SWarp对齐失败：未找到swarp命令")
+                self.logger.error("请安装SWarp: https://www.astromatic.net/software/swarp")
+                return None
+
+            # 读取模板文件获取WCS信息
+            read_template_start = time.time()
+            with fits.open(template_file) as hdul_template:
+                template_header = hdul_template[0].header
+                template_data = hdul_template[0].data.astype(np.float64)
+            read_template_time = time.time() - read_template_start
+            self.logger.info(f"⏱️  读取模板文件耗时: {read_template_time:.3f}秒")
+
+            # 准备SWarp配置
+            template_basename = os.path.splitext(os.path.basename(template_file))[0]
+            download_basename = os.path.splitext(os.path.basename(download_file))[0]
+
+            aligned_template_file = os.path.join(output_dir, f"{template_basename}_aligned.fits")
+            aligned_download_file = os.path.join(output_dir, f"{download_basename}_aligned.fits")
+
+            # 复制模板文件作为参考
+            shutil.copy2(template_file, aligned_template_file)
+
+            # 使用SWarp对齐下载文件到模板的WCS
+            swarp_exec_start = time.time()
+            self.logger.info("执行SWarp对齐...")
+
+            swarp_cmd = [
+                'swarp',
+                download_file,
+                '-IMAGEOUT_NAME', aligned_download_file,
+                '-WEIGHTOUT_NAME', os.path.join(output_dir, 'weight.fits'),
+                '-HEADER_ONLY', 'N',
+                '-COMBINE', 'N',
+                '-RESAMPLE', 'Y',
+                '-RESAMPLE_DIR', output_dir,
+                '-RESAMPLING_TYPE', 'LANCZOS3',
+                '-PIXELSCALE_TYPE', 'MANUAL',
+                '-PIXEL_SCALE', str(abs(template_header.get('CD1_1', 1.0)) * 3600),  # 转换为角秒
+                '-CENTER_TYPE', 'MANUAL',
+                '-CENTER', f"{template_header.get('CRVAL1', 0)},{template_header.get('CRVAL2', 0)}",
+                '-IMAGE_SIZE', f"{template_data.shape[1]},{template_data.shape[0]}",
+                '-VERBOSE_TYPE', 'NORMAL'
+            ]
+
+            result_swarp = subprocess.run(swarp_cmd, capture_output=True, text=True)
+
+            if result_swarp.returncode != 0:
+                self.logger.error(f"SWarp执行失败: {result_swarp.stderr}")
+                return None
+
+            swarp_exec_time = time.time() - swarp_exec_start
+            self.logger.info(f"⏱️  SWarp执行耗时: {swarp_exec_time:.3f}秒")
+
+            # 验证输出文件
+            if not os.path.exists(aligned_download_file):
+                self.logger.error("SWarp对齐失败：未生成输出文件")
+                return None
+
+            total_swarp_time = time.time() - swarp_start
+
+            result = {
+                'alignment_success': True,
+                'alignment_method': 'swarp',
+                'template_aligned_file': aligned_template_file,
+                'download_aligned_file': aligned_download_file,
+                'output_directory': output_dir
+            }
+
+            self.logger.info("=" * 60)
+            self.logger.info("⏱️  SWarp对齐耗时统计:")
+            self.logger.info(f"  读取模板文件: {read_template_time:.3f}秒")
+            self.logger.info(f"  SWarp执行: {swarp_exec_time:.3f}秒")
+            self.logger.info(f"  总耗时: {total_swarp_time:.3f}秒")
+            self.logger.info("=" * 60)
+
+            self.logger.info(f"SWarp对齐成功完成")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"SWarp对齐失败：{str(e)}")
             return None
 
 
