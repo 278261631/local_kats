@@ -92,6 +92,10 @@ class FitsWebDownloaderGUI:
         self.viewer_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.viewer_frame, text="图像查看")
 
+        # 创建高级设置标签页
+        self.advanced_settings_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.advanced_settings_frame, text="高级设置")
+
         # 创建日志标签页
         self.log_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.log_frame, text="日志")
@@ -100,6 +104,7 @@ class FitsWebDownloaderGUI:
         self._create_scan_widgets()
         self._create_batch_status_widgets()
         self._create_viewer_widgets()
+        self._create_advanced_settings_widgets()
         self._create_log_widgets()
         
     def _create_scan_widgets(self):
@@ -292,6 +297,182 @@ class FitsWebDownloaderGUI:
         # 设置diff_orb的GUI回调
         if self.fits_viewer.diff_orb:
             self.fits_viewer.diff_orb.gui_callback = self.get_error_logger_callback()
+
+    def _create_advanced_settings_widgets(self):
+        """创建高级设置界面"""
+        # 创建主容器
+        main_container = ttk.Frame(self.advanced_settings_frame)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # 标题
+        title_label = ttk.Label(main_container, text="高级设置", font=("Arial", 14, "bold"))
+        title_label.pack(pady=(0, 20))
+
+        # 说明文本
+        info_text = ("这里包含了FITS图像处理的高级参数设置。\n"
+                    "这些设置会影响图像对齐、降噪、检测等处理过程。\n"
+                    "修改后会自动保存到配置文件中。")
+        info_label = ttk.Label(main_container, text=info_text, foreground="gray")
+        info_label.pack(pady=(0, 20))
+
+        # 创建设置区域
+        settings_container = ttk.Frame(main_container)
+        settings_container.pack(fill=tk.BOTH, expand=True)
+
+        # 第一行：降噪方式和去除亮线
+        row1_frame = ttk.LabelFrame(settings_container, text="降噪设置", padding=10)
+        row1_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 降噪方式
+        noise_label = ttk.Label(row1_frame, text="降噪方式:")
+        noise_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+
+        # 获取fits_viewer的降噪变量（如果已创建）
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            outlier_check = ttk.Checkbutton(row1_frame, text="Outlier",
+                                          variable=self.fits_viewer.outlier_var)
+            outlier_check.grid(row=0, column=1, sticky=tk.W, padx=5)
+
+            hot_cold_check = ttk.Checkbutton(row1_frame, text="Hot/Cold",
+                                           variable=self.fits_viewer.hot_cold_var)
+            hot_cold_check.grid(row=0, column=2, sticky=tk.W, padx=5)
+
+            adaptive_median_check = ttk.Checkbutton(row1_frame, text="Adaptive Median",
+                                                  variable=self.fits_viewer.adaptive_median_var)
+            adaptive_median_check.grid(row=0, column=3, sticky=tk.W, padx=5)
+
+            # 去除亮线
+            remove_lines_check = ttk.Checkbutton(row1_frame, text="去除亮线",
+                                               variable=self.fits_viewer.remove_lines_var)
+            remove_lines_check.grid(row=0, column=4, sticky=tk.W, padx=(20, 5))
+
+        # 第二行：对齐方式
+        row2_frame = ttk.LabelFrame(settings_container, text="对齐设置", padding=10)
+        row2_frame.pack(fill=tk.X, pady=(0, 10))
+
+        alignment_label = ttk.Label(row2_frame, text="对齐方式:")
+        alignment_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            alignment_methods = [
+                ("Rigid", "rigid"),
+                ("WCS", "wcs"),
+                ("Astropy", "astropy_reproject"),
+                ("SWarp", "swarp")
+            ]
+
+            for i, (text, value) in enumerate(alignment_methods):
+                rb = ttk.Radiobutton(row2_frame, text=text,
+                                   variable=self.fits_viewer.alignment_var, value=value)
+                rb.grid(row=0, column=i+1, sticky=tk.W, padx=5)
+
+        # 第三行：检测参数
+        row3_frame = ttk.LabelFrame(settings_container, text="检测参数", padding=10)
+        row3_frame.pack(fill=tk.X, pady=(0, 10))
+
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            # 锯齿比率
+            jaggedness_label = ttk.Label(row3_frame, text="锯齿比率:")
+            jaggedness_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+
+            jaggedness_entry = ttk.Entry(row3_frame, textvariable=self.fits_viewer.jaggedness_ratio_var, width=8)
+            jaggedness_entry.grid(row=0, column=1, sticky=tk.W, padx=5)
+
+            # 检测方法
+            detection_label = ttk.Label(row3_frame, text="检测方法:")
+            detection_label.grid(row=0, column=2, sticky=tk.W, padx=(20, 5))
+
+            detection_contour_radio = ttk.Radiobutton(row3_frame, text="轮廓",
+                                                    variable=self.fits_viewer.detection_method_var, value="contour")
+            detection_contour_radio.grid(row=0, column=3, sticky=tk.W, padx=5)
+
+            detection_blob_radio = ttk.Radiobutton(row3_frame, text="SimpleBlobDetector",
+                                                 variable=self.fits_viewer.detection_method_var, value="simple_blob")
+            detection_blob_radio.grid(row=0, column=4, sticky=tk.W, padx=5)
+
+        # 第四行：阈值和排序
+        row4_frame = ttk.LabelFrame(settings_container, text="筛选和排序", padding=10)
+        row4_frame.pack(fill=tk.X, pady=(0, 10))
+
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            # 综合得分阈值
+            score_label = ttk.Label(row4_frame, text="综合得分 >")
+            score_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+
+            score_entry = ttk.Entry(row4_frame, textvariable=self.fits_viewer.score_threshold_var, width=8)
+            score_entry.grid(row=0, column=1, sticky=tk.W, padx=5)
+
+            # Aligned SNR阈值
+            snr_label = ttk.Label(row4_frame, text="Aligned SNR >")
+            snr_label.grid(row=0, column=2, sticky=tk.W, padx=(20, 5))
+
+            snr_entry = ttk.Entry(row4_frame, textvariable=self.fits_viewer.aligned_snr_threshold_var, width=8)
+            snr_entry.grid(row=0, column=3, sticky=tk.W, padx=5)
+
+            # 排序方式
+            sort_label = ttk.Label(row4_frame, text="排序:")
+            sort_label.grid(row=0, column=4, sticky=tk.W, padx=(20, 5))
+
+            sort_combo = ttk.Combobox(row4_frame, textvariable=self.fits_viewer.sort_by_var,
+                                     values=["quality_score", "aligned_snr", "snr"],
+                                     state="readonly", width=15)
+            sort_combo.grid(row=0, column=5, sticky=tk.W, padx=5)
+
+        # 第五行：GPS和MPC设置
+        row5_frame = ttk.LabelFrame(settings_container, text="观测站设置", padding=10)
+        row5_frame.pack(fill=tk.X, pady=(0, 10))
+
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            # GPS纬度
+            lat_label = ttk.Label(row5_frame, text="GPS纬度:")
+            lat_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+
+            lat_entry = ttk.Entry(row5_frame, textvariable=self.fits_viewer.gps_lat_var, width=10)
+            lat_entry.grid(row=0, column=1, sticky=tk.W, padx=5)
+
+            lat_unit = ttk.Label(row5_frame, text="°N")
+            lat_unit.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
+
+            # GPS经度
+            lon_label = ttk.Label(row5_frame, text="经度:")
+            lon_label.grid(row=0, column=3, sticky=tk.W, padx=(10, 5))
+
+            lon_entry = ttk.Entry(row5_frame, textvariable=self.fits_viewer.gps_lon_var, width=10)
+            lon_entry.grid(row=0, column=4, sticky=tk.W, padx=5)
+
+            lon_unit = ttk.Label(row5_frame, text="°E")
+            lon_unit.grid(row=0, column=5, sticky=tk.W, padx=(0, 10))
+
+            # 时区显示
+            tz_label = ttk.Label(row5_frame, text="时区:")
+            tz_label.grid(row=0, column=6, sticky=tk.W, padx=(10, 5))
+
+            # 创建时区显示标签的引用
+            self.advanced_timezone_label = ttk.Label(row5_frame, text="UTC+6", foreground="blue")
+            self.advanced_timezone_label.grid(row=0, column=7, sticky=tk.W, padx=5)
+
+            # 保存GPS按钮
+            save_gps_btn = ttk.Button(row5_frame, text="保存GPS",
+                                     command=self.fits_viewer._save_gps_settings)
+            save_gps_btn.grid(row=0, column=8, sticky=tk.W, padx=(10, 5))
+
+            # MPC代码
+            mpc_label = ttk.Label(row5_frame, text="MPC代码:")
+            mpc_label.grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=(10, 0))
+
+            mpc_entry = ttk.Entry(row5_frame, textvariable=self.fits_viewer.mpc_code_var, width=10)
+            mpc_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=(10, 0))
+
+            # 保存MPC按钮
+            save_mpc_btn = ttk.Button(row5_frame, text="保存MPC",
+                                     command=self.fits_viewer._save_mpc_settings)
+            save_mpc_btn.grid(row=1, column=2, sticky=tk.W, padx=(10, 5), pady=(10, 0), columnspan=2)
+
+        # 底部说明
+        bottom_info = ttk.Label(main_container,
+                               text="提示：所有设置修改会自动保存，并在下次启动时生效。",
+                               foreground="blue", font=("Arial", 9))
+        bottom_info.pack(side=tk.BOTTOM, pady=(20, 0))
 
     def _create_log_widgets(self):
         """创建日志界面"""

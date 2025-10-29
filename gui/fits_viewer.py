@@ -195,128 +195,39 @@ class FitsImageViewer:
             if not self.wcs_checker:
                 self.wcs_check_button.config(state="disabled", text="WCS检查不可用")
 
-        # 第一行工具栏（降噪方式等）
-        toolbar_frame1 = ttk.Frame(toolbar_container)
-        toolbar_frame1.pack(fill=tk.X, pady=(0, 2))
-
-        # 降噪方式选择框架
-        noise_frame = ttk.Frame(toolbar_frame1)
-        noise_frame.pack(side=tk.LEFT, padx=(0, 0))
-
-        # 降噪方式标签
-        ttk.Label(noise_frame, text="降噪方式:").pack(side=tk.LEFT)
-
-        # 降噪方式复选框
+        # 初始化高级设置变量（这些变量会在高级设置标签页中使用）
         self.outlier_var = tk.BooleanVar(value=False)  # 默认不选中outlier
         self.hot_cold_var = tk.BooleanVar(value=False)  # 默认不选中hot_cold
         self.adaptive_median_var = tk.BooleanVar(value=True)  # 默认选中adaptive_median
-
-        self.outlier_checkbox = ttk.Checkbutton(noise_frame, text="Outlier",
-                                              variable=self.outlier_var)
-        self.outlier_checkbox.pack(side=tk.LEFT, padx=(5, 0))
-
-        self.hot_cold_checkbox = ttk.Checkbutton(noise_frame, text="Hot/Cold",
-                                               variable=self.hot_cold_var)
-        self.hot_cold_checkbox.pack(side=tk.LEFT, padx=(5, 0))
-
-        self.adaptive_median_checkbox = ttk.Checkbutton(noise_frame, text="Adaptive Median",
-                                                      variable=self.adaptive_median_var)
-        self.adaptive_median_checkbox.pack(side=tk.LEFT, padx=(5, 0))
-
-        # 去除亮线选项
         self.remove_lines_var = tk.BooleanVar(value=True)  # 默认选中去除亮线
-        self.remove_lines_checkbox = ttk.Checkbutton(noise_frame, text="去除亮线",
-                                                     variable=self.remove_lines_var)
-        self.remove_lines_checkbox.pack(side=tk.LEFT, padx=(5, 0))
+        self.alignment_var = tk.StringVar(value="wcs")  # 默认选择wcs
+        self.jaggedness_ratio_var = tk.StringVar(value="2.0")
+        self.detection_method_var = tk.StringVar(value="contour")
+        self.score_threshold_var = tk.StringVar(value="3.0")
+        self.aligned_snr_threshold_var = tk.StringVar(value="2.0")
+        self.sort_by_var = tk.StringVar(value="aligned_snr")
 
-        # 图像统计信息标签（放在第一行右侧）
+        # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
+        self.gps_lat_var = tk.StringVar(value="43.4")
+        self.gps_lon_var = tk.StringVar(value="87.1")
+        self.mpc_code_var = tk.StringVar(value="N87")
+
+        # 第一行工具栏（图像统计信息）
+        toolbar_frame1 = ttk.Frame(toolbar_container)
+        toolbar_frame1.pack(fill=tk.X, pady=(0, 2))
+
+        # 图像统计信息标签
         self.stats_label = ttk.Label(toolbar_frame1, text="")
-        self.stats_label.pack(side=tk.RIGHT)
+        self.stats_label.pack(side=tk.LEFT)
 
-        # 第二行工具栏
+        # 第二行工具栏（diff操作按钮）
         toolbar_frame2 = ttk.Frame(toolbar_container)
         toolbar_frame2.pack(fill=tk.X, pady=(2, 0))
-
-        # 对齐方式选择框架
-        alignment_frame = ttk.Frame(toolbar_frame2)
-        alignment_frame.pack(side=tk.LEFT, padx=(0, 0))
-
-        # 对齐方式标签
-        ttk.Label(alignment_frame, text="对齐方式:").pack(side=tk.LEFT)
-
-        # 对齐方式单选框
-        self.alignment_var = tk.StringVar(value="wcs")  # 默认选择wcs
-
-        alignment_methods = [
-            ("Rigid", "rigid", "刚体变换（平移+旋转）"),
-            ("WCS", "wcs", "基于WCS信息对齐"),
-            ("Astropy", "astropy_reproject", "Astropy Reproject对齐"),
-            ("SWarp", "swarp", "SWarp对齐")
-        ]
-
-        for text, value, tooltip in alignment_methods:
-            rb = ttk.Radiobutton(alignment_frame, text=text,
-                               variable=self.alignment_var, value=value)
-            rb.pack(side=tk.LEFT, padx=(5, 0))
-            # 可以考虑添加tooltip功能
-
-        # 锯齿比率输入框架
-        jaggedness_frame = ttk.Frame(toolbar_frame2)
-        jaggedness_frame.pack(side=tk.LEFT, padx=(10, 0))
-
-        ttk.Label(jaggedness_frame, text="锯齿比率:").pack(side=tk.LEFT)
-        self.jaggedness_ratio_var = tk.StringVar(value="2.0")
-        jaggedness_entry = ttk.Entry(jaggedness_frame, textvariable=self.jaggedness_ratio_var, width=6)
-        jaggedness_entry.pack(side=tk.LEFT, padx=(2, 0))
-
-        # 检测方法单选框架
-        detection_method_frame = ttk.Frame(toolbar_frame2)
-        detection_method_frame.pack(side=tk.LEFT, padx=(10, 0))
-
-        ttk.Label(detection_method_frame, text="检测方法:").pack(side=tk.LEFT)
-        self.detection_method_var = tk.StringVar(value="contour")
-
-        detection_contour_radio = ttk.Radiobutton(detection_method_frame, text="轮廓",
-                                                  variable=self.detection_method_var, value="contour")
-        detection_contour_radio.pack(side=tk.LEFT, padx=(2, 0))
-
-        detection_blob_radio = ttk.Radiobutton(detection_method_frame, text="SimpleBlobDetector",
-                                               variable=self.detection_method_var, value="simple_blob")
-        detection_blob_radio.pack(side=tk.LEFT, padx=(2, 0))
-
-        # 综合得分阈值输入框架
-        score_threshold_frame = ttk.Frame(toolbar_frame2)
-        score_threshold_frame.pack(side=tk.LEFT, padx=(10, 0))
-
-        ttk.Label(score_threshold_frame, text="综合得分>").pack(side=tk.LEFT)
-        self.score_threshold_var = tk.StringVar(value="3.0")
-        score_threshold_entry = ttk.Entry(score_threshold_frame, textvariable=self.score_threshold_var, width=6)
-        score_threshold_entry.pack(side=tk.LEFT, padx=(2, 0))
-
-        # Aligned SNR阈值输入框架
-        aligned_snr_frame = ttk.Frame(toolbar_frame2)
-        aligned_snr_frame.pack(side=tk.LEFT, padx=(5, 0))
-
-        ttk.Label(aligned_snr_frame, text="Aligned SNR>").pack(side=tk.LEFT)
-        self.aligned_snr_threshold_var = tk.StringVar(value="2.0")
-        aligned_snr_entry = ttk.Entry(aligned_snr_frame, textvariable=self.aligned_snr_threshold_var, width=6)
-        aligned_snr_entry.pack(side=tk.LEFT, padx=(2, 0))
-
-        # 排序方式下拉框架
-        sort_by_frame = ttk.Frame(toolbar_frame2)
-        sort_by_frame.pack(side=tk.LEFT, padx=(10, 0))
-
-        ttk.Label(sort_by_frame, text="排序:").pack(side=tk.LEFT)
-        self.sort_by_var = tk.StringVar(value="aligned_snr")
-        sort_by_combo = ttk.Combobox(sort_by_frame, textvariable=self.sort_by_var,
-                                     values=["quality_score", "aligned_snr", "snr"],
-                                     state="readonly", width=12)
-        sort_by_combo.pack(side=tk.LEFT, padx=(2, 0))
 
         # diff操作按钮
         self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
-        self.diff_button.pack(side=tk.LEFT, padx=(10, 0))
+        self.diff_button.pack(side=tk.LEFT, padx=(0, 0))
 
         # ASTAP处理按钮
         self.astap_button = ttk.Button(toolbar_frame2, text="执行ASTAP",
@@ -431,43 +342,10 @@ class FitsImageViewer:
         self.time_local_entry = ttk.Entry(toolbar_frame5, width=20)
         self.time_local_entry.pack(side=tk.LEFT, padx=(0, 10))
 
-        # GPS位置信息（移到第五行结尾）
-        ttk.Label(toolbar_frame5, text="  |  GPS:").pack(side=tk.LEFT, padx=(10, 2))
-
-        # 纬度
-        ttk.Label(toolbar_frame5, text="纬度:").pack(side=tk.LEFT, padx=(5, 2))
-        self.gps_lat_var = tk.StringVar(value="43.4")
-        self.gps_lat_entry = ttk.Entry(toolbar_frame5, textvariable=self.gps_lat_var, width=8)
-        self.gps_lat_entry.pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Label(toolbar_frame5, text="N").pack(side=tk.LEFT, padx=(0, 5))
-
-        # 经度
-        ttk.Label(toolbar_frame5, text="经度:").pack(side=tk.LEFT, padx=(5, 2))
-        self.gps_lon_var = tk.StringVar(value="87.1")
-        self.gps_lon_entry = ttk.Entry(toolbar_frame5, textvariable=self.gps_lon_var, width=8)
-        self.gps_lon_entry.pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Label(toolbar_frame5, text="E").pack(side=tk.LEFT, padx=(0, 5))
-
-        # 计算时区显示
-        ttk.Label(toolbar_frame5, text="时区:").pack(side=tk.LEFT, padx=(5, 2))
+        # 时区显示标签（需要保留，用于显示计算的时区）
+        ttk.Label(toolbar_frame5, text="时区:").pack(side=tk.LEFT, padx=(10, 2))
         self.timezone_label = ttk.Label(toolbar_frame5, text="UTC+6", foreground="blue")
         self.timezone_label.pack(side=tk.LEFT, padx=(0, 5))
-
-        # 保存GPS按钮
-        self.save_gps_button = ttk.Button(toolbar_frame5, text="保存GPS",
-                                         command=self._save_gps_settings)
-        self.save_gps_button.pack(side=tk.LEFT, padx=(5, 5))
-
-        # MPC观测站代码
-        ttk.Label(toolbar_frame5, text="MPC:").pack(side=tk.LEFT, padx=(5, 2))
-        self.mpc_code_var = tk.StringVar(value="N87")
-        self.mpc_code_entry = ttk.Entry(toolbar_frame5, textvariable=self.mpc_code_var, width=6)
-        self.mpc_code_entry.pack(side=tk.LEFT, padx=(0, 2))
-
-        # 保存MPC代码按钮
-        self.save_mpc_button = ttk.Button(toolbar_frame5, text="保存MPC",
-                                         command=self._save_mpc_settings)
-        self.save_mpc_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # 查询设置和结果显示（第六行工具栏）
         toolbar_frame6 = ttk.Frame(toolbar_container)
@@ -1051,10 +929,15 @@ class FitsImageViewer:
             timezone_offset = max(-12, min(14, timezone_offset))
 
             # 更新时区标签
-            if timezone_offset >= 0:
-                self.timezone_label.config(text=f"UTC+{timezone_offset}")
-            else:
-                self.timezone_label.config(text=f"UTC{timezone_offset}")
+            timezone_text = f"UTC+{timezone_offset}" if timezone_offset >= 0 else f"UTC{timezone_offset}"
+            self.timezone_label.config(text=timezone_text)
+
+            # 同时更新高级设置标签页中的时区显示（如果存在）
+            if hasattr(self, 'parent_frame') and hasattr(self.parent_frame.master.master, 'advanced_timezone_label'):
+                try:
+                    self.parent_frame.master.master.advanced_timezone_label.config(text=timezone_text)
+                except:
+                    pass  # 如果高级设置标签页还未创建，忽略错误
 
             self.logger.info(f"时区已更新: 经度={longitude}°E → UTC{timezone_offset:+d}")
 
