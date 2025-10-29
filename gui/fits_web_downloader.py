@@ -1759,13 +1759,13 @@ Diff统计:
         thread.start()
 
     def _batch_process_thread(self, selected_files):
-        """批量处理线程"""
+        """批量处理线程（使用流水线模式）"""
         try:
             # 获取线程数配置
             thread_count = self.url_builder.get_thread_count()
 
             self._log("=" * 60)
-            self._log("开始批量处理")
+            self._log("开始批量处理（流水线模式）")
             self._log(f"线程数: {thread_count}")
             self._log("=" * 60)
 
@@ -1806,335 +1806,14 @@ Diff统计:
             self._log(f"输出根目录: {self.last_batch_output_root}")
             self._log(f"目录结构: {tel_name}/{date}/{k_number}")
 
-            # 步骤1: 下载文件（启用ASTAP处理）
-            self._log("\n步骤1: 下载文件（启用ASTAP处理）")
+            # 使用流水线模式处理
+            self._log("\n使用流水线模式: 下载 → ASTAP → Diff")
             self._log("-" * 60)
-            self.root.after(0, lambda: self.status_label.config(text="正在下载并处理ASTAP..."))
-
-            # 创建下载器（强制启用ASTAP）
-            self.downloader = FitsDownloader(
-                max_workers=self.max_workers_var.get(),
-                retry_times=self.retry_times_var.get(),
-                timeout=self.timeout_var.get(),
-                enable_astap=True,  # 批量处理时强制启用ASTAP
-                astap_config_path="config/url_config.json"
-            )
-
-            # 检查ASTAP处理器是否成功初始化
-            if self.downloader.astap_processor:
-                self._log("✓ ASTAP处理器已启用")
-            else:
-                self._log("✗ 警告: ASTAP处理器未启用，WCS对齐可能失败")
-                self._log("  请检查ASTAP是否正确安装和配置")
-
-            # 准备URL列表
-            urls = [url for filename, url in selected_files]
-
-            # 执行下载
-            self._log(f"开始下载 {len(urls)} 个文件...")
-            self.root.after(0, lambda: self.batch_progress_label.config(
-                text=f"正在下载 {len(urls)} 个文件..."))
-
-            # 更新所有文件状态为下载中
-            for filename, url in selected_files:
-                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                    f, BatchStatusWidget.STATUS_DOWNLOADING))
-
-            self._download_with_progress(urls, actual_download_dir)
-            self._log("下载完成")
-
-            # 步骤1.5: 检查WCS信息并准备文件列表
-            self._log("\n步骤1.5: 检查WCS信息")
-            self._log("-" * 60)
-            self.root.after(0, lambda: self.batch_progress_label.config(text="检查WCS信息..."))
-
-            # 获取下载的文件列表
-            downloaded_files = []
-            for filename, url in selected_files:
-                file_path = os.path.join(actual_download_dir, filename)
-                if os.path.exists(file_path):
-                    downloaded_files.append(file_path)
-                    # 更新状态为下载成功
-                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_DOWNLOAD_SUCCESS))
-                else:
-                    self._log(f"警告: 文件未找到 {filename}")
-                    # 更新状态为下载失败
-                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_DOWNLOAD_FAILED, "文件未找到"))
-
-            self._log(f"找到 {len(downloaded_files)} 个已下载的文件")
-
-            # 检查每个文件的WCS信息
-            files_with_wcs = []
-            files_without_wcs = []
-
-            for file_path in downloaded_files:
-                filename = os.path.basename(file_path)
-
-                # 更新状态为检查WCS
-                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                    f, BatchStatusWidget.STATUS_WCS_CHECKING))
-
-                try:
-                    # 检查是否有WCS信息
-                    from astropy.io import fits as astropy_fits
-                    with astropy_fits.open(file_path) as hdul:
-                        header = hdul[0].header
-                        has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
-
-                    if has_wcs:
-                        files_with_wcs.append(file_path)
-                        self._log(f"  {filename}: ✓ 已有WCS信息")
-                        # 更新状态为有WCS
-                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_WCS_FOUND))
-                    else:
-                        files_without_wcs.append(file_path)
-                        self._log(f"  {filename}: ✗ 缺少WCS信息")
-                        # 更新状态为缺少WCS
-                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_WCS_MISSING))
-                except Exception as e:
-                    files_without_wcs.append(file_path)
-                    self._log(f"  {filename}: 检查WCS时出错: {str(e)}")
-                    # 更新状态为缺少WCS（错误）
-                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_WCS_MISSING, f"错误: {str(e)}"))
-
-            self._log(f"WCS检查完成: {len(files_with_wcs)} 个有WCS, {len(files_without_wcs)} 个无WCS")
-
-            # 对没有WCS信息的文件执行ASTAP处理
-            if files_without_wcs:
-                self._log(f"\n对 {len(files_without_wcs)} 个没有WCS信息的文件执行ASTAP处理...")
-
-                if self.fits_viewer.astap_processor:
-                    self.root.after(0, lambda: self.batch_progress_label.config(
-                        text=f"正在为 {len(files_without_wcs)} 个文件添加WCS信息..."))
-
-                    # 使用线程池并行处理ASTAP（与diff操作使用相同的线程数）
-                    from concurrent.futures import ThreadPoolExecutor, as_completed
-                    import threading
-
-                    # 创建线程锁用于更新计数器
-                    astap_counter_lock = threading.Lock()
-                    astap_completed_count = 0
-                    astap_success_count = 0
-                    astap_fail_count = 0
-
-                    # 创建线程池，使用与diff操作相同的线程数
-                    with ThreadPoolExecutor(max_workers=thread_count) as executor:
-                        # 提交所有ASTAP任务
-                        future_to_file = {}
-                        for file_path in files_without_wcs:
-                            filename = os.path.basename(file_path)
-                            
-                            # 更新状态为ASTAP处理中
-                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
-
-                            future = executor.submit(
-                                self._process_single_astap,
-                                file_path
-                            )
-                            future_to_file[future] = file_path
-
-                        # 处理完成的ASTAP任务
-                        for future in as_completed(future_to_file):
-                            file_path = future_to_file[future]
-                            filename = os.path.basename(file_path)
-
-                            with astap_counter_lock:
-                                astap_completed_count += 1
-                                current_completed = astap_completed_count
-
-                            # 更新进度显示
-                            progress_text = f"ASTAP处理中 ({current_completed}/{len(files_without_wcs)}): 并行处理中..."
-                            self.root.after(0, lambda t=progress_text: self.batch_progress_label.config(text=t))
-
-                            try:
-                                result = future.result()
-                                
-                                # 记录日志
-                                self._log(f"\n[{current_completed}/{len(files_without_wcs)}] {filename}")
-
-                                # 检查result是否为字典（正确处理ASTAP结果）
-                                if isinstance(result, dict) and 'success' in result:
-                                    if result['success']:
-                                        # ASTAP处理成功，重新检查WCS
-                                        from astropy.io import fits as astropy_fits
-                                        with astropy_fits.open(file_path) as hdul:
-                                            header = hdul[0].header
-                                            has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
-
-                                        if has_wcs:
-                                            files_with_wcs.append(file_path)
-                                            astap_success_count += 1
-                                            self._log(f"  ✓ ASTAP处理成功，已添加WCS信息")
-                                            # 更新状态为ASTAP成功
-                                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                                f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
-                                        else:
-                                            astap_fail_count += 1
-                                            self._log(f"  ✗ ASTAP处理完成但未添加WCS信息")
-                                            # 更新状态为ASTAP失败
-                                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
-                                    else:
-                                        astap_fail_count += 1
-                                        error_msg = result.get('message', '未知错误') if isinstance(result, dict) else str(result)
-                                        self._log(f"  ✗ ASTAP处理失败: {error_msg}")
-                                        # 更新状态为ASTAP失败
-                                        self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
-                                            f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
-                                else:
-                                    # 处理意外返回类型
-                                    astap_fail_count += 1
-                                    error_msg = f"意外的返回类型: {type(result)}"
-                                    self._log(f"  ✗ ASTAP处理失败: {error_msg}")
-                                    # 更新状态为ASTAP失败
-                                    self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
-                                        f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
-
-                                # 更新统计信息
-                                stats_text = f"ASTAP已完成: {current_completed}/{len(files_without_wcs)} | 成功: {astap_success_count} | 失败: {astap_fail_count}"
-                                self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
-
-                            except Exception as e:
-                                astap_fail_count += 1
-                                self._log(f"  ✗ ASTAP处理异常: {str(e)}")
-                                self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
-                                    f, BatchStatusWidget.STATUS_ASTAP_FAILED, err))
-
-                    self._log(f"ASTAP处理完成，现在共有 {len(files_with_wcs)} 个文件包含WCS信息")
-                    self._log(f"ASTAP处理统计: 成功 {astap_success_count} 个，失败 {astap_fail_count} 个")
-                else:
-                    self._log("警告: ASTAP处理器不可用，无法添加WCS信息")
-
-            if not files_with_wcs:
-                self._log("没有包含WCS信息的文件，批量处理结束")
-                return
-
-            # 步骤2: 执行Diff操作（只处理有WCS信息的文件）
-            self._log("\n步骤2: 执行Diff操作")
-            self._log("-" * 60)
-            self.root.after(0, lambda: self.batch_progress_label.config(
-                text=f"准备执行Diff操作 ({len(files_with_wcs)} 个文件)..."))
-
-            # 对每个有WCS信息的文件执行diff
-            success_count = 0
-            fail_count = 0
-
-            template_dir = self.template_dir_var.get().strip()
-
-            # 从fits_viewer的控件获取配置参数（控件已从配置文件加载）
-            noise_methods = []
-            if self.fits_viewer.outlier_var.get():
-                noise_methods.append('outlier')
-            if self.fits_viewer.hot_cold_var.get():
-                noise_methods.append('hot_cold')
-            if self.fits_viewer.adaptive_median_var.get():
-                noise_methods.append('adaptive_median')
-
-            alignment_method = self.fits_viewer.alignment_var.get()
-            remove_bright_lines = self.fits_viewer.remove_lines_var.get()
-            stretch_method = self.fits_viewer.stretch_method_var.get()
-            fast_mode = self.fits_viewer.fast_mode_var.get()
-
-            # 获取百分位数参数
-            percentile_low = 99.95
-            if stretch_method == 'percentile':
-                try:
-                    percentile_low = float(self.fits_viewer.percentile_var.get())
-                except:
-                    percentile_low = 99.95
-
-            # 获取排序方式参数
-            sort_by = self.fits_viewer.sort_by_var.get()
-
-            self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}, 排序方式={sort_by}")
-            self._log(f"使用 {thread_count} 个线程并行处理")
-
-            # 使用线程池并行处理
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            import threading
-
-            # 创建线程锁用于更新计数器
-            counter_lock = threading.Lock()
-            completed_count = 0
-
-            # 创建线程池
-            with ThreadPoolExecutor(max_workers=thread_count) as executor:
-                # 提交所有任务
-                future_to_file = {}
-                for download_file in files_with_wcs:
-                    filename = os.path.basename(download_file)
-                    # 更新状态为Diff处理中
-                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_DIFF_PROCESSING))
-
-                    future = executor.submit(
-                        self._process_single_diff,
-                        download_file, template_dir, noise_methods, alignment_method,
-                        remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by
-                    )
-                    future_to_file[future] = download_file
-
-                # 处理完成的任务
-                for future in as_completed(future_to_file):
-                    download_file = future_to_file[future]
-                    filename = os.path.basename(download_file)
-
-                    with counter_lock:
-                        completed_count += 1
-                        current_completed = completed_count
-
-                    # 更新进度显示
-                    progress_text = f"Diff处理中 ({current_completed}/{len(files_with_wcs)}): 并行处理中..."
-                    self.root.after(0, lambda t=progress_text: self.batch_progress_label.config(text=t))
-
-                    try:
-                        result_dict = future.result()
-
-                        # 记录日志
-                        self._log(f"\n[{current_completed}/{len(files_with_wcs)}] {filename}")
-
-                        if result_dict['success']:
-                            if result_dict.get('skipped'):
-                                # 跳过的文件
-                                success_count += 1
-                                self._log(f"  ⊙ 已存在处理结果，跳过")
-                                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                    f, BatchStatusWidget.STATUS_DIFF_SKIPPED, "已有结果"))
-                            else:
-                                # 成功处理
-                                success_count += 1
-                                new_spots = result_dict['new_spots']
-                                self._log(f"  ✓ 成功 - 检测到 {new_spots} 个新亮点")
-                                self.root.after(0, lambda f=filename, n=new_spots: self.batch_status_widget.update_status(
-                                    f, BatchStatusWidget.STATUS_DIFF_SUCCESS, f"{n}个亮点"))
-                        else:
-                            # 失败
-                            fail_count += 1
-                            self._log(f"  ✗ {result_dict['message']}")
-                            self.root.after(0, lambda f=filename, msg=result_dict['message']: self.batch_status_widget.update_status(
-                                f, BatchStatusWidget.STATUS_DIFF_FAILED, msg))
-
-                        # 更新统计信息
-                        stats_text = f"已完成: {current_completed}/{len(files_with_wcs)} | 成功: {success_count} | 失败: {fail_count}"
-                        self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
-
-                    except Exception as e:
-                        fail_count += 1
-                        self._log(f"  ✗ 处理异常: {str(e)}")
-                        self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_DIFF_FAILED, err))
+            self._pipeline_process_files(selected_files, actual_download_dir, thread_count)
 
             # 完成
             self._log("\n" + "=" * 60)
-            self._log("批量处理完成")
-            self._log(f"成功: {success_count} 个")
-            self._log(f"失败: {fail_count} 个")
+            self._log("批量处理完成（流水线模式）")
             self._log("=" * 60)
 
             # 更新批量处理状态标签页的进度信息
@@ -2151,7 +1830,7 @@ Diff统计:
             )
             self.root.after(0, lambda t=final_stats_text: self.batch_stats_label.config(text=t))
 
-            self.root.after(0, lambda: self.status_label.config(text=f"批量处理完成 (成功:{success_count} 失败:{fail_count})"))
+            self.root.after(0, lambda: self.status_label.config(text=f"批量处理完成"))
 
             # 启用打开输出目录按钮
             if self.last_batch_output_root and os.path.exists(self.last_batch_output_root):
@@ -2160,6 +1839,8 @@ Diff统计:
         except Exception as e:
             error_msg = f"批量处理失败: {str(e)}"
             self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
             self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
         finally:
             # 重新启用按钮
@@ -2376,8 +2057,8 @@ Diff统计:
 
     def _batch_process_region(self, selected_files, tel_name, date, k_number):
         """
-        处理单个天区的批量下载和diff操作
-        这个方法复用现有的批量处理逻辑
+        处理单个天区的批量下载和diff操作（流水线模式）
+        下载完一个文件 → 立即ASTAP → 立即Diff
 
         Args:
             selected_files: [(filename, url), ...] 文件列表
@@ -2400,62 +2081,210 @@ Diff统计:
             base_output_dir = self.diff_output_dir_var.get().strip()
             self.last_batch_output_root = os.path.join(base_output_dir, tel_name, date, k_number)
 
-            # 步骤1: 下载文件（启用ASTAP处理）
-            self._log("\n步骤1: 下载文件（启用ASTAP处理）")
+            # 使用流水线模式处理
+            self._log("\n使用流水线模式: 下载 → ASTAP → Diff")
             self._log("-" * 60)
-            self.root.after(0, lambda: self.status_label.config(text=f"正在下载 {k_number} 的文件..."))
+            self.root.after(0, lambda: self.status_label.config(text=f"正在流水线处理 {k_number} 的文件..."))
 
-            # 创建下载器（强制启用ASTAP）
-            self.downloader = FitsDownloader(
-                max_workers=self.max_workers_var.get(),
-                retry_times=self.retry_times_var.get(),
-                timeout=self.timeout_var.get(),
-                enable_astap=True,
-                astap_config_path="config/url_config.json"
-            )
+            # 调用流水线处理方法
+            self._pipeline_process_files(selected_files, actual_download_dir, thread_count)
 
-            # 准备URL列表
-            urls = [url for filename, url in selected_files]
+        except Exception as e:
+            self._log(f"处理天区 {k_number} 时出错: {str(e)}")
+            import traceback
+            self._log(traceback.format_exc())
 
-            # 执行下载
-            self._log(f"开始下载 {len(urls)} 个文件...")
+    def _pipeline_process_files(self, selected_files, download_dir, thread_count):
+        """
+        流水线处理文件：下载 → ASTAP → Diff
+        每下载完一个文件，立即进行ASTAP处理，ASTAP完成后立即进行Diff处理
 
-            # 更新所有文件状态为下载中
-            for filename, url in selected_files:
-                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                    f, BatchStatusWidget.STATUS_DOWNLOADING))
+        Args:
+            selected_files: [(filename, url), ...] 文件列表
+            download_dir: 下载目录
+            thread_count: 线程数
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+        import queue
 
-            self._download_with_progress(urls, actual_download_dir)
-            self._log("下载完成")
+        # 创建队列用于流水线处理
+        astap_queue = queue.Queue()  # 下载完成的文件队列
+        diff_queue = queue.Queue()   # ASTAP完成的文件队列
 
-            # 步骤1.5: 检查WCS信息并准备文件列表
-            self._log("\n步骤1.5: 检查WCS信息")
-            self._log("-" * 60)
+        # 统计信息
+        stats_lock = threading.Lock()
+        stats = {
+            'download_completed': 0,
+            'download_failed': 0,
+            'astap_completed': 0,
+            'astap_success': 0,
+            'astap_failed': 0,
+            'diff_completed': 0,
+            'diff_success': 0,
+            'diff_failed': 0,
+            'total_files': len(selected_files)
+        }
 
-            # 获取下载的文件列表
-            downloaded_files = []
-            for filename, url in selected_files:
-                file_path = os.path.join(actual_download_dir, filename)
-                if os.path.exists(file_path):
-                    downloaded_files.append(file_path)
+        # 停止标志
+        stop_event = threading.Event()
+
+        # 获取diff配置参数
+        template_dir = self.template_dir_var.get().strip()
+        noise_methods = []
+        if self.fits_viewer.outlier_var.get():
+            noise_methods.append('outlier')
+        if self.fits_viewer.hot_cold_var.get():
+            noise_methods.append('hot_cold')
+        if self.fits_viewer.adaptive_median_var.get():
+            noise_methods.append('adaptive_median')
+        alignment_method = self.fits_viewer.alignment_var.get()
+        remove_bright_lines = self.fits_viewer.remove_lines_var.get()
+        stretch_method = self.fits_viewer.stretch_method_var.get()
+        fast_mode = self.fits_viewer.fast_mode_var.get()
+        percentile_low = 99.95
+        if stretch_method == 'percentile':
+            try:
+                percentile_low = float(self.fits_viewer.percentile_entry.get())
+            except:
+                percentile_low = 99.95
+        sort_by = self.fits_viewer.sort_by_var.get()
+
+        # 启动ASTAP工作线程池
+        def astap_worker():
+            """ASTAP处理工作线程"""
+            while not stop_event.is_set():
+                try:
+                    file_path = astap_queue.get(timeout=1)
+                    if file_path is None:  # 结束信号
+                        break
+
+                    filename = os.path.basename(file_path)
+                    self._log(f"[ASTAP] 开始处理: {filename}")
                     self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_DOWNLOAD_SUCCESS))
-                else:
-                    self._log(f"警告: 文件未找到 {filename}")
+                        f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
+
+                    # 执行ASTAP处理
+                    result = self._process_single_astap(file_path)
+
+                    with stats_lock:
+                        stats['astap_completed'] += 1
+
+                    if result and result.get('success'):
+                        # 检查WCS
+                        from astropy.io import fits as astropy_fits
+                        with astropy_fits.open(file_path) as hdul:
+                            header = hdul[0].header
+                            has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
+
+                        if has_wcs:
+                            with stats_lock:
+                                stats['astap_success'] += 1
+                            self._log(f"[ASTAP] ✓ 成功: {filename}")
+                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
+                            # 放入diff队列
+                            diff_queue.put(file_path)
+                        else:
+                            with stats_lock:
+                                stats['astap_failed'] += 1
+                            self._log(f"[ASTAP] ✗ 失败(无WCS): {filename}")
+                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
+                    else:
+                        with stats_lock:
+                            stats['astap_failed'] += 1
+                        error_msg = result.get('message', '未知错误') if result else '处理失败'
+                        self._log(f"[ASTAP] ✗ 失败: {filename} - {error_msg}")
+                        self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
+
+                    # 更新统计
+                    self._update_pipeline_stats(stats)
+
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    self._log(f"[ASTAP] 异常: {str(e)}")
+
+        # 启动Diff工作线程池
+        def diff_worker():
+            """Diff处理工作线程"""
+            while not stop_event.is_set():
+                try:
+                    file_path = diff_queue.get(timeout=1)
+                    if file_path is None:  # 结束信号
+                        break
+
+                    filename = os.path.basename(file_path)
+                    self._log(f"[Diff] 开始处理: {filename}")
                     self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_DOWNLOAD_FAILED, "文件未找到"))
+                        f, BatchStatusWidget.STATUS_DIFF_PROCESSING))
 
-            self._log(f"找到 {len(downloaded_files)} 个已下载的文件")
+                    # 执行Diff处理
+                    result = self._process_single_diff(
+                        file_path, template_dir, noise_methods, alignment_method,
+                        remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by
+                    )
 
-            # 检查每个文件的WCS信息
-            files_with_wcs = []
-            files_without_wcs = []
+                    with stats_lock:
+                        stats['diff_completed'] += 1
 
-            for file_path in downloaded_files:
-                filename = os.path.basename(file_path)
+                    if result and result.get('success'):
+                        with stats_lock:
+                            stats['diff_success'] += 1
+                        new_spots = result.get('new_spots', 0)
+                        self._log(f"[Diff] ✓ 成功: {filename} - {new_spots}个亮点")
+                        self.root.after(0, lambda f=filename, n=new_spots: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_SUCCESS, f"{n}个亮点"))
+                    else:
+                        with stats_lock:
+                            stats['diff_failed'] += 1
+                        error_msg = result.get('message', '未知错误') if result else '处理失败'
+                        self._log(f"[Diff] ✗ 失败: {filename} - {error_msg}")
+                        self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_FAILED, msg))
+
+                    # 更新统计
+                    self._update_pipeline_stats(stats)
+
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    self._log(f"[Diff] 异常: {str(e)}")
+
+        # 启动ASTAP和Diff工作线程
+        astap_threads = []
+        diff_threads = []
+
+        for i in range(thread_count):
+            t = threading.Thread(target=astap_worker, daemon=True)
+            t.start()
+            astap_threads.append(t)
+
+        for i in range(thread_count):
+            t = threading.Thread(target=diff_worker, daemon=True)
+            t.start()
+            diff_threads.append(t)
+
+        self._log(f"启动了 {thread_count} 个ASTAP工作线程和 {thread_count} 个Diff工作线程")
+
+        # 下载文件并放入ASTAP队列（单线程下载）
+        self._log("\n开始下载文件...")
+        for idx, (filename, url) in enumerate(selected_files, 1):
+            self._log(f"[下载] [{idx}/{len(selected_files)}] {filename}")
+            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                f, BatchStatusWidget.STATUS_DOWNLOADING))
+
+            file_path = os.path.join(download_dir, filename)
+
+            # 检查文件是否已存在
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                self._log(f"[下载] ⊙ 文件已存在，跳过下载: {filename}")
                 self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                    f, BatchStatusWidget.STATUS_WCS_CHECKING))
+                    f, BatchStatusWidget.STATUS_DOWNLOAD_SUCCESS))
 
+                # 检查是否已有WCS
                 try:
                     from astropy.io import fits as astropy_fits
                     with astropy_fits.open(file_path) as hdul:
@@ -2463,141 +2292,106 @@ Diff统计:
                         has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
 
                     if has_wcs:
-                        files_with_wcs.append(file_path)
-                        self._log(f"  {filename}: ✓ 已有WCS信息")
-                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_WCS_FOUND))
+                        self._log(f"[下载] ✓ 文件已有WCS，直接进入Diff队列: {filename}")
+                        diff_queue.put(file_path)
                     else:
-                        files_without_wcs.append(file_path)
-                        self._log(f"  {filename}: ✗ 缺少WCS信息")
-                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_WCS_MISSING))
-                except Exception as e:
-                    files_without_wcs.append(file_path)
-                    self._log(f"  {filename}: 检查WCS时出错: {str(e)}")
+                        self._log(f"[下载] → 文件无WCS，进入ASTAP队列: {filename}")
+                        astap_queue.put(file_path)
+                except:
+                    astap_queue.put(file_path)
+
+                with stats_lock:
+                    stats['download_completed'] += 1
+                continue
+
+            # 下载文件
+            try:
+                # 使用现有的下载器
+                if not self.downloader:
+                    self.downloader = FitsDownloader(
+                        max_workers=1,
+                        retry_times=self.retry_times_var.get(),
+                        timeout=self.timeout_var.get(),
+                        enable_astap=False,  # 不在下载器中处理ASTAP
+                        astap_config_path="config/url_config.json"
+                    )
+
+                result = self.downloader.download_single_file(url, download_dir)
+
+                if "成功" in result:
+                    with stats_lock:
+                        stats['download_completed'] += 1
+                    self._log(f"[下载] ✓ 成功: {filename}")
                     self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_WCS_MISSING, f"错误: {str(e)}"))
+                        f, BatchStatusWidget.STATUS_DOWNLOAD_SUCCESS))
 
-            self._log(f"WCS检查完成: {len(files_with_wcs)} 个有WCS, {len(files_without_wcs)} 个无WCS")
+                    # 检查是否已有WCS
+                    try:
+                        from astropy.io import fits as astropy_fits
+                        with astropy_fits.open(file_path) as hdul:
+                            header = hdul[0].header
+                            has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
 
-            # 对没有WCS信息的文件执行ASTAP处理
-            if files_without_wcs:
-                self._log(f"\n对 {len(files_without_wcs)} 个没有WCS信息的文件执行ASTAP处理...")
-
-                if self.fits_viewer.astap_processor:
-                    self.root.after(0, lambda: self.batch_progress_label.config(
-                        text=f"正在为 {len(files_without_wcs)} 个文件添加WCS信息..."))
-
-                    # 使用线程池并行处理ASTAP（与diff操作使用相同的线程数）
-                    from concurrent.futures import ThreadPoolExecutor, as_completed
-                    import threading
-
-                    # 创建线程锁用于更新计数器
-                    astap_counter_lock = threading.Lock()
-                    astap_completed_count = 0
-                    astap_success_count = 0
-                    astap_fail_count = 0
-
-                    # 创建线程池，使用与diff操作相同的线程数
-                    with ThreadPoolExecutor(max_workers=thread_count) as executor:
-                        # 提交所有ASTAP任务
-                        future_to_file = {}
-                        for file_path in files_without_wcs:
-                            filename = os.path.basename(file_path)
-
-                            # 更新状态为ASTAP处理中
-                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
-
-                            future = executor.submit(
-                                self._process_single_astap,
-                                file_path
-                            )
-                            future_to_file[future] = file_path
-
-                        # 处理完成的ASTAP任务
-                        for future in as_completed(future_to_file):
-                            file_path = future_to_file[future]
-                            filename = os.path.basename(file_path)
-
-                            with astap_counter_lock:
-                                astap_completed_count += 1
-                                current_completed = astap_completed_count
-
-                            # 更新进度显示
-                            progress_text = f"ASTAP处理中 ({current_completed}/{len(files_without_wcs)}): 并行处理中..."
-                            self.root.after(0, lambda t=progress_text: self.batch_progress_label.config(text=t))
-
-                            try:
-                                result = future.result()
-
-                                # 记录日志
-                                self._log(f"\n[{current_completed}/{len(files_without_wcs)}] {filename}")
-
-                                # 检查result是否为字典（正确处理ASTAP结果）
-                                if isinstance(result, dict) and 'success' in result:
-                                    if result['success']:
-                                        # ASTAP处理成功，重新检查WCS
-                                        from astropy.io import fits as astropy_fits
-                                        with astropy_fits.open(file_path) as hdul:
-                                            header = hdul[0].header
-                                            has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
-
-                                        if has_wcs:
-                                            files_with_wcs.append(file_path)
-                                            astap_success_count += 1
-                                            self._log(f"  ✓ ASTAP处理成功，已添加WCS信息")
-                                            # 更新状态为ASTAP成功
-                                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                                f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
-                                        else:
-                                            astap_fail_count += 1
-                                            self._log(f"  ✗ ASTAP处理完成但未添加WCS信息")
-                                            # 更新状态为ASTAP失败
-                                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
-                                    else:
-                                        astap_fail_count += 1
-                                        error_msg = result.get('message', '未知错误') if isinstance(result, dict) else str(result)
-                                        self._log(f"  ✗ ASTAP处理失败: {error_msg}")
-                                        # 更新状态为ASTAP失败
-                                        self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
-                                            f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
-                                else:
-                                    # 处理意外返回类型
-                                    astap_fail_count += 1
-                                    error_msg = f"意外的返回类型: {type(result)}"
-                                    self._log(f"  ✗ ASTAP处理失败: {error_msg}")
-                                    # 更新状态为ASTAP失败
-                                    self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
-                                        f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
-
-                                # 更新统计信息
-                                stats_text = f"ASTAP已完成: {current_completed}/{len(files_without_wcs)} | 成功: {astap_success_count} | 失败: {astap_fail_count}"
-                                self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
-
-                            except Exception as e:
-                                astap_fail_count += 1
-                                self._log(f"  ✗ ASTAP处理异常: {str(e)}")
-                                self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
-                                    f, BatchStatusWidget.STATUS_ASTAP_FAILED, err))
-
-                    self._log(f"\nASTAP处理完成: 成功 {astap_success_count} 个, 失败 {astap_fail_count} 个")
-                    self._log(f"现在共有 {len(files_with_wcs)} 个文件包含WCS信息")
+                        if has_wcs:
+                            self._log(f"[下载] ✓ 文件已有WCS，直接进入Diff队列: {filename}")
+                            diff_queue.put(file_path)
+                        else:
+                            self._log(f"[下载] → 文件无WCS，进入ASTAP队列: {filename}")
+                            astap_queue.put(file_path)
+                    except:
+                        astap_queue.put(file_path)
                 else:
-                    self._log("警告: ASTAP处理器不可用，无法添加WCS信息")
+                    with stats_lock:
+                        stats['download_failed'] += 1
+                    self._log(f"[下载] ✗ 失败: {filename}")
+                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                        f, BatchStatusWidget.STATUS_DOWNLOAD_FAILED, "下载失败"))
 
-            if not files_with_wcs:
-                self._log("没有包含WCS信息的文件，跳过该天区")
-                return
+            except Exception as e:
+                with stats_lock:
+                    stats['download_failed'] += 1
+                self._log(f"[下载] ✗ 异常: {filename} - {str(e)}")
+                self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
+                    f, BatchStatusWidget.STATUS_DOWNLOAD_FAILED, err))
 
-            # 继续执行diff操作（调用现有的diff处理逻辑）
-            self._execute_diff_for_files(files_with_wcs, thread_count)
+            # 更新统计
+            self._update_pipeline_stats(stats)
 
-        except Exception as e:
-            self._log(f"处理天区 {k_number} 时出错: {str(e)}")
-            import traceback
-            self._log(traceback.format_exc())
+        self._log("\n所有文件下载完成，等待ASTAP和Diff处理完成...")
+
+        # 等待ASTAP队列处理完成
+        astap_queue.join()
+        # 发送结束信号给ASTAP线程
+        for _ in range(thread_count):
+            astap_queue.put(None)
+
+        # 等待Diff队列处理完成
+        diff_queue.join()
+        # 发送结束信号给Diff线程
+        for _ in range(thread_count):
+            diff_queue.put(None)
+
+        # 等待所有线程结束
+        stop_event.set()
+        for t in astap_threads:
+            t.join(timeout=5)
+        for t in diff_threads:
+            t.join(timeout=5)
+
+        # 打印最终统计
+        self._log("\n" + "=" * 60)
+        self._log("流水线处理完成！")
+        self._log(f"下载: 成功 {stats['download_completed']}, 失败 {stats['download_failed']}")
+        self._log(f"ASTAP: 成功 {stats['astap_success']}, 失败 {stats['astap_failed']}")
+        self._log(f"Diff: 成功 {stats['diff_success']}, 失败 {stats['diff_failed']}")
+        self._log("=" * 60)
+
+    def _update_pipeline_stats(self, stats):
+        """更新流水线统计信息显示"""
+        stats_text = (f"下载: {stats['download_completed']}/{stats['total_files']} | "
+                     f"ASTAP: {stats['astap_success']}/{stats['astap_completed']} | "
+                     f"Diff: {stats['diff_success']}/{stats['diff_completed']}")
+        self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
 
     def _execute_diff_for_files(self, files_with_wcs, thread_count):
         """
