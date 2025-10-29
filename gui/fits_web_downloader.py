@@ -2027,12 +2027,21 @@ Diff统计:
 
             # 对每个天区执行批量处理
             for region_idx, (k_number, region_files) in enumerate(files_by_region.items(), 1):
-                self._log(f"\n处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
-                self._log(f"文件数量: {len(region_files)}")
+                try:
+                    self._log(f"\n处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
+                    self._log(f"文件数量: {len(region_files)}")
 
-                # 调用现有的批量处理线程函数
-                # 注意：这里直接调用内部处理逻辑，而不是启动新线程
-                self._batch_process_region(region_files, tel_name, date, k_number)
+                    # 调用现有的批量处理线程函数
+                    # 注意：这里直接调用内部处理逻辑，而不是启动新线程
+                    self._batch_process_region(region_files, tel_name, date, k_number)
+
+                    self._log(f"天区 {k_number} 处理完成")
+                except Exception as e:
+                    self._log(f"处理天区 {k_number} 时出错: {str(e)}")
+                    import traceback
+                    self._log(traceback.format_exc())
+                    # 继续处理下一个天区
+                    continue
 
             self._log("\n" + "=" * 60)
             self._log("全天下载diff处理完成！")
@@ -2157,55 +2166,65 @@ Diff统计:
                 try:
                     file_path = astap_queue.get(timeout=1)
                     if file_path is None:  # 结束信号
+                        astap_queue.task_done()
                         break
 
-                    filename = os.path.basename(file_path)
-                    self._log(f"[ASTAP] 开始处理: {filename}")
-                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
+                    try:
+                        filename = os.path.basename(file_path)
+                        self._log(f"[ASTAP] 开始处理: {filename}")
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_ASTAP_PROCESSING))
 
-                    # 执行ASTAP处理
-                    result = self._process_single_astap(file_path)
+                        # 执行ASTAP处理
+                        result = self._process_single_astap(file_path)
 
-                    with stats_lock:
-                        stats['astap_completed'] += 1
+                        with stats_lock:
+                            stats['astap_completed'] += 1
 
-                    if result and result.get('success'):
-                        # 检查WCS
-                        from astropy.io import fits as astropy_fits
-                        with astropy_fits.open(file_path) as hdul:
-                            header = hdul[0].header
-                            has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
+                        if result and result.get('success'):
+                            # 检查WCS
+                            from astropy.io import fits as astropy_fits
+                            with astropy_fits.open(file_path) as hdul:
+                                header = hdul[0].header
+                                has_wcs = 'CRVAL1' in header and 'CRVAL2' in header
 
-                        if has_wcs:
-                            with stats_lock:
-                                stats['astap_success'] += 1
-                            self._log(f"[ASTAP] ✓ 成功: {filename}")
-                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
-                            # 放入diff队列
-                            diff_queue.put(file_path)
+                            if has_wcs:
+                                with stats_lock:
+                                    stats['astap_success'] += 1
+                                self._log(f"[ASTAP] ✓ 成功: {filename}")
+                                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                    f, BatchStatusWidget.STATUS_ASTAP_SUCCESS))
+                                # 放入diff队列
+                                diff_queue.put(file_path)
+                            else:
+                                with stats_lock:
+                                    stats['astap_failed'] += 1
+                                self._log(f"[ASTAP] ✗ 失败(无WCS): {filename}")
+                                self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                                    f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
                         else:
                             with stats_lock:
                                 stats['astap_failed'] += 1
-                            self._log(f"[ASTAP] ✗ 失败(无WCS): {filename}")
-                            self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, "未添加WCS"))
-                    else:
-                        with stats_lock:
-                            stats['astap_failed'] += 1
-                        error_msg = result.get('message', '未知错误') if result else '处理失败'
-                        self._log(f"[ASTAP] ✗ 失败: {filename} - {error_msg}")
-                        self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
+                            error_msg = result.get('message', '未知错误') if result else '处理失败'
+                            self._log(f"[ASTAP] ✗ 失败: {filename} - {error_msg}")
+                            self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_ASTAP_FAILED, msg))
 
-                    # 更新统计
-                    self._update_pipeline_stats(stats)
+                        # 更新统计
+                        self._update_pipeline_stats(stats)
+
+                    finally:
+                        # 标记任务完成
+                        astap_queue.task_done()
 
                 except queue.Empty:
                     continue
                 except Exception as e:
                     self._log(f"[ASTAP] 异常: {str(e)}")
+                    try:
+                        astap_queue.task_done()
+                    except:
+                        pass
 
         # 启动Diff工作线程池
         def diff_worker():
@@ -2214,44 +2233,54 @@ Diff统计:
                 try:
                     file_path = diff_queue.get(timeout=1)
                     if file_path is None:  # 结束信号
+                        diff_queue.task_done()
                         break
 
-                    filename = os.path.basename(file_path)
-                    self._log(f"[Diff] 开始处理: {filename}")
-                    self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
-                        f, BatchStatusWidget.STATUS_DIFF_PROCESSING))
+                    try:
+                        filename = os.path.basename(file_path)
+                        self._log(f"[Diff] 开始处理: {filename}")
+                        self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
+                            f, BatchStatusWidget.STATUS_DIFF_PROCESSING))
 
-                    # 执行Diff处理
-                    result = self._process_single_diff(
-                        file_path, template_dir, noise_methods, alignment_method,
-                        remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by
-                    )
+                        # 执行Diff处理
+                        result = self._process_single_diff(
+                            file_path, template_dir, noise_methods, alignment_method,
+                            remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by
+                        )
 
-                    with stats_lock:
-                        stats['diff_completed'] += 1
-
-                    if result and result.get('success'):
                         with stats_lock:
-                            stats['diff_success'] += 1
-                        new_spots = result.get('new_spots', 0)
-                        self._log(f"[Diff] ✓ 成功: {filename} - {new_spots}个亮点")
-                        self.root.after(0, lambda f=filename, n=new_spots: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_DIFF_SUCCESS, f"{n}个亮点"))
-                    else:
-                        with stats_lock:
-                            stats['diff_failed'] += 1
-                        error_msg = result.get('message', '未知错误') if result else '处理失败'
-                        self._log(f"[Diff] ✗ 失败: {filename} - {error_msg}")
-                        self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
-                            f, BatchStatusWidget.STATUS_DIFF_FAILED, msg))
+                            stats['diff_completed'] += 1
 
-                    # 更新统计
-                    self._update_pipeline_stats(stats)
+                        if result and result.get('success'):
+                            with stats_lock:
+                                stats['diff_success'] += 1
+                            new_spots = result.get('new_spots', 0)
+                            self._log(f"[Diff] ✓ 成功: {filename} - {new_spots}个亮点")
+                            self.root.after(0, lambda f=filename, n=new_spots: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_DIFF_SUCCESS, f"{n}个亮点"))
+                        else:
+                            with stats_lock:
+                                stats['diff_failed'] += 1
+                            error_msg = result.get('message', '未知错误') if result else '处理失败'
+                            self._log(f"[Diff] ✗ 失败: {filename} - {error_msg}")
+                            self.root.after(0, lambda f=filename, msg=error_msg: self.batch_status_widget.update_status(
+                                f, BatchStatusWidget.STATUS_DIFF_FAILED, msg))
+
+                        # 更新统计
+                        self._update_pipeline_stats(stats)
+
+                    finally:
+                        # 标记任务完成
+                        diff_queue.task_done()
 
                 except queue.Empty:
                     continue
                 except Exception as e:
                     self._log(f"[Diff] 异常: {str(e)}")
+                    try:
+                        diff_queue.task_done()
+                    except:
+                        pass
 
         # 启动ASTAP和Diff工作线程
         astap_threads = []
@@ -2678,11 +2707,20 @@ Diff统计:
 
                     # 对每个天区执行批量处理
                     for region_idx, (k_number, region_files) in enumerate(files_by_region.items(), 1):
-                        self._log(f"\n  处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
-                        self._log(f"  文件数量: {len(region_files)}")
+                        try:
+                            self._log(f"\n  处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
+                            self._log(f"  文件数量: {len(region_files)}")
 
-                        # 调用现有的批量处理逻辑
-                        self._batch_process_region(region_files, tel_name, date, k_number)
+                            # 调用现有的批量处理逻辑
+                            self._batch_process_region(region_files, tel_name, date, k_number)
+
+                            self._log(f"  天区 {k_number} 处理完成")
+                        except Exception as e:
+                            self._log(f"  处理天区 {k_number} 时出错: {str(e)}")
+                            import traceback
+                            self._log(traceback.format_exc())
+                            # 继续处理下一个天区
+                            continue
 
                     total_files_processed += len(system_files_to_process)
 
