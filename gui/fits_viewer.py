@@ -96,6 +96,12 @@ class FitsImageViewer:
             except Exception as e:
                 self.logger.warning(f"WCS检查器初始化失败: {str(e)}")
 
+        # 初始化查询结果存储
+        self._skybot_query_results = None
+        self._vsx_query_results = None
+        self._skybot_queried = False
+        self._vsx_queried = False
+
         # 创建界面
         self._create_widgets()
 
@@ -475,9 +481,10 @@ class FitsImageViewer:
                                                    command=self._save_query_settings)
         self.save_search_radius_button.pack(side=tk.LEFT, padx=(0, 10))
 
-        # Skybot查询按钮
-        self.skybot_button = ttk.Button(toolbar_frame6, text="查询小行星(Skybot)",
-                                       command=self._query_skybot, state="disabled")
+        # Skybot查询按钮 (使用tk.Button以支持背景色)
+        self.skybot_button = tk.Button(toolbar_frame6, text="查询小行星(Skybot)",
+                                       command=self._query_skybot, state="disabled",
+                                       bg="#FFA500", relief=tk.RAISED, padx=5, pady=2)  # 默认橙黄色(未查询)
         self.skybot_button.pack(side=tk.LEFT, padx=(5, 5))
 
         # Skybot查询结果显示
@@ -491,9 +498,10 @@ class FitsImageViewer:
         self.vsx_mag_limit_entry = ttk.Entry(toolbar_frame6, textvariable=self.vsx_mag_limit_var, width=6)
         self.vsx_mag_limit_entry.pack(side=tk.LEFT, padx=(0, 5))
 
-        # 变星查询按钮
-        self.vsx_button = ttk.Button(toolbar_frame6, text="查询变星(VSX)",
-                                     command=self._query_vsx, state="disabled")
+        # 变星查询按钮 (使用tk.Button以支持背景色)
+        self.vsx_button = tk.Button(toolbar_frame6, text="查询变星(VSX)",
+                                     command=self._query_vsx, state="disabled",
+                                     bg="#FFA500", relief=tk.RAISED, padx=5, pady=2)  # 默认橙黄色(未查询)
         self.vsx_button.pack(side=tk.LEFT, padx=(5, 5))
 
         # 变星查询结果显示
@@ -2615,11 +2623,15 @@ class FitsImageViewer:
         if hasattr(self, 'check_dss_button'):
             self.check_dss_button.config(state="disabled")
         if hasattr(self, 'skybot_button'):
-            self.skybot_button.config(state="disabled")
+            self.skybot_button.config(state="disabled", bg="#FFA500")  # 重置为橙黄色(未查询)
             self.skybot_result_label.config(text="未查询", foreground="gray")
+            self._skybot_query_results = None  # 清空查询结果
+            self._skybot_queried = False  # 清空查询标记
         if hasattr(self, 'vsx_button'):
-            self.vsx_button.config(state="disabled")
+            self.vsx_button.config(state="disabled", bg="#FFA500")  # 重置为橙黄色(未查询)
             self.vsx_result_label.config(text="未查询", foreground="gray")
+            self._vsx_query_results = None  # 清空查询结果
+            self._vsx_queried = False  # 清空查询标记
         if hasattr(self, 'save_detection_button'):
             self.save_detection_button.config(state="disabled")
 
@@ -2901,10 +2913,14 @@ class FitsImageViewer:
         # 启用Skybot查询按钮（只要有cutout就可以启用）
         if hasattr(self, 'skybot_button'):
             self.skybot_button.config(state="normal")
+            # 更新按钮颜色以反映查询状态
+            self._update_query_button_color('skybot')
 
         # 启用变星查询按钮（只要有cutout就可以启用）
         if hasattr(self, 'vsx_button'):
             self.vsx_button.config(state="normal")
+            # 更新按钮颜色以反映查询状态
+            self._update_query_button_color('vsx')
 
         # 启用保存检测结果按钮（只要有cutout就可以启用）
         if hasattr(self, 'save_detection_button'):
@@ -4078,8 +4094,14 @@ class FitsImageViewer:
             results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
 
             if results is not None:
+                # 标记已经查询过（查询成功，无论是否找到结果）
+                self._skybot_queried = True
+
                 count = len(results)
                 if count > 0:
+                    # 保存查询结果到成员变量
+                    self._skybot_query_results = results
+
                     self.skybot_result_label.config(text=f"找到 {count} 个", foreground="green")
                     success_msg = f"Skybot查询成功，找到 {count} 个小行星"
                     self.logger.info(success_msg)
@@ -4169,13 +4191,31 @@ class FitsImageViewer:
                     self.logger.info(separator)
                     if self.log_callback:
                         self.log_callback(separator, "INFO")
+
+                    # 更新txt文件中的查询结果
+                    self._update_detection_txt_with_query_results()
+
+                    # 更新按钮颜色 - 紫红色(有结果)
+                    self._update_query_button_color('skybot')
                 else:
+                    # 清空查询结果
+                    self._skybot_query_results = None
+
                     self.skybot_result_label.config(text="未找到", foreground="blue")
                     not_found_msg = "Skybot查询完成，未找到小行星"
                     self.logger.info(not_found_msg)
                     if self.log_callback:
                         self.log_callback(not_found_msg, "INFO")
+
+                    # 更新txt文件，标记为"已查询，未找到"
+                    self._update_detection_txt_with_query_results()
+
+                    # 更新按钮颜色 - 绿色(无结果)
+                    self._update_query_button_color('skybot')
             else:
+                # 清空查询结果
+                self._skybot_query_results = None
+
                 self.skybot_result_label.config(text="查询失败", foreground="red")
                 error_msg = "Skybot查询失败"
                 self.logger.error(error_msg)
@@ -4346,8 +4386,14 @@ class FitsImageViewer:
             results = self._perform_vsx_query(ra, dec, mag_limit, search_radius)
 
             if results is not None:
+                # 标记已经查询过（查询成功，无论是否找到结果）
+                self._vsx_queried = True
+
                 count = len(results)
                 if count > 0:
+                    # 保存查询结果到成员变量
+                    self._vsx_query_results = results
+
                     self.vsx_result_label.config(text=f"找到 {count} 个", foreground="green")
                     success_msg = f"VSX查询成功，找到 {count} 个变星"
                     self.logger.info(success_msg)
@@ -4432,13 +4478,31 @@ class FitsImageViewer:
                     self.logger.info(separator)
                     if self.log_callback:
                         self.log_callback(separator, "INFO")
+
+                    # 更新txt文件中的查询结果
+                    self._update_detection_txt_with_query_results()
+
+                    # 更新按钮颜色 - 紫红色(有结果)
+                    self._update_query_button_color('vsx')
                 else:
+                    # 清空查询结果
+                    self._vsx_query_results = None
+
                     self.vsx_result_label.config(text="未找到", foreground="blue")
                     not_found_msg = "VSX查询完成，未找到变星"
                     self.logger.info(not_found_msg)
                     if self.log_callback:
                         self.log_callback(not_found_msg, "INFO")
+
+                    # 更新txt文件，标记为"已查询，未找到"
+                    self._update_detection_txt_with_query_results()
+
+                    # 更新按钮颜色 - 绿色(无结果)
+                    self._update_query_button_color('vsx')
             else:
+                # 清空查询结果
+                self._vsx_query_results = None
+
                 self.vsx_result_label.config(text="查询失败", foreground="red")
                 error_msg = "VSX查询失败"
                 self.logger.error(error_msg)
@@ -4865,6 +4929,247 @@ class FitsImageViewer:
             error_msg = f"保存检测结果失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
+
+    def _update_query_button_color(self, query_type='skybot'):
+        """
+        更新查询按钮的颜色以反映查询状态
+
+        Args:
+            query_type: 'skybot' 或 'vsx'
+        """
+        try:
+            # 检查txt文件中的查询结果
+            has_result, result_text = self._check_existing_query_results(query_type)
+
+            if query_type == 'skybot':
+                button = self.skybot_button
+            else:
+                button = self.vsx_button
+
+            if not has_result:
+                # 未查询 - 橙黄色
+                button.config(bg="#FFA500")
+            elif "未找到" in result_text:
+                # 已查询但无结果 - 绿色
+                button.config(bg="#00C853")
+            else:
+                # 有结果 - 紫红色
+                button.config(bg="#C2185B")
+
+        except Exception as e:
+            self.logger.error(f"更新查询按钮颜色失败: {str(e)}")
+
+    def _check_existing_query_results(self, query_type='skybot'):
+        """
+        检查txt文件中是否已有查询结果
+
+        Args:
+            query_type: 'skybot' 或 'vsx'
+
+        Returns:
+            tuple: (has_result, result_text)
+                has_result: True表示已查询过（无论是否找到），False表示未查询
+                result_text: 查询结果文本描述
+        """
+        try:
+            # 查找最新的检测结果txt文件
+            if not self.last_output_dir or not os.path.exists(self.last_output_dir):
+                return False, None
+
+            # 查找signal_blob_detector生成的txt文件
+            # 需要在子目录中查找（signal_blob_detector会创建detection_*子目录）
+            txt_files = []
+
+            # 先在当前目录查找
+            for file in os.listdir(self.last_output_dir):
+                file_path = os.path.join(self.last_output_dir, file)
+                if os.path.isfile(file_path) and '_analysis_' in file and file.endswith('.txt'):
+                    txt_files.append(file_path)
+
+            # 如果当前目录没找到，在detection_*子目录中查找
+            if not txt_files:
+                for item in os.listdir(self.last_output_dir):
+                    item_path = os.path.join(self.last_output_dir, item)
+                    if os.path.isdir(item_path) and item.startswith('detection_'):
+                        for file in os.listdir(item_path):
+                            if '_analysis_' in file and file.endswith('.txt'):
+                                txt_files.append(os.path.join(item_path, file))
+
+            if not txt_files:
+                return False, None
+
+            # 使用最新的txt文件
+            txt_file = max(txt_files, key=os.path.getmtime)
+
+            # 读取文件内容
+            with open(txt_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # 根据查询类型检查对应的列表
+            if query_type == 'skybot':
+                # 查找小行星列表部分
+                import re
+                match = re.search(r'小行星列表:\n((?:  - .*\n)+)', content)
+                if match:
+                    result_lines = match.group(1).strip()
+                    if '(空)' in result_lines:
+                        return False, None  # 未查询
+                    elif '(已查询，未找到)' in result_lines:
+                        return True, "已查询，未找到"  # 已查询但未找到
+                    else:
+                        # 已查询且找到结果
+                        count = len(result_lines.split('\n'))
+                        return True, f"已查询，找到 {count} 个"
+            else:  # vsx
+                # 查找变星列表部分
+                import re
+                match = re.search(r'变星列表:\n((?:  - .*\n)+)', content)
+                if match:
+                    result_lines = match.group(1).strip()
+                    if '(空)' in result_lines:
+                        return False, None  # 未查询
+                    elif '(已查询，未找到)' in result_lines:
+                        return True, "已查询，未找到"  # 已查询但未找到
+                    else:
+                        # 已查询且找到结果
+                        count = len(result_lines.split('\n'))
+                        return True, f"已查询，找到 {count} 个"
+
+            return False, None
+
+        except Exception as e:
+            self.logger.error(f"检查已有查询结果失败: {str(e)}")
+            return False, None
+
+    def _update_detection_txt_with_query_results(self):
+        """将查询结果更新到检测结果txt文件中"""
+        try:
+            # 查找最新的检测结果txt文件
+            if not self.last_output_dir or not os.path.exists(self.last_output_dir):
+                self.logger.warning("无法找到输出目录，无法更新txt文件")
+                return
+
+            # 查找signal_blob_detector生成的txt文件
+            # 需要在子目录中查找（signal_blob_detector会创建detection_*子目录）
+            txt_files = []
+
+            # 先在当前目录查找
+            for file in os.listdir(self.last_output_dir):
+                file_path = os.path.join(self.last_output_dir, file)
+                if os.path.isfile(file_path) and '_analysis_' in file and file.endswith('.txt'):
+                    txt_files.append(file_path)
+
+            # 如果当前目录没找到，在detection_*子目录中查找
+            if not txt_files:
+                for item in os.listdir(self.last_output_dir):
+                    item_path = os.path.join(self.last_output_dir, item)
+                    if os.path.isdir(item_path) and item.startswith('detection_'):
+                        for file in os.listdir(item_path):
+                            if '_analysis_' in file and file.endswith('.txt'):
+                                txt_files.append(os.path.join(item_path, file))
+
+            if not txt_files:
+                self.logger.warning("未找到检测结果txt文件")
+                return
+
+            # 使用最新的txt文件
+            txt_file = max(txt_files, key=os.path.getmtime)
+            self.logger.info(f"找到检测结果txt文件: {txt_file}")
+
+            # 读取现有内容
+            with open(txt_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # 检查是否已经包含查询结果（避免重复添加）
+            if '小行星列表:' not in content or '变星列表:' not in content:
+                self.logger.warning("txt文件格式不符合预期，无法更新查询结果")
+                return
+
+            # 准备新的小行星列表内容
+            skybot_lines = []
+            if self._skybot_query_results is not None and len(self._skybot_query_results) > 0:
+                colnames = self._skybot_query_results.colnames
+                for i, row in enumerate(self._skybot_query_results, 1):
+                    asteroid_info = []
+                    if 'Name' in colnames:
+                        asteroid_info.append(f"名称={row['Name']}")
+                    if 'Number' in colnames:
+                        asteroid_info.append(f"编号={row['Number']}")
+                    if 'Type' in colnames:
+                        asteroid_info.append(f"类型={row['Type']}")
+                    if 'RA' in colnames:
+                        asteroid_info.append(f"RA={row['RA']:.6f}°")
+                    if 'DEC' in colnames:
+                        asteroid_info.append(f"DEC={row['DEC']:.6f}°")
+                    if 'Mv' in colnames:
+                        asteroid_info.append(f"星等={row['Mv']}")
+                    if 'Dg' in colnames:
+                        asteroid_info.append(f"距离={row['Dg']}AU")
+                    skybot_lines.append(f"  - 小行星{i}: {', '.join(asteroid_info)}")
+
+            # 准备新的变星列表内容
+            vsx_lines = []
+            if self._vsx_query_results is not None and len(self._vsx_query_results) > 0:
+                colnames = self._vsx_query_results.colnames
+                for i, row in enumerate(self._vsx_query_results, 1):
+                    vstar_info = []
+                    if 'Name' in colnames:
+                        vstar_info.append(f"名称={row['Name']}")
+                    if 'Type' in colnames:
+                        vstar_info.append(f"类型={row['Type']}")
+                    if 'RAJ2000' in colnames:
+                        vstar_info.append(f"RA={row['RAJ2000']:.6f}°")
+                    if 'DEJ2000' in colnames:
+                        vstar_info.append(f"DEC={row['DEJ2000']:.6f}°")
+                    if 'max' in colnames:
+                        vstar_info.append(f"最大星等={row['max']}")
+                    if 'min' in colnames:
+                        vstar_info.append(f"最小星等={row['min']}")
+                    if 'Period' in colnames:
+                        vstar_info.append(f"周期={row['Period']}天")
+                    vsx_lines.append(f"  - 变星{i}: {', '.join(vstar_info)}")
+
+            # 替换小行星列表
+            import re
+            # 检查是否已经查询过Skybot（无论结果如何）
+            if hasattr(self, '_skybot_queried'):
+                if skybot_lines:
+                    # 有查询结果，替换为实际内容
+                    pattern = r'小行星列表:\n  - \(空\)|小行星列表:\n  - \(已查询，未找到\)'
+                    replacement = '小行星列表:\n' + '\n'.join(skybot_lines)
+                    content = re.sub(pattern, replacement, content)
+                    self.logger.info(f"已更新小行星列表，共{len(skybot_lines)}个")
+                else:
+                    # 已查询但未找到，标记为"已查询，未找到"
+                    pattern = r'小行星列表:\n  - \(空\)'
+                    replacement = '小行星列表:\n  - (已查询，未找到)'
+                    content = re.sub(pattern, replacement, content)
+                    self.logger.info("已更新小行星列表：已查询，未找到")
+
+            # 替换变星列表
+            # 检查是否已经查询过VSX（无论结果如何）
+            if hasattr(self, '_vsx_queried'):
+                if vsx_lines:
+                    # 有查询结果，替换为实际内容
+                    pattern = r'变星列表:\n  - \(空\)|变星列表:\n  - \(已查询，未找到\)'
+                    replacement = '变星列表:\n' + '\n'.join(vsx_lines)
+                    content = re.sub(pattern, replacement, content)
+                    self.logger.info(f"已更新变星列表，共{len(vsx_lines)}个")
+                else:
+                    # 已查询但未找到，标记为"已查询，未找到"
+                    pattern = r'变星列表:\n  - \(空\)'
+                    replacement = '变星列表:\n  - (已查询，未找到)'
+                    content = re.sub(pattern, replacement, content)
+                    self.logger.info("已更新变星列表：已查询，未找到")
+
+            # 写回文件
+            with open(txt_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            self.logger.info(f"查询结果已更新到txt文件: {txt_file}")
+
+        except Exception as e:
+            self.logger.error(f"更新txt文件失败: {str(e)}", exc_info=True)
 
     def _save_detection_parameters(self, params_file, detection_num, timestamp):
         """保存检测参数到文本文件"""

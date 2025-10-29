@@ -1184,9 +1184,94 @@ class SignalBlobDetector:
 
         print(f"已为 {len(blobs)} 个检测结果生成截图和GIF")
 
+    def format_skybot_results(self, skybot_results):
+        """
+        格式化Skybot查询结果为文本
+
+        Args:
+            skybot_results: Skybot查询结果表
+
+        Returns:
+            格式化后的文本列表
+        """
+        if skybot_results is None or len(skybot_results) == 0:
+            return ["  - (空)"]
+
+        lines = []
+        colnames = skybot_results.colnames
+
+        for i, row in enumerate(skybot_results, 1):
+            asteroid_info = []
+
+            # 提取关键信息
+            if 'Name' in colnames:
+                asteroid_info.append(f"名称={row['Name']}")
+            if 'Number' in colnames:
+                asteroid_info.append(f"编号={row['Number']}")
+            if 'Type' in colnames:
+                asteroid_info.append(f"类型={row['Type']}")
+            if 'RA' in colnames:
+                asteroid_info.append(f"RA={row['RA']:.6f}°")
+            if 'DEC' in colnames:
+                asteroid_info.append(f"DEC={row['DEC']:.6f}°")
+            if 'Mv' in colnames:
+                asteroid_info.append(f"星等={row['Mv']}")
+            if 'Dg' in colnames:
+                asteroid_info.append(f"距离={row['Dg']}AU")
+
+            lines.append(f"  - 小行星{i}: {', '.join(asteroid_info)}")
+
+        return lines
+
+    def format_vsx_results(self, vsx_results):
+        """
+        格式化VSX查询结果为文本
+
+        Args:
+            vsx_results: VSX查询结果表
+
+        Returns:
+            格式化后的文本列表
+        """
+        if vsx_results is None or len(vsx_results) == 0:
+            return ["  - (空)"]
+
+        lines = []
+        colnames = vsx_results.colnames
+
+        for i, row in enumerate(vsx_results, 1):
+            vstar_info = []
+
+            # 提取关键信息
+            if 'Name' in colnames:
+                vstar_info.append(f"名称={row['Name']}")
+            if 'Type' in colnames:
+                vstar_info.append(f"类型={row['Type']}")
+            if 'RAJ2000' in colnames:
+                vstar_info.append(f"RA={row['RAJ2000']:.6f}°")
+            if 'DEJ2000' in colnames:
+                vstar_info.append(f"DEC={row['DEJ2000']:.6f}°")
+            if 'max' in colnames:
+                vstar_info.append(f"最大星等={row['max']}")
+            if 'min' in colnames:
+                vstar_info.append(f"最小星等={row['min']}")
+            if 'Period' in colnames:
+                vstar_info.append(f"周期={row['Period']}天")
+
+            lines.append(f"  - 变星{i}: {', '.join(vstar_info)}")
+
+        return lines
+
     def save_results(self, original_data, stretched_data, mask, result_image, blobs,
-                     output_dir, base_name, threshold_info, reference_data=None, aligned_data=None, header=None, generate_shape_viz=False):
-        """保存检测结果"""
+                     output_dir, base_name, threshold_info, reference_data=None, aligned_data=None, header=None,
+                     generate_shape_viz=False, skybot_results=None, vsx_results=None):
+        """
+        保存检测结果
+
+        Args:
+            skybot_results: Skybot小行星查询结果（可选）
+            vsx_results: VSX变星查询结果（可选）
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # 创建带时间戳的输出文件夹
@@ -1235,6 +1320,60 @@ class SignalBlobDetector:
             f.write(f"基于信号强度的斑点检测结果\n")
             f.write(f"=" * 80 + "\n")
             f.write(f"时间: {timestamp}\n\n")
+
+            # 写入WCS信息
+            f.write(f"WCS信息 (来自noise_cleaned_aligned.fits):\n")
+            if header is not None:
+                # 基本WCS关键字
+                wcs_keywords = {
+                    'CRVAL1': '参考点RA (度)',
+                    'CRVAL2': '参考点DEC (度)',
+                    'CRPIX1': '参考像素X',
+                    'CRPIX2': '参考像素Y',
+                    'CTYPE1': '坐标类型1',
+                    'CTYPE2': '坐标类型2',
+                    'CDELT1': '像素尺度X (度/像素)',
+                    'CDELT2': '像素尺度Y (度/像素)',
+                    'CD1_1': 'CD矩阵[1,1]',
+                    'CD1_2': 'CD矩阵[1,2]',
+                    'CD2_1': 'CD矩阵[2,1]',
+                    'CD2_2': 'CD矩阵[2,2]',
+                    'PC1_1': 'PC矩阵[1,1]',
+                    'PC1_2': 'PC矩阵[1,2]',
+                    'PC2_1': 'PC矩阵[2,1]',
+                    'PC2_2': 'PC矩阵[2,2]',
+                    'EQUINOX': '坐标系历元',
+                    'RADESYS': '坐标系统',
+                    'NAXIS1': '图像宽度',
+                    'NAXIS2': '图像高度'
+                }
+
+                has_wcs = False
+                for keyword, description in wcs_keywords.items():
+                    if keyword in header:
+                        value = header[keyword]
+                        f.write(f"  - {keyword} ({description}): {value}\n")
+                        has_wcs = True
+
+                if not has_wcs:
+                    f.write(f"  - 无WCS信息\n")
+            else:
+                f.write(f"  - 无header信息\n")
+            f.write("\n")
+
+            # 写入小行星列表
+            f.write(f"小行星列表:\n")
+            skybot_lines = self.format_skybot_results(skybot_results)
+            for line in skybot_lines:
+                f.write(f"{line}\n")
+            f.write("\n")
+
+            # 写入变星列表
+            f.write(f"变星列表:\n")
+            vsx_lines = self.format_vsx_results(vsx_results)
+            for line in vsx_lines:
+                f.write(f"{line}\n")
+            f.write("\n")
 
             f.write(f"检测参数:\n")
             f.write(f"  - 信号阈值: {self.sigma_threshold}σ\n")
@@ -1285,7 +1424,7 @@ class SignalBlobDetector:
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.0,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
                          stretch_method='percentile', percentile_low=99.95, fast_mode=False, detection_method='contour',
-                         sort_by='aligned_snr'):
+                         sort_by='aligned_snr', skybot_results=None, vsx_results=None):
         """
         处理 FITS 文件的完整流程
 
@@ -1302,6 +1441,8 @@ class SignalBlobDetector:
             fast_mode: 快速模式，不生成hull和poly可视化图片，默认False
             detection_method: 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
             sort_by: 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
+            skybot_results: Skybot小行星查询结果（可选）
+            vsx_results: VSX变星查询结果（可选）
         """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
@@ -1403,7 +1544,8 @@ class SignalBlobDetector:
         self.save_results(data, stretched_data_no_lines, mask, result_image, blobs,
                          output_dir, base_name, threshold_info,
                          reference_data=reference_data, aligned_data=aligned_data,
-                         header=header, generate_shape_viz=not fast_mode)
+                         header=header, generate_shape_viz=not fast_mode,
+                         skybot_results=skybot_results, vsx_results=vsx_results)
 
         print(f"\n处理完成！")
         return blobs
