@@ -484,18 +484,6 @@ class SignalBlobDetector:
             # 计算该区域的信号强度
             mask_region = np.zeros(original_data.shape, dtype=np.uint8)
             cv2.drawContours(mask_region, [contour], -1, 255, -1)
-            signal_values = original_data[mask_region > 0]
-            mean_signal = np.mean(signal_values)
-            max_signal = np.max(signal_values)
-
-            # 亮度过滤：最大信号值必须超过50（拉伸后的数据范围是0-255）
-            if max_signal * 255 <= 20:
-                continue
-
-            # 计算SNR（信噪比）
-            # SNR = (信号 - 背景) / 背景噪声
-            snr = (mean_signal - background_median) / (background_sigma + 1e-10)
-            max_snr = (max_signal - background_median) / (background_sigma + 1e-10)
 
             blobs.append({
                 'center': (cx, cy),
@@ -506,10 +494,10 @@ class SignalBlobDetector:
                 'jaggedness_ratio': jaggedness_ratio,
                 'hull_vertices': hull_vertices,
                 'poly_vertices': poly_vertices,
-                'mean_signal': mean_signal,
-                'max_signal': max_signal,
-                'snr': snr,
-                'max_snr': max_snr,
+                'mean_signal': 0,
+                'max_signal': 0,
+                'snr': 0,
+                'max_snr': 0,
                 'contour': contour
             })
 
