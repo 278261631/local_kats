@@ -4398,6 +4398,40 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"绘制小行星标记时出错: {e}", exc_info=True)
 
+    def _refresh_current_cutout_display(self):
+        """
+        重新绘制当前显示的cutout（用于查询完成后更新标记）
+        """
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.warning("没有cutout sets，无法刷新显示")
+                return
+
+            if not hasattr(self, '_current_cutout_index'):
+                self.logger.warning("没有current_cutout_index，无法刷新显示")
+                return
+
+            # 获取当前cutout的信息
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            reference_img = current_cutout['reference']
+            aligned_img = current_cutout['aligned']
+            detection_img = current_cutout['detection']
+
+            # 提取文件信息
+            selected_filename = ""
+            if self.selected_file_path:
+                selected_filename = os.path.basename(self.selected_file_path)
+
+            file_info = self._extract_file_info(reference_img, aligned_img, detection_img, selected_filename)
+
+            # 重新显示cutout
+            self._show_cutouts_in_main_display(reference_img, aligned_img, detection_img, file_info)
+
+            self.logger.info("已刷新cutout显示")
+
+        except Exception as e:
+            self.logger.error(f"刷新cutout显示失败: {e}", exc_info=True)
+
     def _show_cutouts_in_main_display(self, reference_img, aligned_img, detection_img, file_info=None):
         """
         在主界面显示三张cutout图片
@@ -4951,6 +4985,9 @@ class FitsImageViewer:
 
                     # 更新按钮颜色 - 紫红色(有结果)
                     self._update_query_button_color('skybot')
+
+                    # 重新绘制图像以显示小行星标记
+                    self._refresh_current_cutout_display()
                 else:
                     # 查询结果为空（未找到）
                     # 注意：已经在上面保存了results（空列表）到cutout
@@ -4967,6 +5004,9 @@ class FitsImageViewer:
 
                     # 更新按钮颜色 - 绿色(无结果)
                     self._update_query_button_color('skybot')
+
+                    # 重新绘制图像（虽然没有结果，但确保界面一致性）
+                    self._refresh_current_cutout_display()
             else:
                 # 查询失败，不保存到cutout（保持未查询状态）
                 self._skybot_query_results = None  # 兼容旧代码
@@ -5243,6 +5283,9 @@ class FitsImageViewer:
 
                     # 更新按钮颜色 - 紫红色(有结果)
                     self._update_query_button_color('vsx')
+
+                    # 重新绘制图像以显示变星标记
+                    self._refresh_current_cutout_display()
                 else:
                     # 查询结果为空（未找到）
                     # 注意：已经在上面保存了results（空列表）到cutout
@@ -5259,6 +5302,9 @@ class FitsImageViewer:
 
                     # 更新按钮颜色 - 绿色(无结果)
                     self._update_query_button_color('vsx')
+
+                    # 重新绘制图像（虽然没有结果，但确保界面一致性）
+                    self._refresh_current_cutout_display()
             else:
                 # 查询失败，不保存到cutout（保持未查询状态）
                 self._vsx_query_results = None  # 兼容旧代码
