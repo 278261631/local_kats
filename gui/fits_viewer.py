@@ -4221,9 +4221,9 @@ class FitsImageViewer:
                         # 解析每一行变星信息
                         for line in result_lines.split('\n'):
                             if line.strip().startswith('-') and '(未查询)' not in line and '(已查询，未找到)' not in line:
-                                # 提取RA和DEC
-                                ra_match = re.search(r'RA=([\d.]+)°', line)
-                                dec_match = re.search(r'DEC=([-\d.]+)°', line)
+                                # 提取RA和DEC (兼容 "RA=xxx°" 和 "RA=xxx deg°" 两种格式)
+                                ra_match = re.search(r'RA=([\d.]+)\s*(?:deg)?°', line)
+                                dec_match = re.search(r'DEC=([-\d.]+)\s*(?:deg)?°', line)
 
                                 if ra_match and dec_match:
                                     vsx_ra = float(ra_match.group(1))
@@ -4254,6 +4254,149 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"绘制变星标记时出错: {e}", exc_info=True)
+
+    def _draw_asteroids_on_axis(self, ax, aligned_img_path, image_shape, file_info=None):
+        """
+        在matplotlib axis上绘制小行星标记
+
+        Args:
+            ax: matplotlib axis对象
+            aligned_img_path: aligned图像路径（用于定位对应的FITS文件）
+            image_shape: 图像形状 (height, width) 或 (height, width, channels)
+            file_info: 文件信息字典（包含RA/DEC等信息）
+        """
+        try:
+            self.logger.info("=== 开始绘制小行星标记 ===")
+
+            # 检查是否有当前cutout和小行星查询结果
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.info("没有cutout sets，跳过小行星标记")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                self.logger.info("没有current_cutout_index，跳过小行星标记")
+                return
+
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            skybot_queried = current_cutout.get('skybot_queried', False)
+            skybot_results = current_cutout.get('skybot_results', None)
+
+            self.logger.info(f"小行星查询状态: queried={skybot_queried}, results={skybot_results}")
+
+            # 如果没有查询或没有结果，直接返回
+            if not skybot_queried or not skybot_results or len(skybot_results) == 0:
+                self.logger.info("没有小行星查询结果，跳过小行星标记")
+                return
+
+            # 检查file_info是否包含RA/DEC
+            if not file_info or not file_info.get('ra') or not file_info.get('dec'):
+                self.logger.warning("file_info中没有RA/DEC信息，无法绘制小行星标记")
+                return
+
+            # 从file_info获取cutout中心的RA/DEC坐标
+            cutout_center_ra = float(file_info['ra'])
+            cutout_center_dec = float(file_info['dec'])
+            self.logger.info(f"Cutout中心坐标: RA={cutout_center_ra}°, DEC={cutout_center_dec}°")
+
+            # 从aligned图像路径获取对应的FITS文件
+            cutout_dir = os.path.dirname(aligned_img_path)
+            detection_dir = os.path.dirname(cutout_dir)
+            fits_dir = os.path.dirname(detection_dir)
+
+            # 查找aligned.fits文件
+            aligned_fits_files = list(Path(fits_dir).glob('*_aligned.fits'))
+            if not aligned_fits_files:
+                self.logger.warning("未找到aligned.fits文件，无法绘制小行星标记")
+                return
+
+            aligned_fits_path = aligned_fits_files[0]
+            self.logger.info(f"使用FITS文件获取WCS信息: {aligned_fits_path}")
+
+            # 读取FITS文件的header获取WCS信息
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+            import re
+
+            with fits.open(aligned_fits_path) as hdul:
+                header = hdul[0].header
+                wcs = WCS(header)
+
+                # 将cutout中心的RA/DEC转换为原始FITS的像素坐标
+                cutout_center_coord = SkyCoord(ra=cutout_center_ra*u.degree, dec=cutout_center_dec*u.degree)
+                cutout_center_pixel = wcs.world_to_pixel(cutout_center_coord)
+                self.logger.info(f"Cutout中心在原始FITS中的像素坐标: ({cutout_center_pixel[0]:.1f}, {cutout_center_pixel[1]:.1f})")
+
+                # cutout图像的尺寸
+                h, w = image_shape[0], image_shape[1]
+                cutout_half_size = w / 2  # 假设cutout是正方形
+
+                # 计算cutout在原始FITS中的边界
+                cutout_x_min = cutout_center_pixel[0] - cutout_half_size
+                cutout_y_min = cutout_center_pixel[1] - cutout_half_size
+                self.logger.info(f"Cutout在原始FITS中的边界: ({cutout_x_min:.1f}, {cutout_y_min:.1f})")
+
+                # 遍历小行星结果，绘制标记
+                # 从query_results文件中读取实际的小行星坐标
+                detection_img = current_cutout.get('detection')
+                if not detection_img:
+                    self.logger.warning("无法获取detection图像路径")
+                    return
+
+                cutout_img_dir = os.path.dirname(detection_img)
+                query_results_file = os.path.join(cutout_img_dir, f"query_results_{self._current_cutout_index + 1:03d}.txt")
+
+                self.logger.info(f"查找query_results文件: {query_results_file}")
+                self.logger.info(f"文件是否存在: {os.path.exists(query_results_file)}")
+
+                if os.path.exists(query_results_file):
+                    with open(query_results_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                    self.logger.info(f"query_results文件内容长度: {len(content)} 字符")
+
+                    # 解析小行星列表
+                    skybot_match = re.search(r'小行星列表:\n((?:  - .*\n)+)', content)
+                    if skybot_match:
+                        self.logger.info("找到小行星列表匹配")
+                        result_lines = skybot_match.group(1).strip()
+
+                        # 解析每一行小行星信息
+                        for line in result_lines.split('\n'):
+                            if line.strip().startswith('-') and '(未查询)' not in line and '(已查询，未找到)' not in line:
+                                # 提取RA和DEC (注意小行星格式可能是 "RA=xxx deg°" 或 "RA=xxx°")
+                                ra_match = re.search(r'RA=([\d.]+)\s*(?:deg)?°', line)
+                                dec_match = re.search(r'DEC=([-\d.]+)\s*(?:deg)?°', line)
+
+                                if ra_match and dec_match:
+                                    asteroid_ra = float(ra_match.group(1))
+                                    asteroid_dec = float(dec_match.group(1))
+
+                                    # 将小行星的RA/DEC转换为原始FITS的像素坐标
+                                    asteroid_coord = SkyCoord(ra=asteroid_ra*u.degree, dec=asteroid_dec*u.degree)
+                                    asteroid_pixel = wcs.world_to_pixel(asteroid_coord)
+
+                                    # 转换为cutout图像的像素坐标
+                                    asteroid_x_in_cutout = asteroid_pixel[0] - cutout_x_min
+                                    asteroid_y_in_cutout = asteroid_pixel[1] - cutout_y_min
+
+                                    # 检查小行星是否在cutout范围内
+                                    if 0 <= asteroid_x_in_cutout < w and 0 <= asteroid_y_in_cutout < h:
+                                        self.logger.info(f"绘制小行星标记: RA={asteroid_ra}, DEC={asteroid_dec}, "
+                                                       f"cutout坐标=({asteroid_x_in_cutout:.1f}, {asteroid_y_in_cutout:.1f})")
+
+                                        # 绘制青色四芒星（小而细的十字标记）
+                                        self._draw_four_pointed_star(ax, asteroid_x_in_cutout, asteroid_y_in_cutout,
+                                                                    color='cyan', linewidth=1, size=8, gap=2)
+                                    else:
+                                        self.logger.info(f"小行星不在cutout范围内: RA={asteroid_ra}, DEC={asteroid_dec}")
+                    else:
+                        self.logger.warning("未找到小行星列表匹配")
+                else:
+                    self.logger.warning("未找到query_results文件")
+
+        except Exception as e:
+            self.logger.error(f"绘制小行星标记时出错: {e}", exc_info=True)
 
     def _show_cutouts_in_main_display(self, reference_img, aligned_img, detection_img, file_info=None):
         """
@@ -4360,8 +4503,11 @@ class FitsImageViewer:
             # 添加十字准星
             self._draw_crosshair_on_axis(self._click_ax, aligned_array.shape)
 
-            # 在aligned图像上绘制变星标记
+            # 在aligned图像上绘制变星标记（橘黄色）
             self._draw_variable_stars_on_axis(self._click_ax, aligned_img, aligned_array.shape, file_info)
+
+            # 在aligned图像上绘制小行星标记（青色）
+            self._draw_asteroids_on_axis(self._click_ax, aligned_img, aligned_array.shape, file_info)
 
             # 显示detection图像
             axes[2].imshow(detection_array, cmap='gray' if len(detection_array.shape) == 2 else None)
