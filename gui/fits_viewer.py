@@ -4086,6 +4086,175 @@ class FitsImageViewer:
         ax.plot([center_x, center_x], [center_y + gap, center_y + gap + size],
                 color=color, linewidth=linewidth, linestyle='-')
 
+    def _draw_four_pointed_star(self, ax, x, y, color='orange', linewidth=1, size=8, gap=2):
+        """
+        在matplotlib axis上绘制空心四芒星
+
+        Args:
+            ax: matplotlib axis对象
+            x: 星标中心x坐标（像素）
+            y: 星标中心y坐标（像素）
+            color: 星标颜色，默认orange（橘黄色）
+            linewidth: 线条粗细，默认1
+            size: 星标臂长，默认8像素
+            gap: 中心空隙大小，默认2像素
+        """
+        # 只绘制水平和垂直的十字线（4条线）
+        # 绘制水平线（左右两段）
+        ax.plot([x - gap - size, x - gap], [y, y],
+                color=color, linewidth=linewidth, linestyle='-')
+        ax.plot([x + gap, x + gap + size], [y, y],
+                color=color, linewidth=linewidth, linestyle='-')
+
+        # 绘制垂直线（上下两段）
+        ax.plot([x, x], [y - gap - size, y - gap],
+                color=color, linewidth=linewidth, linestyle='-')
+        ax.plot([x, x], [y + gap, y + gap + size],
+                color=color, linewidth=linewidth, linestyle='-')
+
+    def _draw_variable_stars_on_axis(self, ax, aligned_img_path, image_shape, file_info=None):
+        """
+        在matplotlib axis上绘制变星标记
+
+        Args:
+            ax: matplotlib axis对象
+            aligned_img_path: aligned图像路径（用于定位对应的FITS文件）
+            image_shape: 图像形状 (height, width) 或 (height, width, channels)
+            file_info: 文件信息字典（包含RA/DEC等信息）
+        """
+        try:
+            self.logger.info("=== 开始绘制变星标记 ===")
+
+            # 检查是否有当前cutout和变星查询结果
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.info("没有cutout sets，跳过变星标记")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                self.logger.info("没有current_cutout_index，跳过变星标记")
+                return
+
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            vsx_queried = current_cutout.get('vsx_queried', False)
+            vsx_results = current_cutout.get('vsx_results', None)
+
+            self.logger.info(f"变星查询状态: queried={vsx_queried}, results={vsx_results}")
+
+            # 如果没有查询或没有结果，直接返回
+            if not vsx_queried or not vsx_results or len(vsx_results) == 0:
+                self.logger.info("没有变星查询结果，跳过变星标记")
+                return
+
+            # 检查file_info是否包含RA/DEC
+            if not file_info or not file_info.get('ra') or not file_info.get('dec'):
+                self.logger.warning("file_info中没有RA/DEC信息，无法绘制变星标记")
+                return
+
+            # 从file_info获取cutout中心的RA/DEC坐标
+            cutout_center_ra = float(file_info['ra'])
+            cutout_center_dec = float(file_info['dec'])
+            self.logger.info(f"Cutout中心坐标: RA={cutout_center_ra}°, DEC={cutout_center_dec}°")
+
+            # 从aligned图像路径获取对应的FITS文件
+            cutout_dir = os.path.dirname(aligned_img_path)
+            detection_dir = os.path.dirname(cutout_dir)
+            fits_dir = os.path.dirname(detection_dir)
+
+            # 查找aligned.fits文件
+            aligned_fits_files = list(Path(fits_dir).glob('*_aligned.fits'))
+            if not aligned_fits_files:
+                self.logger.warning("未找到aligned.fits文件，无法绘制变星标记")
+                return
+
+            aligned_fits_path = aligned_fits_files[0]
+            self.logger.info(f"使用FITS文件获取WCS信息: {aligned_fits_path}")
+
+            # 读取FITS文件的header获取WCS信息
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+            import re
+
+            with fits.open(aligned_fits_path) as hdul:
+                header = hdul[0].header
+                wcs = WCS(header)
+
+                # 将cutout中心的RA/DEC转换为原始FITS的像素坐标
+                cutout_center_coord = SkyCoord(ra=cutout_center_ra*u.degree, dec=cutout_center_dec*u.degree)
+                cutout_center_pixel = wcs.world_to_pixel(cutout_center_coord)
+                self.logger.info(f"Cutout中心在原始FITS中的像素坐标: ({cutout_center_pixel[0]:.1f}, {cutout_center_pixel[1]:.1f})")
+
+                # cutout图像的尺寸
+                h, w = image_shape[0], image_shape[1]
+                cutout_half_size = w / 2  # 假设cutout是正方形
+
+                # 计算cutout在原始FITS中的边界
+                cutout_x_min = cutout_center_pixel[0] - cutout_half_size
+                cutout_y_min = cutout_center_pixel[1] - cutout_half_size
+                self.logger.info(f"Cutout在原始FITS中的边界: ({cutout_x_min:.1f}, {cutout_y_min:.1f})")
+
+                # 遍历变星结果，绘制标记
+                # 从query_results文件中读取实际的变星坐标
+                detection_img = current_cutout.get('detection')
+                if not detection_img:
+                    self.logger.warning("无法获取detection图像路径")
+                    return
+
+                cutout_img_dir = os.path.dirname(detection_img)
+                query_results_file = os.path.join(cutout_img_dir, f"query_results_{self._current_cutout_index + 1:03d}.txt")
+
+                self.logger.info(f"查找query_results文件: {query_results_file}")
+                self.logger.info(f"文件是否存在: {os.path.exists(query_results_file)}")
+
+                if os.path.exists(query_results_file):
+                    with open(query_results_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                    self.logger.info(f"query_results文件内容长度: {len(content)} 字符")
+
+                    # 解析变星列表
+                    vsx_match = re.search(r'变星列表:\n((?:  - .*\n)+)', content)
+                    if vsx_match:
+                        self.logger.info("找到变星列表匹配")
+                        result_lines = vsx_match.group(1).strip()
+
+                        # 解析每一行变星信息
+                        for line in result_lines.split('\n'):
+                            if line.strip().startswith('-') and '(未查询)' not in line and '(已查询，未找到)' not in line:
+                                # 提取RA和DEC
+                                ra_match = re.search(r'RA=([\d.]+)°', line)
+                                dec_match = re.search(r'DEC=([-\d.]+)°', line)
+
+                                if ra_match and dec_match:
+                                    vsx_ra = float(ra_match.group(1))
+                                    vsx_dec = float(dec_match.group(1))
+
+                                    # 将变星的RA/DEC转换为原始FITS的像素坐标
+                                    vsx_coord = SkyCoord(ra=vsx_ra*u.degree, dec=vsx_dec*u.degree)
+                                    vsx_pixel = wcs.world_to_pixel(vsx_coord)
+
+                                    # 转换为cutout图像的像素坐标
+                                    vsx_x_in_cutout = vsx_pixel[0] - cutout_x_min
+                                    vsx_y_in_cutout = vsx_pixel[1] - cutout_y_min
+
+                                    # 检查变星是否在cutout范围内
+                                    if 0 <= vsx_x_in_cutout < w and 0 <= vsx_y_in_cutout < h:
+                                        self.logger.info(f"绘制变星标记: RA={vsx_ra}, DEC={vsx_dec}, "
+                                                       f"cutout坐标=({vsx_x_in_cutout:.1f}, {vsx_y_in_cutout:.1f})")
+
+                                        # 绘制橘黄色四芒星（小而细的十字标记）
+                                        self._draw_four_pointed_star(ax, vsx_x_in_cutout, vsx_y_in_cutout,
+                                                                    color='orange', linewidth=1, size=8, gap=2)
+                                    else:
+                                        self.logger.info(f"变星不在cutout范围内: RA={vsx_ra}, DEC={vsx_dec}")
+                    else:
+                        self.logger.warning("未找到变星列表匹配")
+                else:
+                    self.logger.warning("未找到query_results文件")
+
+        except Exception as e:
+            self.logger.error(f"绘制变星标记时出错: {e}", exc_info=True)
+
     def _show_cutouts_in_main_display(self, reference_img, aligned_img, detection_img, file_info=None):
         """
         在主界面显示三张cutout图片
@@ -4162,6 +4331,8 @@ class FitsImageViewer:
             # 保存图像数据供动画使用
             self._blink_images = [ref_array, aligned_array]
             self._blink_index = 0
+            self._blink_aligned_img_path = aligned_img  # 保存aligned图像路径供绘制变星使用
+            self._blink_file_info = file_info  # 保存file_info供绘制变星使用
 
             # 显示第一张图片（reference）
             self._blink_ax = axes[0]
@@ -4188,6 +4359,9 @@ class FitsImageViewer:
             self._click_ax.axis('off')
             # 添加十字准星
             self._draw_crosshair_on_axis(self._click_ax, aligned_array.shape)
+
+            # 在aligned图像上绘制变星标记
+            self._draw_variable_stars_on_axis(self._click_ax, aligned_img, aligned_array.shape, file_info)
 
             # 显示detection图像
             axes[2].imshow(detection_array, cmap='gray' if len(detection_array.shape) == 2 else None)
@@ -4218,14 +4392,30 @@ class FitsImageViewer:
                 # 切换图像索引
                 self._blink_index = 1 - self._blink_index
 
-                # 更新图像数据
-                self._blink_im.set_data(self._blink_images[self._blink_index])
+                # 清除之前的所有绘图元素（除了图像本身）
+                # 使用clear()然后重新绘制图像
+                self._blink_ax.clear()
+
+                # 重新绘制图像
+                self._blink_im = self._blink_ax.imshow(
+                    self._blink_images[self._blink_index],
+                    cmap='gray' if len(self._blink_images[self._blink_index].shape) == 2 else None
+                )
+                self._blink_ax.axis('off')
 
                 # 更新标题显示当前图像
                 if self._blink_index == 0:
                     self._blink_ax.set_title("Reference (模板图像)", fontsize=10, fontweight='bold')
+                    # 绘制十字准星
+                    self._draw_crosshair_on_axis(self._blink_ax, self._blink_images[0].shape)
                 else:
                     self._blink_ax.set_title("Aligned (对齐图像)", fontsize=10, fontweight='bold')
+                    # 绘制十字准星
+                    self._draw_crosshair_on_axis(self._blink_ax, self._blink_images[1].shape)
+                    # 绘制变星标记
+                    if hasattr(self, '_blink_aligned_img_path') and hasattr(self, '_blink_file_info'):
+                        self._draw_variable_stars_on_axis(self._blink_ax, self._blink_aligned_img_path,
+                                                          self._blink_images[1].shape, self._blink_file_info)
 
                 # 刷新画布
                 self.canvas.draw_idle()
@@ -4234,7 +4424,7 @@ class FitsImageViewer:
                 self._blink_animation_id = self.parent_frame.after(500, update_blink)
 
             except Exception as e:
-                self.logger.error(f"闪烁动画更新失败: {e}")
+                self.logger.error(f"闪烁动画更新失败: {e}", exc_info=True)
                 self._blink_animation_id = None
 
         # 启动第一次更新
