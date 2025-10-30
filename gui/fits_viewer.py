@@ -130,6 +130,12 @@ class FitsImageViewer:
         # 从配置文件加载查询设置
         self._load_query_settings()
 
+        # 从配置文件加载检测过滤设置
+        self._load_detection_filter_settings()
+
+        # 绑定检测过滤设置变化事件
+        self._bind_detection_filter_settings_events()
+
         # 延迟执行首次刷新（确保界面完全创建后）
         self.parent_frame.after(100, self._first_time_refresh)
         
@@ -484,6 +490,28 @@ class FitsImageViewer:
                                  state="readonly", width=10)
         cmap_combo.pack(side=tk.LEFT, padx=(0, 10))
         cmap_combo.bind('<<ComboboxSelected>>', self._on_colormap_change)
+
+        # 中心距离过滤设置
+        self.enable_center_distance_filter_var = tk.BooleanVar(value=False)
+        self.enable_center_distance_filter_checkbox = ttk.Checkbutton(
+            control_frame1,
+            text="启用中心距离过滤",
+            variable=self.enable_center_distance_filter_var,
+            command=self._on_enable_center_distance_filter_change
+        )
+        self.enable_center_distance_filter_checkbox.pack(side=tk.LEFT, padx=(10, 5))
+
+        ttk.Label(control_frame1, text="最大距离:").pack(side=tk.LEFT, padx=(5, 5))
+        self.max_center_distance_var = tk.StringVar(value="2400")
+        self.max_center_distance_entry = ttk.Entry(control_frame1, textvariable=self.max_center_distance_var, width=8)
+        self.max_center_distance_entry.pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(control_frame1, text="像素").pack(side=tk.LEFT, padx=(0, 5))
+
+        # 当前检测目标的中心距离显示
+        ttk.Label(control_frame1, text="当前距离:").pack(side=tk.LEFT, padx=(10, 5))
+        self.current_center_distance_label = ttk.Label(control_frame1, text="--", foreground="blue", font=("Arial", 9, "bold"))
+        self.current_center_distance_label.pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(control_frame1, text="像素").pack(side=tk.LEFT, padx=(0, 5))
 
         # 第二行控制面板：操作按钮
         control_frame2 = ttk.Frame(control_container)
@@ -1028,6 +1056,230 @@ class FitsImageViewer:
             self.logger.error(f"无效的搜索半径: {self.search_radius_var.get()}")
         except Exception as e:
             self.logger.error(f"保存查询设置失败: {str(e)}")
+
+    def _load_detection_filter_settings(self):
+        """从配置文件加载检测过滤设置"""
+        if not self.config_manager:
+            return
+
+        try:
+            filter_settings = self.config_manager.get_detection_filter_settings()
+
+            # 加载是否启用中心距离过滤，默认值：False
+            enable_filter = filter_settings.get('enable_center_distance_filter', False)
+            self.enable_center_distance_filter_var.set(enable_filter)
+
+            # 加载最大中心距离，默认值：2400像素
+            max_center_distance = filter_settings.get('max_center_distance', 2400)
+            self.max_center_distance_var.set(str(max_center_distance))
+
+            # 加载自动启用阈值，默认值：10
+            auto_enable_threshold = filter_settings.get('auto_enable_threshold', 10)
+            self._auto_enable_threshold = auto_enable_threshold
+
+            self.logger.info(f"检测过滤设置已加载: 启用过滤={enable_filter}, 最大中心距离={max_center_distance}像素, 自动启用阈值={auto_enable_threshold}")
+
+        except Exception as e:
+            self.logger.error(f"加载检测过滤设置失败: {str(e)}")
+            # 使用默认值
+            self.enable_center_distance_filter_var.set(False)
+            self.max_center_distance_var.set("2400")
+            self._auto_enable_threshold = 10
+
+    def _bind_detection_filter_settings_events(self):
+        """绑定检测过滤设置的变化事件"""
+        if not self.config_manager:
+            return
+
+        try:
+            # 绑定最大中心距离输入框（使用延迟保存）
+            self.max_center_distance_var.trace('w', self._on_max_center_distance_change)
+
+            self.logger.info("检测过滤设置事件已绑定")
+
+        except Exception as e:
+            self.logger.error(f"绑定检测过滤设置事件失败: {str(e)}")
+
+    def _on_max_center_distance_change(self, *args):
+        """最大中心距离参数变化时保存到配置文件（延迟保存）"""
+        if not self.config_manager:
+            return
+
+        # 取消之前的延迟保存任务
+        if hasattr(self, '_max_center_distance_save_timer'):
+            self.parent_frame.after_cancel(self._max_center_distance_save_timer)
+
+        # 设置新的延迟保存任务（1秒后保存）
+        self._max_center_distance_save_timer = self.parent_frame.after(1000, self._save_max_center_distance)
+
+    def _save_max_center_distance(self):
+        """保存最大中心距离参数到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            max_center_distance = float(self.max_center_distance_var.get())
+
+            if max_center_distance < 0:
+                self.logger.warning(f"最大中心距离不能为负数: {max_center_distance}")
+                return
+
+            self.config_manager.update_detection_filter_settings(max_center_distance=max_center_distance)
+            self.logger.info(f"最大中心距离参数已保存: {max_center_distance}像素")
+        except ValueError:
+            self.logger.warning(f"无效的最大中心距离值: {self.max_center_distance_var.get()}")
+        except Exception as e:
+            self.logger.error(f"保存最大中心距离参数失败: {str(e)}")
+
+    def _on_enable_center_distance_filter_change(self):
+        """启用/禁用中心距离过滤开关变化时保存到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            enable_filter = self.enable_center_distance_filter_var.get()
+            self.config_manager.update_detection_filter_settings(enable_center_distance_filter=enable_filter)
+            self.logger.info(f"中心距离过滤开关已{'启用' if enable_filter else '禁用'}")
+        except Exception as e:
+            self.logger.error(f"保存中心距离过滤开关状态失败: {str(e)}")
+
+    def _get_high_score_count_from_current_detection(self):
+        """从当前detection目录的analysis.txt文件中读取高分检测目标数量"""
+        try:
+            # 从第一个cutout获取detection目录路径
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                return None
+
+            first_cutout = self._all_cutout_sets[0]
+            detection_img = first_cutout.get('detection')
+            if not detection_img:
+                return None
+
+            # detection图片路径: .../detection_xxx/cutouts/xxx_3_detection.png
+            # detection目录路径: .../detection_xxx
+            cutout_dir = Path(detection_img).parent
+            detection_dir = cutout_dir.parent
+
+            # 查找 analysis.txt 文件（支持带参数的长文件名）
+            analysis_files = [f for f in detection_dir.iterdir()
+                            if '_analysis' in f.name and f.suffix == '.txt']
+
+            if not analysis_files:
+                self.logger.warning(f"未找到analysis.txt文件: {detection_dir}")
+                return None
+
+            analysis_path = analysis_files[0]
+
+            # 解析analysis.txt文件
+            with open(analysis_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # 获取配置的阈值和排序方式
+            score_threshold = 3.0  # 默认综合得分阈值
+            aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
+            sort_by = 'aligned_snr'  # 默认排序方式
+            if self.config_manager:
+                try:
+                    batch_settings = self.config_manager.get_batch_process_settings()
+                    score_threshold = batch_settings.get('score_threshold', 3.0)
+                    aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+                    sort_by = batch_settings.get('sort_by', 'aligned_snr')
+                except Exception:
+                    pass
+
+            # 解析每一行检测结果
+            high_score_count = 0
+            lines = content.split('\n')
+            in_data_section = False
+            for line in lines:
+                line_stripped = line.strip()
+
+                # 检测到分隔线后，下一行开始是数据
+                if line_stripped.startswith('-' * 10):
+                    in_data_section = True
+                    continue
+
+                # 跳过表头
+                if '综合得分' in line or '序号' in line:
+                    continue
+
+                # 只在数据区域解析
+                if in_data_section and line_stripped:
+                    # 尝试解析数据行
+                    parts = line_stripped.split()
+                    if len(parts) >= 14:  # 需要至少14列才能读取Aligned中心7x7SNR
+                        try:
+                            # 第一列是序号，第二列是综合得分，第14列是Aligned中心7x7SNR
+                            seq = int(parts[0])  # 验证第一列是数字
+                            score = float(parts[1])
+                            aligned_snr_str = parts[13]  # 第14列（索引13）
+
+                            # 解析Aligned SNR（可能是数字或"N/A"）
+                            aligned_snr = None
+                            if aligned_snr_str != 'N/A':
+                                try:
+                                    aligned_snr = float(aligned_snr_str)
+                                except ValueError:
+                                    aligned_snr = None
+
+                            # 根据排序方式决定判断条件
+                            is_high_score = False
+                            if sort_by == 'aligned_snr':
+                                # 使用 aligned_snr 排序时，只判断 aligned_snr > 阈值
+                                if aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                    is_high_score = True
+                            else:
+                                # 使用其他排序方式时，判断综合得分 > score_threshold 且 Aligned SNR > aligned_snr_threshold
+                                if score > score_threshold and aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                    is_high_score = True
+
+                            if is_high_score:
+                                high_score_count += 1
+                        except (ValueError, IndexError):
+                            continue
+
+            self.logger.info(f"从analysis.txt读取到高分检测目标数量: {high_score_count}")
+            return high_score_count
+
+        except Exception as e:
+            self.logger.warning(f"读取高分检测目标数量失败: {str(e)}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            return None
+
+    def _check_auto_enable_center_distance_filter(self):
+        """检查是否需要自动启用/禁用中心距离过滤（根据高分检测目标数量）"""
+        if not hasattr(self, '_auto_enable_threshold'):
+            self._auto_enable_threshold = 10  # 默认阈值
+
+        if not hasattr(self, '_total_cutouts'):
+            return
+
+        # 从当前detection目录的analysis.txt文件中读取高分检测目标数量
+        high_score_count = self._get_high_score_count_from_current_detection()
+
+        if high_score_count is None:
+            # 如果无法读取高分数量，使用总检测数量作为后备方案
+            self.logger.warning("无法读取高分检测目标数量，使用总检测数量作为后备方案")
+            high_score_count = self._total_cutouts
+
+        # 如果高分检测目标数量超过阈值，自动启用过滤
+        if high_score_count > self._auto_enable_threshold:
+            # 只在当前未启用时才自动启用
+            if not self.enable_center_distance_filter_var.get():
+                self.enable_center_distance_filter_var.set(True)
+                self.logger.info(f"高分检测目标数量 ({high_score_count}) 超过阈值 ({self._auto_enable_threshold})，自动启用中心距离过滤")
+                # 保存到配置文件
+                if self.config_manager:
+                    self.config_manager.update_detection_filter_settings(enable_center_distance_filter=True)
+        else:
+            # 如果高分检测目标数量不超过阈值，自动禁用过滤
+            if self.enable_center_distance_filter_var.get():
+                self.enable_center_distance_filter_var.set(False)
+                self.logger.info(f"高分检测目标数量 ({high_score_count}) 不超过阈值 ({self._auto_enable_threshold})，自动禁用中心距离过滤")
+                # 保存到配置文件
+                if self.config_manager:
+                    self.config_manager.update_detection_filter_settings(enable_center_distance_filter=False)
 
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""
@@ -2505,6 +2757,10 @@ class FitsImageViewer:
         if hasattr(self, 'cutout_count_label'):
             self.cutout_count_label.config(text="0/0")
 
+        # 重置当前中心距离标签
+        if hasattr(self, 'current_center_distance_label'):
+            self.current_center_distance_label.config(text="--")
+
         # 禁用导航按钮
         if hasattr(self, 'prev_cutout_button'):
             self.prev_cutout_button.config(state="disabled")
@@ -2758,6 +3014,9 @@ class FitsImageViewer:
 
             self.logger.info(f"找到 {self._total_cutouts} 组检测结果")
 
+            # 检查是否需要自动启用中心距离过滤
+            self._check_auto_enable_center_distance_filter()
+
             # 显示第一组图片
             self._display_cutout_by_index(0)
 
@@ -2834,6 +3093,14 @@ class FitsImageViewer:
         # 更新计数标签
         self.cutout_count_label.config(text=f"{index + 1}/{self._total_cutouts}")
 
+        # 更新当前检测目标的中心距离显示
+        if hasattr(self, 'current_center_distance_label'):
+            current_distance = self._get_detection_center_distance(cutout_set)
+            if current_distance > 0:
+                self.current_center_distance_label.config(text=f"{current_distance:.1f}")
+            else:
+                self.current_center_distance_label.config(text="--")
+
         # 启用导航按钮
         if self._total_cutouts > 1:
             self.prev_cutout_button.config(state="normal")
@@ -2872,14 +3139,176 @@ class FitsImageViewer:
         # 在主界面显示图片
         self._show_cutouts_in_main_display(reference_img, aligned_img, detection_img, file_info)
 
+    def _get_detection_center_distance(self, cutout_set):
+        """
+        计算检测结果距离图像中心的距离
+
+        Args:
+            cutout_set: cutout数据集
+
+        Returns:
+            float: 距离中心的像素距离，如果无法计算则返回0
+        """
+        try:
+            detection_img = cutout_set.get('detection')
+            if not detection_img:
+                self.logger.info("_get_detection_center_distance: detection_img为空")
+                return 0
+
+            # 从文件名提取像素坐标
+            detection_basename = os.path.basename(detection_img)
+            self.logger.info(f"_get_detection_center_distance: 检测文件名={detection_basename}")
+
+            xy_match = re.search(r'X(\d+)_Y(\d+)', detection_basename)
+
+            if not xy_match:
+                self.logger.info("_get_detection_center_distance: 未找到X/Y坐标，尝试RA/DEC格式")
+                # 如果没有X/Y坐标，尝试从RA/DEC格式的文件名中获取坐标
+                # 文件名格式: 001_RA285.123456_DEC43.567890_...
+                ra_dec_match = re.search(r'RA([\d.]+)_DEC([\d.]+)', detection_basename)
+                if ra_dec_match:
+                    self.logger.info("_get_detection_center_distance: 找到RA/DEC坐标")
+                    # 如果是RA/DEC格式，需要通过WCS转换为像素坐标
+                    # 这里先尝试从aligned文件的header获取WCS信息
+                    aligned_img = cutout_set.get('aligned')
+                    if aligned_img:
+                        cutout_dir = Path(aligned_img).parent
+                        detection_dir = cutout_dir.parent
+                        fits_dir = detection_dir.parent  # 原始FITS文件所在目录
+                        self.logger.info(f"_get_detection_center_distance: fits_dir={fits_dir}")
+
+                        # 查找aligned.fits文件
+                        aligned_fits_files = list(fits_dir.glob('*_aligned.fits'))
+                        self.logger.info(f"_get_detection_center_distance: 找到{len(aligned_fits_files)}个aligned.fits文件")
+                        if aligned_fits_files:
+                            self.logger.info(f"_get_detection_center_distance: 使用文件={aligned_fits_files[0]}")
+                            with fits.open(aligned_fits_files[0]) as hdul:
+                                header = hdul[0].header
+                                image_data = hdul[0].data
+
+                                if image_data is not None and header is not None:
+                                    try:
+                                        from astropy.wcs import WCS
+                                        wcs = WCS(header)
+
+                                        ra = float(ra_dec_match.group(1))
+                                        dec = float(ra_dec_match.group(2))
+
+                                        # 将RA/DEC转换为像素坐标
+                                        pixel_coords = wcs.all_world2pix([[ra, dec]], 0)
+                                        pixel_x = pixel_coords[0][0]
+                                        pixel_y = pixel_coords[0][1]
+
+                                        height, width = image_data.shape
+                                        center_x = width / 2.0
+                                        center_y = height / 2.0
+
+                                        # 计算距离
+                                        distance = np.sqrt((pixel_x - center_x)**2 + (pixel_y - center_y)**2)
+                                        self.logger.info(f"_get_detection_center_distance: RA/DEC格式计算距离={distance:.1f}像素")
+                                        return distance
+                                    except Exception as wcs_error:
+                                        self.logger.warning(f"_get_detection_center_distance: WCS转换失败: {wcs_error}")
+
+                self.logger.info("_get_detection_center_distance: 未找到RA/DEC坐标或无法转换")
+                return 0
+
+            pixel_x = float(xy_match.group(1))
+            pixel_y = float(xy_match.group(2))
+            self.logger.info(f"_get_detection_center_distance: 提取到X/Y坐标: X={pixel_x}, Y={pixel_y}")
+
+            # 获取图像尺寸（从detection文件的父目录中的原始FITS文件）
+            # 尝试从aligned文件获取图像尺寸
+            aligned_img = cutout_set.get('aligned')
+            if aligned_img:
+                # 从aligned cutout的父目录找到原始aligned FITS文件
+                # cutout路径: .../detection_xxx/cutouts/xxx.png
+                # detection_dir: .../detection_xxx
+                # 原始FITS文件在detection_dir的父目录
+                cutout_dir = Path(aligned_img).parent
+                detection_dir = cutout_dir.parent
+                fits_dir = detection_dir.parent  # 原始FITS文件所在目录
+                self.logger.info(f"_get_detection_center_distance: fits_dir={fits_dir}")
+
+                # 查找aligned.fits文件
+                aligned_fits_files = list(fits_dir.glob('*_aligned.fits'))
+                self.logger.info(f"_get_detection_center_distance: 找到{len(aligned_fits_files)}个aligned.fits文件")
+
+                if aligned_fits_files:
+                    self.logger.info(f"_get_detection_center_distance: 使用文件={aligned_fits_files[0]}")
+                    with fits.open(aligned_fits_files[0]) as hdul:
+                        image_data = hdul[0].data
+                        if image_data is not None:
+                            height, width = image_data.shape
+                            center_x = width / 2.0
+                            center_y = height / 2.0
+                            self.logger.info(f"_get_detection_center_distance: 图像尺寸={width}x{height}, 中心=({center_x:.1f}, {center_y:.1f})")
+
+                            # 计算距离
+                            distance = np.sqrt((pixel_x - center_x)**2 + (pixel_y - center_y)**2)
+                            self.logger.info(f"_get_detection_center_distance: X/Y格式计算距离={distance:.1f}像素")
+                            return distance
+                        else:
+                            self.logger.warning("_get_detection_center_distance: image_data为None")
+                else:
+                    self.logger.warning("_get_detection_center_distance: 未找到aligned.fits文件")
+            else:
+                self.logger.warning("_get_detection_center_distance: aligned_img为空")
+
+            # 如果无法获取图像尺寸，返回0
+            self.logger.info("_get_detection_center_distance: 无法获取图像尺寸，返回0")
+            return 0
+
+        except Exception as e:
+            self.logger.warning(f"计算检测结果中心距离失败: {str(e)}")
+            import traceback
+            self.logger.warning(traceback.format_exc())
+            return 0
+
     def _show_next_cutout(self):
-        """显示下一组cutout图片"""
+        """显示下一组cutout图片（如果启用过滤，则跳过距离中心过远的检测结果）"""
         if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
             messagebox.showinfo("提示", "没有可显示的检测结果")
             return
 
-        next_index = (self._current_cutout_index + 1) % self._total_cutouts
-        self._display_cutout_by_index(next_index)
+        # 检查是否启用中心距离过滤
+        enable_filter = self.enable_center_distance_filter_var.get() if hasattr(self, 'enable_center_distance_filter_var') else False
+
+        # 如果未启用过滤，直接显示下一个
+        if not enable_filter:
+            next_index = (self._current_cutout_index + 1) % self._total_cutouts
+            self._display_cutout_by_index(next_index)
+            return
+
+        # 启用过滤时，获取最大中心距离阈值
+        try:
+            max_distance = float(self.max_center_distance_var.get())
+        except (ValueError, AttributeError):
+            max_distance = 2400  # 默认值
+
+        # 从当前索引开始查找下一个符合条件的检测结果
+        start_index = self._current_cutout_index
+        attempts = 0
+
+        while attempts < self._total_cutouts:
+            next_index = (start_index + attempts + 1) % self._total_cutouts
+            cutout_set = self._all_cutout_sets[next_index]
+
+            # 计算距离中心的距离
+            distance = self._get_detection_center_distance(cutout_set)
+
+            # 如果距离为0（无法计算）或小于等于阈值，则显示
+            if distance == 0 or distance <= max_distance:
+                self._display_cutout_by_index(next_index)
+                return
+            else:
+                self.logger.info(f"跳过检测结果 {next_index + 1}，距离中心 {distance:.1f} 像素 > {max_distance} 像素")
+
+            attempts += 1
+
+        # 如果所有检测结果都不符合条件，显示提示
+        messagebox.showinfo("提示", f"没有找到距离中心小于 {max_distance} 像素的检测结果")
+        self.logger.warning(f"所有检测结果都超过最大中心距离阈值 {max_distance} 像素")
 
     def _update_coordinate_display(self, file_info):
         """
@@ -3089,13 +3518,49 @@ class FitsImageViewer:
             self.logger.error(f"更新时间显示失败: {e}")
 
     def _show_previous_cutout(self):
-        """显示上一组cutout图片"""
+        """显示上一组cutout图片（如果启用过滤，则跳过距离中心过远的检测结果）"""
         if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
             messagebox.showinfo("提示", "没有可显示的检测结果")
             return
 
-        prev_index = (self._current_cutout_index - 1) % self._total_cutouts
-        self._display_cutout_by_index(prev_index)
+        # 检查是否启用中心距离过滤
+        enable_filter = self.enable_center_distance_filter_var.get() if hasattr(self, 'enable_center_distance_filter_var') else False
+
+        # 如果未启用过滤，直接显示上一个
+        if not enable_filter:
+            prev_index = (self._current_cutout_index - 1) % self._total_cutouts
+            self._display_cutout_by_index(prev_index)
+            return
+
+        # 启用过滤时，获取最大中心距离阈值
+        try:
+            max_distance = float(self.max_center_distance_var.get())
+        except (ValueError, AttributeError):
+            max_distance = 2400  # 默认值
+
+        # 从当前索引开始查找上一个符合条件的检测结果
+        start_index = self._current_cutout_index
+        attempts = 0
+
+        while attempts < self._total_cutouts:
+            prev_index = (start_index - attempts - 1) % self._total_cutouts
+            cutout_set = self._all_cutout_sets[prev_index]
+
+            # 计算距离中心的距离
+            distance = self._get_detection_center_distance(cutout_set)
+
+            # 如果距离为0（无法计算）或小于等于阈值，则显示
+            if distance == 0 or distance <= max_distance:
+                self._display_cutout_by_index(prev_index)
+                return
+            else:
+                self.logger.info(f"跳过检测结果 {prev_index + 1}，距离中心 {distance:.1f} 像素 > {max_distance} 像素")
+
+            attempts += 1
+
+        # 如果所有检测结果都不符合条件，显示提示
+        messagebox.showinfo("提示", f"没有找到距离中心小于 {max_distance} 像素的检测结果")
+        self.logger.warning(f"所有检测结果都超过最大中心距离阈值 {max_distance} 像素")
 
     def _on_tree_left_key(self, event):
         """处理目录树的左键事件 - 对应"上一组"按钮"""

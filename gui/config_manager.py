@@ -71,6 +71,11 @@ class ConfigManager:
             "query_settings": {
                 "search_radius": 0.01  # 搜索半径（度）（默认值：0.01）
             },
+            "detection_filter_settings": {
+                "enable_center_distance_filter": False,  # 是否启用中心距离过滤（默认值：False）
+                "max_center_distance": 2400,  # 检测结果距离中心像素的最大距离（默认值：2400）
+                "auto_enable_threshold": 10  # 检测目标超过此数量时自动启用过滤（默认值：10）
+            },
             "display_settings": {
                 "default_display_mode": "linear",
                 "default_colormap": "gray",
@@ -265,6 +270,24 @@ class ConfigManager:
         for key, value in kwargs.items():
             if key == "search_radius":
                 self.config["query_settings"][key] = value
+        self.save_config()
+
+    def get_detection_filter_settings(self) -> Dict[str, Any]:
+        """获取检测结果过滤设置"""
+        # 如果配置中没有检测结果过滤设置，使用默认值
+        if "detection_filter_settings" not in self.config:
+            self.config["detection_filter_settings"] = self.default_config["detection_filter_settings"].copy()
+            self.save_config()
+        return self.config["detection_filter_settings"]
+
+    def update_detection_filter_settings(self, **kwargs):
+        """更新检测结果过滤设置"""
+        if "detection_filter_settings" not in self.config:
+            self.config["detection_filter_settings"] = self.default_config["detection_filter_settings"].copy()
+
+        for key, value in kwargs.items():
+            if key in ["enable_center_distance_filter", "max_center_distance", "auto_enable_threshold"]:
+                self.config["detection_filter_settings"][key] = value
         self.save_config()
 
     def get_url_template_type(self) -> str:
