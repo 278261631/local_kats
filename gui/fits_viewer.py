@@ -4966,7 +4966,7 @@ class FitsImageViewer:
 
             # 执行查询，使用VizieR查询VSX目录
             # VSX目录在VizieR中的标识是 "B/vsx/vsx"
-            v = Vizier(columns=['**'], row_limit=-1)  # 获取所有列，不限制行数
+            v = Vizier(columns=['**'], row_limit=5)  # 获取所有列，不限制行数
             try:
                 results = v.query_region(coord, radius=search_radius_u, catalog="B/vsx/vsx")
 
