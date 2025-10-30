@@ -4412,10 +4412,6 @@ class FitsImageViewer:
                     self._blink_ax.set_title("Aligned (对齐图像)", fontsize=10, fontweight='bold')
                     # 绘制十字准星
                     self._draw_crosshair_on_axis(self._blink_ax, self._blink_images[1].shape)
-                    # 绘制变星标记
-                    if hasattr(self, '_blink_aligned_img_path') and hasattr(self, '_blink_file_info'):
-                        self._draw_variable_stars_on_axis(self._blink_ax, self._blink_aligned_img_path,
-                                                          self._blink_images[1].shape, self._blink_file_info)
 
                 # 刷新画布
                 self.canvas.draw_idle()
