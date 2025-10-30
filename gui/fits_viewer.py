@@ -3051,6 +3051,16 @@ class FitsImageViewer:
                 result_lines = skybot_match.group(1).strip()
                 if '(未查询)' not in result_lines:
                     cutout_set['skybot_queried'] = True
+                    # 检查是否有实际结果
+                    if '(已查询，未找到)' not in result_lines:
+                        # 有实际结果,创建一个模拟的结果列表(用于按钮颜色显示)
+                        # 计算结果数量
+                        result_count = len([line for line in result_lines.split('\n') if line.strip().startswith('-')])
+                        # 创建一个简单的列表来表示有结果(长度表示数量)
+                        cutout_set['skybot_results'] = [None] * result_count
+                    else:
+                        # 已查询但未找到
+                        cutout_set['skybot_results'] = []
 
             # 检查变星查询状态
             vsx_match = re.search(r'变星列表:\n((?:  - .*\n)+)', content)
@@ -3058,6 +3068,16 @@ class FitsImageViewer:
                 result_lines = vsx_match.group(1).strip()
                 if '(未查询)' not in result_lines:
                     cutout_set['vsx_queried'] = True
+                    # 检查是否有实际结果
+                    if '(已查询，未找到)' not in result_lines:
+                        # 有实际结果,创建一个模拟的结果列表(用于按钮颜色显示)
+                        # 计算结果数量
+                        result_count = len([line for line in result_lines.split('\n') if line.strip().startswith('-')])
+                        # 创建一个简单的列表来表示有结果(长度表示数量)
+                        cutout_set['vsx_results'] = [None] * result_count
+                    else:
+                        # 已查询但未找到
+                        cutout_set['vsx_results'] = []
 
         except Exception as e:
             self.logger.error(f"加载查询结果失败: {str(e)}")
