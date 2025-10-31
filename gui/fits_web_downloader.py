@@ -33,8 +33,16 @@ except ImportError:
 
 class FitsWebDownloaderGUI:
     """FITS文件网页下载器主界面"""
-    
-    def __init__(self):
+
+    def __init__(self, auto_date=None, auto_telescope=None, auto_region=None):
+        """
+        初始化GUI
+
+        Args:
+            auto_date: 自动设置的日期（格式：YYYYMMDD）
+            auto_telescope: 自动设置的望远镜系统名
+            auto_region: 自动设置的天区名
+        """
         self.root = tk.Tk()
         self.root.title("FITS文件网页下载器")
         self.root.geometry("1200x900")
@@ -62,11 +70,20 @@ class FitsWebDownloaderGUI:
         self.batch_pause_event = threading.Event()  # 暂停事件
         self.batch_pause_event.set()  # 初始为非暂停状态
 
+        # 保存自动执行参数
+        self.auto_date = auto_date
+        self.auto_telescope = auto_telescope
+        self.auto_region = auto_region
+
         # 创建界面
         self._create_widgets()
 
         # 加载配置
         self._load_config()
+
+        # 如果有自动执行参数，设置UI并执行相应操作
+        if self.auto_date:
+            self.root.after(1000, self._apply_auto_settings)
         
     def _setup_logging(self):
         """设置日志"""
@@ -2982,6 +2999,162 @@ Diff统计:
             self._log(f"保存配置失败: {str(e)}")
         finally:
             self.root.destroy()
+
+    def _apply_auto_settings(self):
+        """应用自动设置并执行相应操作"""
+        try:
+            self._log("=" * 60)
+            self._log("自动执行模式")
+            self._log(f"日期: {self.auto_date}")
+            self._log(f"望远镜: {self.auto_telescope}")
+            self._log(f"天区: {self.auto_region}")
+            self._log("=" * 60)
+
+            # 验证日期格式
+            if not self.config_manager.validate_date(self.auto_date):
+                error_msg = f"日期格式无效: {self.auto_date}，需要YYYYMMDD格式"
+                self._log(error_msg)
+                messagebox.showerror("参数错误", error_msg)
+                return
+
+            # 设置日期
+            self.url_builder.date_var.set(self.auto_date)
+            self._log(f"已设置日期: {self.auto_date}")
+
+            # 根据参数组合决定执行的操作
+            if self.auto_region:
+                # 有日期、望远镜系统名和天区名 - 执行"扫描fits文件" + "全选" + "批量下载并diff"
+                if not self.auto_telescope:
+                    error_msg = "指定了天区但未指定望远镜系统名"
+                    self._log(error_msg)
+                    messagebox.showerror("参数错误", error_msg)
+                    return
+
+                self._log("执行模式: 扫描fits文件 + 全选 + 批量下载并diff")
+
+                # 设置望远镜
+                self.url_builder.telescope_var.set(self.auto_telescope)
+                self._log(f"已设置望远镜: {self.auto_telescope}")
+
+                # 设置天区
+                self.url_builder.k_number_var.set(self.auto_region)
+                self._log(f"已设置天区: {self.auto_region}")
+
+                # 延迟执行，确保UI完全初始化
+                self.root.after(2000, self._auto_scan_and_batch)
+
+            elif self.auto_telescope:
+                # 有日期和望远镜系统名 - 执行"全天下载diff"操作
+                self._log("执行模式: 全天下载diff")
+
+                # 设置望远镜
+                self.url_builder.telescope_var.set(self.auto_telescope)
+                self._log(f"已设置望远镜: {self.auto_telescope}")
+
+                # 延迟执行，确保UI完全初始化
+                self.root.after(2000, self._auto_full_day_batch)
+
+            else:
+                # 只有日期 - 执行"全天全系统diff"操作
+                self._log("执行模式: 全天全系统diff")
+
+                # 延迟执行，确保UI完全初始化
+                self.root.after(2000, self._auto_full_day_all_systems_batch)
+
+        except Exception as e:
+            error_msg = f"应用自动设置失败: {str(e)}"
+            self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
+            messagebox.showerror("错误", error_msg)
+
+    def _auto_scan_and_batch(self):
+        """自动执行：扫描fits文件 + 全选 + 批量下载并diff"""
+        try:
+            self._log("开始自动扫描FITS文件...")
+
+            # 执行扫描
+            self._start_scan()
+
+            # 等待扫描完成后全选并批量处理
+            self.root.after(3000, self._auto_select_all_and_batch)
+
+        except Exception as e:
+            error_msg = f"自动扫描失败: {str(e)}"
+            self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
+            messagebox.showerror("错误", error_msg)
+
+    def _auto_select_all_and_batch(self):
+        """自动执行：全选并批量处理"""
+        try:
+            # 检查是否有文件
+            if not self.fits_files_list:
+                self._log("未找到FITS文件，无法执行批量处理")
+                messagebox.showwarning("警告", "未找到FITS文件")
+                return
+
+            self._log(f"找到 {len(self.fits_files_list)} 个FITS文件")
+
+            # 全选
+            self._log("执行全选...")
+            self._select_all()
+
+            # 延迟一下再执行批量处理
+            self.root.after(1000, self._auto_execute_batch)
+
+        except Exception as e:
+            error_msg = f"自动全选失败: {str(e)}"
+            self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
+            messagebox.showerror("错误", error_msg)
+
+    def _auto_execute_batch(self):
+        """自动执行：批量下载并diff"""
+        try:
+            self._log("开始批量下载并diff...")
+
+            # 执行批量处理
+            self._batch_process()
+
+        except Exception as e:
+            error_msg = f"自动批量处理失败: {str(e)}"
+            self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
+            messagebox.showerror("错误", error_msg)
+
+    def _auto_full_day_batch(self):
+        """自动执行：全天下载diff"""
+        try:
+            self._log("开始全天下载diff...")
+
+            # 执行全天下载diff
+            self._full_day_batch_process()
+
+        except Exception as e:
+            error_msg = f"自动全天下载diff失败: {str(e)}"
+            self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
+            messagebox.showerror("错误", error_msg)
+
+    def _auto_full_day_all_systems_batch(self):
+        """自动执行：全天全系统diff"""
+        try:
+            self._log("开始全天全系统diff...")
+
+            # 执行全天全系统diff
+            self._full_day_all_systems_batch_process()
+
+        except Exception as e:
+            error_msg = f"自动全天全系统diff失败: {str(e)}"
+            self._log(error_msg)
+            import traceback
+            self._log(traceback.format_exc())
+            messagebox.showerror("错误", error_msg)
 
 
 def main():
