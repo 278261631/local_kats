@@ -56,6 +56,12 @@ class FitsWebDownloaderGUI:
         self.region_buttons = []  # 存储天区按钮引用
         self.region_button_states = {}  # 存储天区按钮的选中状态
 
+        # 批量处理控制状态
+        self.batch_paused = False  # 暂停标志
+        self.batch_stopped = False  # 停止标志
+        self.batch_pause_event = threading.Event()  # 暂停事件
+        self.batch_pause_event.set()  # 初始为非暂停状态
+
         # 创建界面
         self._create_widgets()
 
@@ -110,7 +116,7 @@ class FitsWebDownloaderGUI:
     def _create_scan_widgets(self):
         """创建扫描和下载界面"""
         # URL构建器区域
-        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process, self._open_batch_output_directory, self._full_day_batch_process, self._full_day_all_systems_batch_process)
+        self.url_builder = URLBuilderFrame(self.scan_frame, self.config_manager, self._on_url_change, self._start_scan, self._batch_process, self._open_batch_output_directory, self._full_day_batch_process, self._full_day_all_systems_batch_process, self._pause_batch_process, self._stop_batch_process)
 
         # 保存批量处理的输出根目录
         self.last_batch_output_root = None
@@ -1724,6 +1730,32 @@ Diff统计:
 
         return result_dict
 
+    def _pause_batch_process(self):
+        """暂停/继续批量处理"""
+        if self.batch_paused:
+            # 当前是暂停状态，点击后继续
+            self.batch_paused = False
+            self.batch_pause_event.set()  # 释放暂停
+            self.url_builder.set_pause_batch_button_text("⏸ 暂停")
+            self._log("批量处理已继续")
+            self.status_label.config(text="批量处理继续中...")
+        else:
+            # 当前是运行状态，点击后暂停
+            self.batch_paused = True
+            self.batch_pause_event.clear()  # 设置暂停
+            self.url_builder.set_pause_batch_button_text("▶ 继续")
+            self._log("批量处理已暂停")
+            self.status_label.config(text="批量处理已暂停")
+
+    def _stop_batch_process(self):
+        """停止批量处理"""
+        if messagebox.askyesno("确认", "确定要停止批量处理吗？\n已处理的文件不会回滚。"):
+            self.batch_stopped = True
+            self.batch_paused = False
+            self.batch_pause_event.set()  # 如果正在暂停，先释放以便线程能检测到停止标志
+            self._log("正在停止批量处理...")
+            self.status_label.config(text="正在停止批量处理...")
+
     def _batch_process(self):
         """批量下载并执行diff操作"""
         selected_files = self._get_selected_files()
@@ -1748,10 +1780,20 @@ Diff统计:
             messagebox.showwarning("警告", "请配置Diff输出根目录")
             return
 
+        # 重置批量处理控制状态
+        self.batch_paused = False
+        self.batch_stopped = False
+        self.batch_pause_event.set()
+
         # 禁用按钮
         self.url_builder.set_batch_button_state("disabled")
         self.url_builder.set_scan_button_state("disabled")
         self.download_button.config(state="disabled")
+
+        # 启用暂停和停止按钮
+        self.url_builder.set_pause_batch_button_state("normal")
+        self.url_builder.set_pause_batch_button_text("⏸ 暂停")
+        self.url_builder.set_stop_batch_button_state("normal")
 
         # 在新线程中执行批量处理
         thread = threading.Thread(target=self._batch_process_thread, args=(selected_files,))
@@ -1847,6 +1889,9 @@ Diff统计:
             self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
             self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.download_button.config(state="normal"))
+            # 禁用暂停和停止按钮
+            self.root.after(0, lambda: self.url_builder.set_pause_batch_button_state("disabled"))
+            self.root.after(0, lambda: self.url_builder.set_stop_batch_button_state("disabled"))
             self.root.after(0, lambda: self.status_label.config(text="就绪"))
 
     def _get_url_selections(self):
@@ -1909,6 +1954,16 @@ Diff统计:
         if not messagebox.askyesno("确认", msg):
             return
 
+        # 重置批量处理控制状态
+        self.batch_paused = False
+        self.batch_stopped = False
+        self.batch_pause_event.set()
+
+        # 启用暂停和停止按钮
+        self.url_builder.set_pause_batch_button_state("normal")
+        self.url_builder.set_pause_batch_button_text("⏸ 暂停")
+        self.url_builder.set_stop_batch_button_state("normal")
+
         # 在新线程中执行
         thread = threading.Thread(target=self._full_day_batch_process_thread, args=(tel_name, date, available_regions))
         thread.daemon = True
@@ -1962,6 +2017,25 @@ Diff统计:
             total_regions = len(available_regions)
 
             for region_idx, k_number in enumerate(available_regions, 1):
+                # 检查停止标志
+                if self.batch_stopped:
+                    self._log("\n全天批量处理已被停止")
+                    break
+
+                # 检查暂停标志
+                if self.batch_paused:
+                    self._log(f"\n全天批量处理已暂停（当前进度: 天区 {region_idx-1}/{total_regions}）")
+                    self.root.after(0, lambda r=region_idx-1, t=total_regions: self.status_label.config(
+                        text=f"全天批量处理已暂停 (天区 {r}/{t})"))
+
+                # 等待暂停解除
+                self.batch_pause_event.wait()
+
+                # 暂停解除后再次检查停止标志
+                if self.batch_stopped:
+                    self._log("\n全天批量处理已被停止")
+                    break
+
                 self._log(f"\n[{region_idx}/{total_regions}] 正在扫描天区: {k_number}")
                 self.root.after(0, lambda r=region_idx, t=total_regions, k=k_number:
                                self.status_label.config(text=f"正在扫描天区 [{r}/{t}]: {k}"))
@@ -2027,6 +2101,25 @@ Diff统计:
 
             # 对每个天区执行批量处理
             for region_idx, (k_number, region_files) in enumerate(files_by_region.items(), 1):
+                # 检查停止标志
+                if self.batch_stopped:
+                    self._log("\n全天批量处理已被停止")
+                    break
+
+                # 检查暂停标志
+                if self.batch_paused:
+                    self._log(f"\n全天批量处理已暂停（当前进度: 天区 {region_idx-1}/{len(files_by_region)}）")
+                    self.root.after(0, lambda r=region_idx-1, t=len(files_by_region): self.status_label.config(
+                        text=f"全天批量处理已暂停 (天区 {r}/{t})"))
+
+                # 等待暂停解除
+                self.batch_pause_event.wait()
+
+                # 暂停解除后再次检查停止标志
+                if self.batch_stopped:
+                    self._log("\n全天批量处理已被停止")
+                    break
+
                 try:
                     self._log(f"\n处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
                     self._log(f"文件数量: {len(region_files)}")
@@ -2062,6 +2155,9 @@ Diff统计:
             self.root.after(0, lambda: self.url_builder.set_full_day_batch_button_state("normal"))
             self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.download_button.config(state="normal"))
+            # 禁用暂停和停止按钮
+            self.root.after(0, lambda: self.url_builder.set_pause_batch_button_state("disabled"))
+            self.root.after(0, lambda: self.url_builder.set_stop_batch_button_state("disabled"))
             self.root.after(0, lambda: self.status_label.config(text="就绪"))
 
     def _batch_process_region(self, selected_files, tel_name, date, k_number):
@@ -2162,10 +2258,23 @@ Diff统计:
         # 启动ASTAP工作线程池
         def astap_worker():
             """ASTAP处理工作线程"""
-            while not stop_event.is_set():
+            while not stop_event.is_set() and not self.batch_stopped:
                 try:
                     file_path = astap_queue.get(timeout=1)
                     if file_path is None:  # 结束信号
+                        astap_queue.task_done()
+                        break
+
+                    # 检查停止标志
+                    if self.batch_stopped:
+                        astap_queue.task_done()
+                        break
+
+                    # 等待暂停解除
+                    self.batch_pause_event.wait()
+
+                    # 暂停解除后再次检查停止标志
+                    if self.batch_stopped:
                         astap_queue.task_done()
                         break
 
@@ -2229,10 +2338,23 @@ Diff统计:
         # 启动Diff工作线程池
         def diff_worker():
             """Diff处理工作线程"""
-            while not stop_event.is_set():
+            while not stop_event.is_set() and not self.batch_stopped:
                 try:
                     file_path = diff_queue.get(timeout=1)
                     if file_path is None:  # 结束信号
+                        diff_queue.task_done()
+                        break
+
+                    # 检查停止标志
+                    if self.batch_stopped:
+                        diff_queue.task_done()
+                        break
+
+                    # 等待暂停解除
+                    self.batch_pause_event.wait()
+
+                    # 暂停解除后再次检查停止标志
+                    if self.batch_stopped:
                         diff_queue.task_done()
                         break
 
@@ -2301,6 +2423,27 @@ Diff统计:
         # 下载文件并放入ASTAP队列（单线程下载）
         self._log("\n开始下载文件...")
         for idx, (filename, url) in enumerate(selected_files, 1):
+            # 检查停止标志
+            if self.batch_stopped:
+                self._log("\n批量处理已被停止")
+                stop_event.set()
+                break
+
+            # 检查暂停标志
+            if self.batch_paused:
+                self._log(f"\n批量处理已暂停（当前进度: {idx-1}/{len(selected_files)}）")
+                self.root.after(0, lambda i=idx-1, t=len(selected_files): self.status_label.config(
+                    text=f"批量处理已暂停 ({i}/{t})"))
+
+            # 等待暂停解除
+            self.batch_pause_event.wait()
+
+            # 暂停解除后再次检查停止标志
+            if self.batch_stopped:
+                self._log("\n批量处理已被停止")
+                stop_event.set()
+                break
+
             self._log(f"[下载] [{idx}/{len(selected_files)}] {filename}")
             self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
                 f, BatchStatusWidget.STATUS_DOWNLOADING))
@@ -2591,6 +2734,16 @@ Diff统计:
         if not messagebox.askyesno("确认", msg):
             return
 
+        # 重置批量处理控制状态
+        self.batch_paused = False
+        self.batch_stopped = False
+        self.batch_pause_event.set()
+
+        # 启用暂停和停止按钮
+        self.url_builder.set_pause_batch_button_state("normal")
+        self.url_builder.set_pause_batch_button_text("⏸ 暂停")
+        self.url_builder.set_stop_batch_button_state("normal")
+
         # 在新线程中执行
         thread = threading.Thread(target=self._full_day_all_systems_batch_process_thread, args=(date, all_telescopes))
         thread.daemon = True
@@ -2624,6 +2777,25 @@ Diff统计:
             total_files_processed = 0
 
             for system_idx, tel_name in enumerate(all_telescopes, 1):
+                # 检查停止标志
+                if self.batch_stopped:
+                    self._log("\n全天全系统批量处理已被停止")
+                    break
+
+                # 检查暂停标志
+                if self.batch_paused:
+                    self._log(f"\n全天全系统批量处理已暂停（当前进度: 系统 {system_idx-1}/{total_systems}）")
+                    self.root.after(0, lambda s=system_idx-1, t=total_systems: self.status_label.config(
+                        text=f"全天全系统批量处理已暂停 (系统 {s}/{t})"))
+
+                # 等待暂停解除
+                self.batch_pause_event.wait()
+
+                # 暂停解除后再次检查停止标志
+                if self.batch_stopped:
+                    self._log("\n全天全系统批量处理已被停止")
+                    break
+
                 self._log(f"\n{'=' * 60}")
                 self._log(f"[{system_idx}/{total_systems}] 处理系统: {tel_name}")
                 self._log(f"{'=' * 60}")
@@ -2665,6 +2837,18 @@ Diff统计:
                     system_files_to_process = []
 
                     for region_idx, k_number in enumerate(available_regions, 1):
+                        # 检查停止标志
+                        if self.batch_stopped:
+                            self._log("\n全天全系统批量处理已被停止")
+                            break
+
+                        # 检查暂停标志并等待
+                        self.batch_pause_event.wait()
+
+                        # 暂停解除后再次检查停止标志
+                        if self.batch_stopped:
+                            break
+
                         self._log(f"\n  [{region_idx}/{len(available_regions)}] 扫描天区: {k_number}")
                         self.root.after(0, lambda s=system_idx, t=total_systems, n=tel_name, r=region_idx, rt=len(available_regions), k=k_number:
                                        self.status_label.config(text=f"系统 [{s}/{t}] {n} - 天区 [{r}/{rt}]: {k}"))
@@ -2707,6 +2891,18 @@ Diff统计:
 
                     # 对每个天区执行批量处理
                     for region_idx, (k_number, region_files) in enumerate(files_by_region.items(), 1):
+                        # 检查停止标志
+                        if self.batch_stopped:
+                            self._log("\n全天全系统批量处理已被停止")
+                            break
+
+                        # 检查暂停标志并等待
+                        self.batch_pause_event.wait()
+
+                        # 暂停解除后再次检查停止标志
+                        if self.batch_stopped:
+                            break
+
                         try:
                             self._log(f"\n  处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
                             self._log(f"  文件数量: {len(region_files)}")
@@ -2751,6 +2947,9 @@ Diff统计:
             self.root.after(0, lambda: self.url_builder.set_full_day_all_systems_batch_button_state("normal"))
             self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.download_button.config(state="normal"))
+            # 禁用暂停和停止按钮
+            self.root.after(0, lambda: self.url_builder.set_pause_batch_button_state("disabled"))
+            self.root.after(0, lambda: self.url_builder.set_stop_batch_button_state("disabled"))
             self.root.after(0, lambda: self.status_label.config(text="就绪"))
 
     def _on_closing(self):

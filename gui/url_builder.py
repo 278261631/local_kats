@@ -176,7 +176,7 @@ class RegionScanner:
 class URLBuilderFrame:
     """URL构建器界面组件"""
 
-    def __init__(self, parent_frame, config_manager: ConfigManager, on_url_change: Optional[Callable] = None, on_scan_fits: Optional[Callable] = None, on_batch_process: Optional[Callable] = None, on_open_batch_output: Optional[Callable] = None, on_full_day_batch_process: Optional[Callable] = None, on_full_day_all_systems_batch_process: Optional[Callable] = None):
+    def __init__(self, parent_frame, config_manager: ConfigManager, on_url_change: Optional[Callable] = None, on_scan_fits: Optional[Callable] = None, on_batch_process: Optional[Callable] = None, on_open_batch_output: Optional[Callable] = None, on_full_day_batch_process: Optional[Callable] = None, on_full_day_all_systems_batch_process: Optional[Callable] = None, on_pause_batch: Optional[Callable] = None, on_stop_batch: Optional[Callable] = None):
         self.parent_frame = parent_frame
         self.config_manager = config_manager
         self.on_url_change = on_url_change  # URL变化时的回调函数
@@ -185,6 +185,8 @@ class URLBuilderFrame:
         self.on_open_batch_output = on_open_batch_output  # 打开批量输出目录时的回调函数
         self.on_full_day_batch_process = on_full_day_batch_process  # 全天下载diff时的回调函数
         self.on_full_day_all_systems_batch_process = on_full_day_all_systems_batch_process  # 全天全系统下载diff时的回调函数
+        self.on_pause_batch = on_pause_batch  # 暂停/继续批量处理时的回调函数
+        self.on_stop_batch = on_stop_batch  # 停止批量处理时的回调函数
 
         self.logger = logging.getLogger(__name__)
 
@@ -318,6 +320,14 @@ class URLBuilderFrame:
         # 打开批量输出目录按钮
         self.open_batch_output_button = ttk.Button(row2, text="打开输出目录", command=self._on_open_batch_output_clicked, state="disabled")
         self.open_batch_output_button.pack(side=tk.LEFT, padx=(0, 15))
+
+        # 暂停/继续按钮
+        self.pause_batch_button = ttk.Button(row2, text="⏸ 暂停", command=self._on_pause_batch_clicked, state="disabled")
+        self.pause_batch_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 停止按钮
+        self.stop_batch_button = ttk.Button(row2, text="⏹ 停止", command=self._on_stop_batch_clicked, state="disabled")
+        self.stop_batch_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # URL格式选择
         ttk.Label(row2, text="URL格式:").pack(side=tk.LEFT, padx=(0, 5))
@@ -738,6 +748,16 @@ class URLBuilderFrame:
         if self.on_open_batch_output:
             self.on_open_batch_output()
 
+    def _on_pause_batch_clicked(self):
+        """暂停/继续批量处理按钮点击事件"""
+        if self.on_pause_batch:
+            self.on_pause_batch()
+
+    def _on_stop_batch_clicked(self):
+        """停止批量处理按钮点击事件"""
+        if self.on_stop_batch:
+            self.on_stop_batch()
+
     def set_scan_button_state(self, state: str):
         """设置扫描按钮状态"""
         if hasattr(self, 'scan_fits_button'):
@@ -767,6 +787,21 @@ class URLBuilderFrame:
         """设置打开批量输出目录按钮状态"""
         if hasattr(self, 'open_batch_output_button'):
             self.open_batch_output_button.config(state=state)
+
+    def set_pause_batch_button_state(self, state: str):
+        """设置暂停/继续按钮状态"""
+        if hasattr(self, 'pause_batch_button'):
+            self.pause_batch_button.config(state=state)
+
+    def set_pause_batch_button_text(self, text: str):
+        """设置暂停/继续按钮文本"""
+        if hasattr(self, 'pause_batch_button'):
+            self.pause_batch_button.config(text=text)
+
+    def set_stop_batch_button_state(self, state: str):
+        """设置停止按钮状态"""
+        if hasattr(self, 'stop_batch_button'):
+            self.stop_batch_button.config(state=state)
 
     def get_thread_count(self) -> int:
         """获取线程数配置"""
