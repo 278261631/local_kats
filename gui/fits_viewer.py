@@ -1107,8 +1107,8 @@ class FitsImageViewer:
             max_center_distance = filter_settings.get('max_center_distance', 2400)
             self.max_center_distance_var.set(str(max_center_distance))
 
-            # 加载自动启用阈值，默认值：10
-            auto_enable_threshold = filter_settings.get('auto_enable_threshold', 10)
+            # 加载自动启用阈值，默认值：50
+            auto_enable_threshold = filter_settings.get('auto_enable_threshold', 50)
             self._auto_enable_threshold = auto_enable_threshold
 
             self.logger.info(f"检测过滤设置已加载: 启用过滤={enable_filter}, 最大中心距离={max_center_distance}像素, 自动启用阈值={auto_enable_threshold}")
@@ -1118,7 +1118,7 @@ class FitsImageViewer:
             # 使用默认值
             self.enable_center_distance_filter_var.set(False)
             self.max_center_distance_var.set("2400")
-            self._auto_enable_threshold = 10
+            self._auto_enable_threshold = 50
 
     def _bind_detection_filter_settings_events(self):
         """绑定检测过滤设置的变化事件"""
@@ -1284,7 +1284,7 @@ class FitsImageViewer:
     def _check_auto_enable_center_distance_filter(self):
         """检查是否需要自动启用/禁用中心距离过滤（根据高分检测目标数量）"""
         if not hasattr(self, '_auto_enable_threshold'):
-            self._auto_enable_threshold = 10  # 默认阈值
+            self._auto_enable_threshold = 50  # 默认阈值
 
         if not hasattr(self, '_total_cutouts'):
             return

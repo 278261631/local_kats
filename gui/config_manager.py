@@ -77,7 +77,7 @@ class ConfigManager:
             "detection_filter_settings": {
                 "enable_center_distance_filter": False,  # 是否启用中心距离过滤（默认值：False）
                 "max_center_distance": 2400,  # 检测结果距离中心像素的最大距离（默认值：2400）
-                "auto_enable_threshold": 10  # 检测目标超过此数量时自动启用过滤（默认值：10）
+                "auto_enable_threshold": 50  # 检测目标超过此数量时自动启用过滤（默认值：50）
             },
             "display_settings": {
                 "default_display_mode": "linear",
