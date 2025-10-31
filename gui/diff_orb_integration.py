@@ -151,7 +151,7 @@ class DiffOrbIntegration:
             self.logger.error(f"查找模板文件时出错: {str(e)}")
             return None
     
-    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95, fast_mode: bool = False, max_jaggedness_ratio: float = 2.0, detection_method: str = 'contour', sort_by: str = 'aligned_snr') -> Optional[Dict]:
+    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95, fast_mode: bool = False, max_jaggedness_ratio: float = 2.0, detection_method: str = 'contour', sort_by: str = 'aligned_snr', wcs_use_sparse: bool = False) -> Optional[Dict]:
         """
         执行diff操作
 
@@ -168,6 +168,7 @@ class DiffOrbIntegration:
             max_jaggedness_ratio (float): 最大锯齿比率，默认2.0
             detection_method (str): 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
             sort_by (str): 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
+            wcs_use_sparse (bool): WCS对齐时是否使用稀疏采样优化，默认False
 
         Returns:
             Optional[Dict]: 处理结果字典，包含输出文件路径等信息
@@ -237,7 +238,8 @@ class DiffOrbIntegration:
             if alignment_method == 'wcs':
                 # 使用WCS对齐
                 alignment_result = self._align_using_wcs(
-                    processed_template_file, processed_download_file, output_dir
+                    processed_template_file, processed_download_file, output_dir,
+                    use_sparse=wcs_use_sparse
                 )
             elif alignment_method == 'astropy_reproject':
                 # 使用Astropy Reproject对齐
@@ -1041,7 +1043,7 @@ class DiffOrbIntegration:
             self.logger.error(f"WCS质量验证失败: {str(e)}")
             return False
 
-    def _align_using_wcs(self, template_file: str, download_file: str, output_dir: str) -> Optional[Dict]:
+    def _align_using_wcs(self, template_file: str, download_file: str, output_dir: str, use_sparse: bool = False) -> Optional[Dict]:
         """
         使用WCS信息进行图像对齐，失败时自动降级到特征点对齐
 
@@ -1049,6 +1051,7 @@ class DiffOrbIntegration:
             template_file (str): 模板文件路径
             download_file (str): 下载文件路径
             output_dir (str): 输出目录
+            use_sparse (bool): 是否使用稀疏采样优化，默认False
 
         Returns:
             Optional[Dict]: 对齐结果字典
@@ -1160,9 +1163,10 @@ class DiffOrbIntegration:
             # 使用优化的坐标转换方法
             # use_sparse=False: 标准优化 (性能提升5-10倍, 无精度损失)
             # use_sparse=True: 稀疏采样优化 (性能提升10-50倍, 精度损失<0.1像素)
+            self.logger.info(f"WCS坐标转换优化模式: {'稀疏采样' if use_sparse else '标准优化'}")
             download_x, download_y = self._transform_coordinates_optimized(
                 template_wcs, download_wcs, template_shape,
-                use_sparse=False,  # 可选: 改为True启用稀疏采样
+                use_sparse=use_sparse,  # 从参数传入
                 sparse_step=16
             )
 

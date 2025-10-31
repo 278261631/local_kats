@@ -55,7 +55,9 @@ class ConfigManager:
                 "detection_method": "contour",  # 检测方法: contour, simple_blob（GUI默认值：contour）
                 "score_threshold": 3.0,  # 综合得分阈值（GUI默认值：3.0）
                 "aligned_snr_threshold": 2.0,  # Aligned SNR阈值（GUI默认值：2.0）
-                "sort_by": "aligned_snr"  # 排序方式: quality_score, aligned_snr, snr（GUI默认值：aligned_snr）
+                "sort_by": "aligned_snr",  # 排序方式: quality_score, aligned_snr, snr（GUI默认值：aligned_snr）
+                "wcs_use_sparse": False,  # WCS对齐是否使用稀疏采样优化（GUI默认值：False，不启用）
+                "wcs_sparse_step": 16  # WCS稀疏采样步长（GUI默认值：16）
             },
             "dss_flip_settings": {
                 "flip_vertical": True,  # 上下翻转DSS（默认值：True）

@@ -235,10 +235,16 @@ class FitsImageViewer:
                                     command=self._execute_diff, state="disabled")
         self.diff_button.pack(side=tk.LEFT, padx=(0, 0))
 
+        # WCS稀疏采样优化选项（放在执行Diff按钮后面）
+        self.wcs_sparse_var = tk.BooleanVar(value=False)  # 默认不启用稀疏采样
+        self.wcs_sparse_checkbox = ttk.Checkbutton(toolbar_frame2, text="WCS稀疏采样",
+                                                   variable=self.wcs_sparse_var)
+        self.wcs_sparse_checkbox.pack(side=tk.LEFT, padx=(10, 0))
+
         # ASTAP处理按钮
         self.astap_button = ttk.Button(toolbar_frame2, text="执行ASTAP",
                                      command=self._execute_astap, state="disabled")
-        self.astap_button.pack(side=tk.LEFT, padx=(5, 0))
+        self.astap_button.pack(side=tk.LEFT, padx=(10, 0))
 
         # diff进度标签（放在第二行右侧）
         self.diff_progress_label = ttk.Label(toolbar_frame2, text="", foreground="blue", font=("Arial", 9))
@@ -607,7 +613,11 @@ class FitsImageViewer:
             sort_by = batch_settings.get('sort_by', 'quality_score')
             self.sort_by_var.set(sort_by)
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}")
+            # WCS稀疏采样优化
+            wcs_use_sparse = batch_settings.get('wcs_use_sparse', False)
+            self.wcs_sparse_var.set(wcs_use_sparse)
+
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -653,6 +663,9 @@ class FitsImageViewer:
             # 绑定排序方式下拉框
             self.sort_by_var.trace('w', self._on_batch_settings_change)
 
+            # 绑定WCS稀疏采样复选框
+            self.wcs_sparse_var.trace('w', self._on_batch_settings_change)
+
             self.logger.info("批量处理参数控件事件已绑定")
 
         except Exception as e:
@@ -695,6 +708,9 @@ class FitsImageViewer:
             # 获取排序方式
             sort_by = self.sort_by_var.get()
 
+            # 获取WCS稀疏采样设置
+            wcs_use_sparse = self.wcs_sparse_var.get()
+
             # 保存到配置文件
             self.config_manager.update_batch_process_settings(
                 noise_method=noise_method,
@@ -703,10 +719,11 @@ class FitsImageViewer:
                 fast_mode=self.fast_mode_var.get(),
                 stretch_method=stretch_method,
                 detection_method=detection_method,
-                sort_by=sort_by
+                sort_by=sort_by,
+                wcs_use_sparse=wcs_use_sparse
             )
 
-            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}")
+            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}")
 
         except Exception as e:
             self.logger.error(f"保存批量处理参数失败: {str(e)}")
@@ -2498,6 +2515,10 @@ class FitsImageViewer:
             sort_by = self.sort_by_var.get()
             self.logger.info(f"排序方式: {sort_by}")
 
+            # 获取WCS稀疏采样设置
+            wcs_use_sparse = self.wcs_sparse_var.get()
+            self.logger.info(f"WCS稀疏采样: {'启用' if wcs_use_sparse else '禁用'}")
+
             # 更新进度：开始执行Diff
             filename = os.path.basename(self.selected_file_path)
             self.parent_frame.after(0, lambda f=filename: self.diff_progress_label.config(
@@ -2512,7 +2533,8 @@ class FitsImageViewer:
                                               fast_mode=fast_mode,
                                               max_jaggedness_ratio=max_jaggedness_ratio,
                                               detection_method=detection_method,
-                                              sort_by=sort_by)
+                                              sort_by=sort_by,
+                                              wcs_use_sparse=wcs_use_sparse)
 
             if result and result.get('success'):
                 # 更新进度：处理完成
