@@ -373,7 +373,7 @@ class AlignedFITSComparator:
 
         return template_file, aligned_file
 
-    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, max_jaggedness_ratio=2.0, fast_mode=False, detection_method='contour', sort_by='aligned_snr'):
+    def run_signal_blob_detector(self, diff_fits_path, output_directory, reference_file=None, aligned_file=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, max_jaggedness_ratio=2.0, fast_mode=False, detection_method='contour', sort_by='aligned_snr', generate_gif=False):
         """
         对difference.fits执行signal_blob_detector检测
 
@@ -389,6 +389,7 @@ class AlignedFITSComparator:
             fast_mode: 快速模式，不生成hull和poly可视化图片，默认False
             detection_method: 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
             sort_by: 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
+            generate_gif: 是否生成GIF动画，默认False
 
         Returns:
             dict: 检测结果信息
@@ -440,6 +441,10 @@ class AlignedFITSComparator:
             # 添加排序方式参数
             cmd.extend(['--sort-by', sort_by])
 
+            # 添加GIF生成参数（默认不生成，只有当generate_gif=False时才添加--no-gif）
+            if not generate_gif:
+                cmd.append('--no-gif')
+
             self.logger.info(f"执行命令: {' '.join(cmd)}")
 
             # 执行检测
@@ -472,7 +477,7 @@ class AlignedFITSComparator:
             self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
             return {'success': False, 'error': str(e)}
 
-    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0, detection_method='contour', sort_by='aligned_snr'):
+    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0, detection_method='contour', sort_by='aligned_snr', generate_gif=False):
         """
         处理已对齐FITS文件的差异比较
 
@@ -486,6 +491,7 @@ class AlignedFITSComparator:
             max_jaggedness_ratio (float): 最大锯齿比率，默认2.0
             detection_method (str): 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
             sort_by (str): 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
+            generate_gif (bool): 是否生成GIF动画，默认False
 
         Returns:
             dict: 处理结果信息
@@ -695,7 +701,8 @@ class AlignedFITSComparator:
             max_jaggedness_ratio=max_jaggedness_ratio,
             fast_mode=fast_mode,
             detection_method=detection_method,
-            sort_by=sort_by
+            sort_by=sort_by,
+            generate_gif=generate_gif
         )
         timing_stats['信号检测'] = time.time() - blob_start
         self.logger.info(f"⏱️  信号检测耗时: {timing_stats['信号检测']:.3f}秒")

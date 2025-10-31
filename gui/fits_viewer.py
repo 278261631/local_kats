@@ -241,6 +241,12 @@ class FitsImageViewer:
                                                    variable=self.wcs_sparse_var)
         self.wcs_sparse_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
+        # 生成GIF选项（放在WCS稀疏采样后面）
+        self.generate_gif_var = tk.BooleanVar(value=False)  # 默认不生成GIF
+        self.generate_gif_checkbox = ttk.Checkbutton(toolbar_frame2, text="生成GIF图像",
+                                                     variable=self.generate_gif_var)
+        self.generate_gif_checkbox.pack(side=tk.LEFT, padx=(10, 0))
+
         # ASTAP处理按钮
         self.astap_button = ttk.Button(toolbar_frame2, text="执行ASTAP",
                                      command=self._execute_astap, state="disabled")
@@ -617,7 +623,11 @@ class FitsImageViewer:
             wcs_use_sparse = batch_settings.get('wcs_use_sparse', False)
             self.wcs_sparse_var.set(wcs_use_sparse)
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}")
+            # 生成GIF选项
+            generate_gif = batch_settings.get('generate_gif', False)
+            self.generate_gif_var.set(generate_gif)
+
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -666,6 +676,9 @@ class FitsImageViewer:
             # 绑定WCS稀疏采样复选框
             self.wcs_sparse_var.trace('w', self._on_batch_settings_change)
 
+            # 绑定生成GIF复选框
+            self.generate_gif_var.trace('w', self._on_batch_settings_change)
+
             self.logger.info("批量处理参数控件事件已绑定")
 
         except Exception as e:
@@ -711,6 +724,9 @@ class FitsImageViewer:
             # 获取WCS稀疏采样设置
             wcs_use_sparse = self.wcs_sparse_var.get()
 
+            # 获取生成GIF设置
+            generate_gif = self.generate_gif_var.get()
+
             # 保存到配置文件
             self.config_manager.update_batch_process_settings(
                 noise_method=noise_method,
@@ -720,10 +736,11 @@ class FitsImageViewer:
                 stretch_method=stretch_method,
                 detection_method=detection_method,
                 sort_by=sort_by,
-                wcs_use_sparse=wcs_use_sparse
+                wcs_use_sparse=wcs_use_sparse,
+                generate_gif=generate_gif
             )
 
-            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}")
+            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}")
 
         except Exception as e:
             self.logger.error(f"保存批量处理参数失败: {str(e)}")
@@ -2519,6 +2536,10 @@ class FitsImageViewer:
             wcs_use_sparse = self.wcs_sparse_var.get()
             self.logger.info(f"WCS稀疏采样: {'启用' if wcs_use_sparse else '禁用'}")
 
+            # 获取生成GIF设置
+            generate_gif = self.generate_gif_var.get()
+            self.logger.info(f"生成GIF: {'启用' if generate_gif else '禁用'}")
+
             # 更新进度：开始执行Diff
             filename = os.path.basename(self.selected_file_path)
             self.parent_frame.after(0, lambda f=filename: self.diff_progress_label.config(
@@ -2534,7 +2555,8 @@ class FitsImageViewer:
                                               max_jaggedness_ratio=max_jaggedness_ratio,
                                               detection_method=detection_method,
                                               sort_by=sort_by,
-                                              wcs_use_sparse=wcs_use_sparse)
+                                              wcs_use_sparse=wcs_use_sparse,
+                                              generate_gif=generate_gif)
 
             if result and result.get('success'):
                 # 更新进度：处理完成

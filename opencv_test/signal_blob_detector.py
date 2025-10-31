@@ -831,7 +831,7 @@ class SignalBlobDetector:
                             output_folder, base_name, cutout_size=100,
                             reference_data=None, aligned_data=None,
                             stretch_method='percentile', low_percentile=1, high_percentile=99,
-                            header=None, generate_shape_viz=False):
+                            header=None, generate_shape_viz=False, generate_gif=True):
         """
         为每个检测结果提取截图并生成GIF
 
@@ -850,11 +850,13 @@ class SignalBlobDetector:
             high_percentile: 高百分位（默认99%）
             header: FITS header（用于坐标转换）
             generate_shape_viz: 是否生成hull和poly可视化图片（默认False，快速模式下为False）
+            generate_gif: 是否生成GIF动画（默认True）
         """
         if not blobs:
             return
 
-        print(f"\n生成每个检测结果的截图（局部拉伸方法: {stretch_method}, 百分位: {low_percentile}-{high_percentile}）...")
+        gif_status = "生成GIF" if generate_gif else "不生成GIF"
+        print(f"\n生成每个检测结果的截图（局部拉伸方法: {stretch_method}, 百分位: {low_percentile}-{high_percentile}, {gif_status}）...")
 
         # 创建统一的cutouts文件夹
         cutouts_folder = os.path.join(output_folder, "cutouts")
@@ -1129,48 +1131,52 @@ class SignalBlobDetector:
                     cv2.imwrite(shape_viz_path, shape_viz)
 
             # 生成GIF动画（只包含reference和aligned，不包含detection）
-            try:
-                images = []
-                for img_path in [ref_path, aligned_path]:
-                    # 读取图像
-                    img = Image.open(img_path)
-                    # 确保尺寸一致
-                    if img.size != (cutout_size, cutout_size):
-                        img = img.resize((cutout_size, cutout_size), Image.LANCZOS)
+            if generate_gif:
+                try:
+                    images = []
+                    for img_path in [ref_path, aligned_path]:
+                        # 读取图像
+                        img = Image.open(img_path)
+                        # 确保尺寸一致
+                        if img.size != (cutout_size, cutout_size):
+                            img = img.resize((cutout_size, cutout_size), Image.LANCZOS)
 
-                    # 转换为RGB模式以便绘制彩色圆圈
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
+                        # 转换为RGB模式以便绘制彩色圆圈
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
 
-                    # 转换为numpy数组以便使用OpenCV绘制
-                    img_array = np.array(img)
+                        # 转换为numpy数组以便使用OpenCV绘制
+                        img_array = np.array(img)
 
-                    # 在图像中央画空心绿色圆圈
-                    center_x = cutout_size // 2
-                    center_y = cutout_size // 2
-                    radius = min(cutout_size // 4, 20)  # 圆圈半径，不超过20像素
-                    color = (0, 255, 0)  # 绿色 (RGB)
-                    thickness = 1  # 线条粗细为1像素（细线）
+                        # 在图像中央画空心绿色圆圈
+                        center_x = cutout_size // 2
+                        center_y = cutout_size // 2
+                        radius = min(cutout_size // 4, 20)  # 圆圈半径，不超过20像素
+                        color = (0, 255, 0)  # 绿色 (RGB)
+                        thickness = 1  # 线条粗细为1像素（细线）
 
-                    cv2.circle(img_array, (center_x, center_y), radius, color, thickness)
+                        cv2.circle(img_array, (center_x, center_y), radius, color, thickness)
 
-                    # 转换回PIL图像
-                    img_with_circle = Image.fromarray(img_array)
-                    images.append(img_with_circle)
+                        # 转换回PIL图像
+                        img_with_circle = Image.fromarray(img_array)
+                        images.append(img_with_circle)
 
-                gif_path = os.path.join(cutouts_folder, f"{file_prefix}_animation.gif")
-                images[0].save(
-                    gif_path,
-                    save_all=True,
-                    append_images=images[1:],
-                    duration=800,  # 每帧800ms
-                    loop=0  # 无限循环
-                )
+                    gif_path = os.path.join(cutouts_folder, f"{file_prefix}_animation.gif")
+                    images[0].save(
+                        gif_path,
+                        save_all=True,
+                        append_images=images[1:],
+                        duration=800,  # 每帧800ms
+                        loop=0  # 无限循环
+                    )
 
-            except Exception as e:
-                print(f"  警告: 生成GIF失败 (blob {i}): {str(e)}")
+                except Exception as e:
+                    print(f"  警告: 生成GIF失败 (blob {i}): {str(e)}")
 
-        print(f"已为 {len(blobs)} 个检测结果生成截图和GIF")
+        if generate_gif:
+            print(f"已为 {len(blobs)} 个检测结果生成截图和GIF")
+        else:
+            print(f"已为 {len(blobs)} 个检测结果生成截图（未生成GIF）")
 
     def format_skybot_results(self, skybot_results):
         """
@@ -1252,11 +1258,12 @@ class SignalBlobDetector:
 
     def save_results(self, original_data, stretched_data, mask, result_image, blobs,
                      output_dir, base_name, threshold_info, reference_data=None, aligned_data=None, header=None,
-                     generate_shape_viz=False, skybot_results=None, vsx_results=None):
+                     generate_shape_viz=False, generate_gif=True, skybot_results=None, vsx_results=None):
         """
         保存检测结果
 
         Args:
+            generate_gif: 是否生成GIF动画，默认True
             skybot_results: Skybot小行星查询结果（可选）
             vsx_results: VSX变星查询结果（可选）
         """
@@ -1299,7 +1306,7 @@ class SignalBlobDetector:
         self.extract_blob_cutouts(original_data, stretched_data, result_image, blobs,
                                   output_folder, base_name,
                                   reference_data=reference_data, aligned_data=aligned_data,
-                                  header=header, generate_shape_viz=generate_shape_viz)
+                                  header=header, generate_shape_viz=generate_shape_viz, generate_gif=generate_gif)
 
         # 保存详细信息
         txt_output = os.path.join(output_folder, f"{base_name}_analysis_{param_str}.txt")
@@ -1412,7 +1419,7 @@ class SignalBlobDetector:
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.0,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
                          stretch_method='percentile', percentile_low=99.95, fast_mode=False, detection_method='contour',
-                         sort_by='aligned_snr', skybot_results=None, vsx_results=None):
+                         sort_by='aligned_snr', generate_gif=True, skybot_results=None, vsx_results=None):
         """
         处理 FITS 文件的完整流程
 
@@ -1429,6 +1436,7 @@ class SignalBlobDetector:
             fast_mode: 快速模式，不生成hull和poly可视化图片，默认False
             detection_method: 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
             sort_by: 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
+            generate_gif: 是否生成GIF动画，默认True
             skybot_results: Skybot小行星查询结果（可选）
             vsx_results: VSX变星查询结果（可选）
         """
@@ -1532,7 +1540,7 @@ class SignalBlobDetector:
         self.save_results(data, stretched_data_no_lines, mask, result_image, blobs,
                          output_dir, base_name, threshold_info,
                          reference_data=reference_data, aligned_data=aligned_data,
-                         header=header, generate_shape_viz=not fast_mode,
+                         header=header, generate_shape_viz=not fast_mode, generate_gif=generate_gif,
                          skybot_results=skybot_results, vsx_results=vsx_results)
 
         print(f"\n处理完成！")
@@ -1576,6 +1584,8 @@ def main():
     parser.add_argument('--sort-by', type=str, default='aligned_snr',
                        choices=['quality_score', 'aligned_snr', 'snr'],
                        help='排序方式: quality_score=综合得分, aligned_snr=Aligned中心7x7 SNR（默认）, snr=差异图像SNR')
+    parser.add_argument('--no-gif', action='store_true',
+                       help='不生成GIF动画（默认生成）')
 
     args = parser.parse_args()
 
@@ -1613,6 +1623,9 @@ def main():
     # 否则设置为 None，让 stretch_method 参数决定
     use_peak = False if args.no_peak_stretch else None
 
+    # 如果指定了 --no-gif，则不生成GIF
+    generate_gif = not args.no_gif
+
     detector.process_fits_file(fits_file,
                               use_peak_stretch=use_peak,
                               detection_threshold=args.threshold,
@@ -1623,7 +1636,8 @@ def main():
                               percentile_low=args.percentile_low,
                               fast_mode=args.fast_mode,
                               detection_method=args.detection_method,
-                              sort_by=args.sort_by)
+                              sort_by=args.sort_by,
+                              generate_gif=generate_gif)
 
 
 if __name__ == "__main__":
