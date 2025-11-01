@@ -365,6 +365,17 @@ class FitsImageViewer:
         self.timezone_label = ttk.Label(toolbar_frame5, text="UTC+6", foreground="blue")
         self.timezone_label.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 卫星查询按钮 (使用tk.Button以支持背景色)
+        self.satellite_button = tk.Button(toolbar_frame5, text="查询卫星",
+                                         command=self._query_satellite, state="disabled",
+                                         bg="#FFA500", relief=tk.RAISED, padx=5, pady=2)  # 默认橙黄色(未查询)
+        self.satellite_button.pack(side=tk.LEFT, padx=(10, 5))
+
+        # 卫星查询结果显示
+        ttk.Label(toolbar_frame5, text="卫星:").pack(side=tk.LEFT, padx=(5, 2))
+        self.satellite_result_label = ttk.Label(toolbar_frame5, text="未查询", foreground="gray")
+        self.satellite_result_label.pack(side=tk.LEFT, padx=(0, 5))
+
         # 查询设置和结果显示（第六行工具栏）
         toolbar_frame6 = ttk.Frame(toolbar_container)
         toolbar_frame6.pack(fill=tk.X, pady=2)
@@ -2849,6 +2860,11 @@ class FitsImageViewer:
             self.vsx_result_label.config(text="未查询", foreground="gray")
             self._vsx_query_results = None  # 清空查询结果
             self._vsx_queried = False  # 清空查询标记
+        if hasattr(self, 'satellite_button'):
+            self.satellite_button.config(state="disabled", bg="#FFA500")  # 重置为橙黄色(未查询)
+            self.satellite_result_label.config(text="未查询", foreground="gray")
+            self._satellite_query_results = None  # 清空查询结果
+            self._satellite_queried = False  # 清空查询标记
         if hasattr(self, 'save_detection_button'):
             self.save_detection_button.config(state="disabled")
 
@@ -3216,6 +3232,12 @@ class FitsImageViewer:
             self.vsx_button.config(state="normal")
             # 更新按钮颜色以反映查询状态
             self._update_query_button_color('vsx')
+
+        # 启用卫星查询按钮（只要有cutout就可以启用）
+        if hasattr(self, 'satellite_button'):
+            self.satellite_button.config(state="normal")
+            # 更新按钮颜色以反映查询状态
+            self._update_query_button_color('satellite')
 
         # 启用保存检测结果按钮（只要有cutout就可以启用）
         if hasattr(self, 'save_detection_button'):
@@ -4473,6 +4495,149 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"绘制小行星标记时出错: {e}", exc_info=True)
 
+    def _draw_satellites_on_axis(self, ax, aligned_img_path, image_shape, file_info=None):
+        """
+        在matplotlib axis上绘制卫星标记
+
+        Args:
+            ax: matplotlib axis对象
+            aligned_img_path: aligned图像路径（用于定位对应的FITS文件）
+            image_shape: 图像形状 (height, width) 或 (height, width, channels)
+            file_info: 文件信息字典（包含RA/DEC等信息）
+        """
+        try:
+            self.logger.info("=== 开始绘制卫星标记 ===")
+
+            # 检查是否有当前cutout和卫星查询结果
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.info("没有cutout sets，跳过卫星标记")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                self.logger.info("没有current_cutout_index，跳过卫星标记")
+                return
+
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            satellite_queried = current_cutout.get('satellite_queried', False)
+            satellite_results = current_cutout.get('satellite_results', None)
+
+            self.logger.info(f"卫星查询状态: queried={satellite_queried}, results={satellite_results}")
+
+            # 如果没有查询或没有结果，直接返回
+            if not satellite_queried or not satellite_results or len(satellite_results) == 0:
+                self.logger.info("没有卫星查询结果，跳过卫星标记")
+                return
+
+            # 检查file_info是否包含RA/DEC
+            if not file_info or not file_info.get('ra') or not file_info.get('dec'):
+                self.logger.warning("file_info中没有RA/DEC信息，无法绘制卫星标记")
+                return
+
+            # 从file_info获取cutout中心的RA/DEC坐标
+            cutout_center_ra = float(file_info['ra'])
+            cutout_center_dec = float(file_info['dec'])
+            self.logger.info(f"Cutout中心坐标: RA={cutout_center_ra}°, DEC={cutout_center_dec}°")
+
+            # 从aligned图像路径获取对应的FITS文件
+            cutout_dir = os.path.dirname(aligned_img_path)
+            detection_dir = os.path.dirname(cutout_dir)
+            fits_dir = os.path.dirname(detection_dir)
+
+            # 查找aligned.fits文件
+            aligned_fits_files = list(Path(fits_dir).glob('*_aligned.fits'))
+            if not aligned_fits_files:
+                self.logger.warning("未找到aligned.fits文件，无法绘制卫星标记")
+                return
+
+            aligned_fits_path = aligned_fits_files[0]
+            self.logger.info(f"使用FITS文件获取WCS信息: {aligned_fits_path}")
+
+            # 读取FITS文件的header获取WCS信息
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+            import re
+
+            with fits.open(aligned_fits_path) as hdul:
+                header = hdul[0].header
+                wcs = WCS(header)
+
+                # 将cutout中心的RA/DEC转换为原始FITS的像素坐标
+                cutout_center_coord = SkyCoord(ra=cutout_center_ra*u.degree, dec=cutout_center_dec*u.degree)
+                cutout_center_pixel = wcs.world_to_pixel(cutout_center_coord)
+                self.logger.info(f"Cutout中心在原始FITS中的像素坐标: ({cutout_center_pixel[0]:.1f}, {cutout_center_pixel[1]:.1f})")
+
+                # cutout图像的尺寸
+                h, w = image_shape[0], image_shape[1]
+                cutout_half_size = w / 2  # 假设cutout是正方形
+
+                # 计算cutout在原始FITS中的边界
+                cutout_x_min = cutout_center_pixel[0] - cutout_half_size
+                cutout_y_min = cutout_center_pixel[1] - cutout_half_size
+                self.logger.info(f"Cutout在原始FITS中的边界: ({cutout_x_min:.1f}, {cutout_y_min:.1f})")
+
+                # 遍历卫星结果，绘制标记
+                # 从query_results文件中读取实际的卫星坐标
+                detection_img = current_cutout.get('detection')
+                if not detection_img:
+                    self.logger.warning("无法获取detection图像路径")
+                    return
+
+                cutout_img_dir = os.path.dirname(detection_img)
+                query_results_file = os.path.join(cutout_img_dir, f"query_results_{self._current_cutout_index + 1:03d}.txt")
+
+                self.logger.info(f"查找query_results文件: {query_results_file}")
+                self.logger.info(f"文件是否存在: {os.path.exists(query_results_file)}")
+
+                if os.path.exists(query_results_file):
+                    with open(query_results_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                    self.logger.info(f"query_results文件内容长度: {len(content)} 字符")
+
+                    # 解析卫星列表
+                    satellite_match = re.search(r'卫星列表:\n((?:  - .*\n)+)', content)
+                    if satellite_match:
+                        self.logger.info("找到卫星列表匹配")
+                        result_lines = satellite_match.group(1).strip()
+
+                        # 解析每一行卫星信息
+                        for line in result_lines.split('\n'):
+                            if line.strip().startswith('-') and '(未查询)' not in line and '(已查询，未找到)' not in line:
+                                # 提取RA和DEC
+                                ra_match = re.search(r'RA=([\d.]+)\s*°', line)
+                                dec_match = re.search(r'DEC=([-\d.]+)\s*°', line)
+
+                                if ra_match and dec_match:
+                                    satellite_ra = float(ra_match.group(1))
+                                    satellite_dec = float(dec_match.group(1))
+
+                                    # 将卫星的RA/DEC转换为原始FITS的像素坐标
+                                    satellite_coord = SkyCoord(ra=satellite_ra*u.degree, dec=satellite_dec*u.degree)
+                                    satellite_pixel = wcs.world_to_pixel(satellite_coord)
+
+                                    # 转换为cutout图像的坐标
+                                    satellite_x_in_cutout = satellite_pixel[0] - cutout_x_min
+                                    satellite_y_in_cutout = satellite_pixel[1] - cutout_y_min
+
+                                    # 检查卫星是否在cutout范围内
+                                    if 0 <= satellite_x_in_cutout < w and 0 <= satellite_y_in_cutout < h:
+                                        self.logger.info(f"绘制卫星标记: RA={satellite_ra}, DEC={satellite_dec}, "
+                                                       f"cutout坐标=({satellite_x_in_cutout:.1f}, {satellite_y_in_cutout:.1f})")
+
+                                        # 绘制紫色四芒星（小而细的十字标记）
+                                        self._draw_four_pointed_star(ax, satellite_x_in_cutout, satellite_y_in_cutout,
+                                                                    color='magenta', linewidth=1, size=8, gap=2)
+                                    else:
+                                        self.logger.info(f"卫星不在cutout范围内: RA={satellite_ra}, DEC={satellite_dec}")
+                    else:
+                        self.logger.warning("未找到卫星列表匹配")
+                else:
+                    self.logger.warning("未找到query_results文件")
+
+        except Exception as e:
+            self.logger.error(f"绘制卫星标记时出错: {e}", exc_info=True)
+
     def _refresh_current_cutout_display(self):
         """
         重新绘制当前显示的cutout（用于查询完成后更新标记）
@@ -4617,6 +4782,9 @@ class FitsImageViewer:
 
             # 在aligned图像上绘制小行星标记（青色）
             self._draw_asteroids_on_axis(self._click_ax, aligned_img, aligned_array.shape, file_info)
+
+            # 在aligned图像上绘制卫星标记（紫色）
+            self._draw_satellites_on_axis(self._click_ax, aligned_img, aligned_array.shape, file_info)
 
             # 显示detection图像
             axes[2].imshow(detection_array, cmap='gray' if len(detection_array.shape) == 2 else None)
@@ -5509,6 +5677,264 @@ class FitsImageViewer:
                 self.log_callback(exec_error_msg, "ERROR")
             return None
 
+    def _query_satellite(self):
+        """使用Skyfield查询卫星数据"""
+        try:
+            # 立即重置结果标签，确保用户能看到查询状态变化
+            self.satellite_result_label.config(text="准备中...", foreground="gray")
+            self.satellite_result_label.update_idletasks()  # 强制刷新界面
+
+            # 检查是否有当前显示的cutout
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.warning("请先执行差分检测并显示检测结果")
+                return
+
+            if not hasattr(self, '_current_cutout_index'):
+                self.logger.warning("没有当前显示的检测结果")
+                return
+
+            # 获取当前cutout的信息
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            reference_img = current_cutout['reference']
+            aligned_img = current_cutout['aligned']
+            detection_img = current_cutout['detection']
+
+            # 提取文件信息（包含RA/DEC）
+            selected_filename = ""
+            if self.selected_file_path:
+                selected_filename = os.path.basename(self.selected_file_path)
+
+            file_info = self._extract_file_info(reference_img, aligned_img, detection_img, selected_filename)
+
+            # 检查是否有RA/DEC信息
+            if not file_info.get('ra') or not file_info.get('dec'):
+                self.logger.error("无法获取目标的RA/DEC坐标信息")
+                self.satellite_result_label.config(text="坐标缺失", foreground="red")
+                return
+
+            ra = float(file_info['ra'])
+            dec = float(file_info['dec'])
+
+            # 检查是否有UTC时间
+            if not hasattr(self, '_current_utc_time') or not self._current_utc_time:
+                self.logger.error("无法获取UTC时间信息")
+                self.satellite_result_label.config(text="时间缺失", foreground="red")
+                return
+
+            utc_time = self._current_utc_time
+
+            # 获取GPS位置
+            try:
+                latitude = float(self.gps_lat_var.get())
+                longitude = float(self.gps_lon_var.get())
+            except ValueError:
+                self.logger.error(f"无效的GPS坐标: 纬度={self.gps_lat_var.get()}, 经度={self.gps_lon_var.get()}")
+                self.satellite_result_label.config(text="GPS无效", foreground="red")
+                return
+
+            # 获取搜索半径
+            try:
+                search_radius = float(self.search_radius_var.get())
+            except ValueError:
+                self.logger.warning(f"无效的搜索半径: {self.search_radius_var.get()}，使用默认值0.01")
+                search_radius = 0.01
+
+            query_info = f"准备查询卫星: RA={ra}°, Dec={dec}°, UTC={utc_time}, GPS=({latitude}°N, {longitude}°E), 半径={search_radius}°"
+            self.logger.info(query_info)
+            # 输出到日志标签页
+            if self.log_callback:
+                self.log_callback(query_info, "INFO")
+
+            self.satellite_result_label.config(text="查询中...", foreground="orange")
+            self.satellite_result_label.update_idletasks()  # 强制刷新界面
+
+            # 执行卫星查询
+            results = self._perform_satellite_query(ra, dec, utc_time, latitude, longitude, search_radius)
+
+            if results is not None:
+                # 保存查询结果到当前cutout
+                current_cutout = self._all_cutout_sets[self._current_cutout_index]
+                current_cutout['satellite_queried'] = True
+                current_cutout['satellite_results'] = results
+
+                # 同时保存到成员变量（兼容旧代码）
+                self._satellite_queried = True
+                self._satellite_query_results = results
+
+                if len(results) > 0:
+                    # 查询成功且有结果
+                    self.satellite_result_label.config(text=f"找到 {len(results)} 个", foreground="green")
+                    success_msg = f"卫星查询完成，找到 {len(results)} 个卫星"
+                    self.logger.info(success_msg)
+                    if self.log_callback:
+                        self.log_callback(success_msg, "INFO")
+
+                    # 输出详细结果
+                    for i, sat in enumerate(results, 1):
+                        sat_detail = f"  卫星 {i}: {sat.get('name', 'Unknown')} - 距离={sat.get('separation', 0):.4f}°"
+                        self.logger.info(sat_detail)
+                        if self.log_callback:
+                            self.log_callback(sat_detail, "INFO")
+
+                    # 更新txt文件中的查询结果
+                    self._update_detection_txt_with_query_results()
+
+                    # 更新按钮颜色 - 紫红色(有结果)
+                    self._update_query_button_color('satellite')
+
+                    # 重新绘制图像以显示卫星标记
+                    self._refresh_current_cutout_display()
+                else:
+                    # 查询结果为空（未找到）
+                    self._satellite_query_results = None  # 兼容旧代码
+
+                    self.satellite_result_label.config(text="未找到", foreground="blue")
+                    not_found_msg = "卫星查询完成，未找到卫星"
+                    self.logger.info(not_found_msg)
+                    if self.log_callback:
+                        self.log_callback(not_found_msg, "INFO")
+
+                    # 更新txt文件，标记为"已查询，未找到"
+                    self._update_detection_txt_with_query_results()
+
+                    # 更新按钮颜色 - 绿色(无结果)
+                    self._update_query_button_color('satellite')
+
+                    # 重新绘制图像（虽然没有结果，但确保界面一致性）
+                    self._refresh_current_cutout_display()
+            else:
+                # 查询失败，不保存到cutout（保持未查询状态）
+                self._satellite_query_results = None  # 兼容旧代码
+
+                self.satellite_result_label.config(text="查询失败", foreground="red")
+                error_msg = "卫星查询失败"
+                self.logger.error(error_msg)
+                if self.log_callback:
+                    self.log_callback(error_msg, "ERROR")
+
+        except Exception as e:
+            exception_msg = f"卫星查询失败: {str(e)}"
+            self.logger.error(exception_msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(exception_msg, "ERROR")
+            self.satellite_result_label.config(text="查询出错", foreground="red")
+
+    def _perform_satellite_query(self, ra, dec, utc_time, latitude, longitude, search_radius=0.01):
+        """
+        执行卫星查询
+
+        Args:
+            ra: 赤经（度）
+            dec: 赤纬（度）
+            utc_time: UTC时间（datetime对象）
+            latitude: 纬度（度）
+            longitude: 经度（度）
+            search_radius: 搜索半径（度，默认0.01）
+
+        Returns:
+            查询结果列表，如果失败返回None
+        """
+        try:
+            from skyfield.api import load, wgs84, EarthSatellite
+            from skyfield.toposlib import GeographicPosition
+            import numpy as np
+
+            param_header = f"卫星查询参数:"
+            param_coord = f"  坐标: RA={ra}°, Dec={dec}°"
+            param_time = f"  时间: {utc_time}"
+            param_gps = f"  观测位置: 纬度={latitude}°N, 经度={longitude}°E"
+            param_radius = f"  搜索半径: {search_radius}°"
+
+            self.logger.info(param_header)
+            self.logger.info(param_coord)
+            self.logger.info(param_time)
+            self.logger.info(param_gps)
+            self.logger.info(param_radius)
+            if self.log_callback:
+                self.log_callback(param_header, "INFO")
+                self.log_callback(param_coord, "INFO")
+                self.log_callback(param_time, "INFO")
+                self.log_callback(param_gps, "INFO")
+                self.log_callback(param_radius, "INFO")
+
+            # 加载时间尺度
+            ts = load.timescale()
+            t = ts.utc(utc_time.year, utc_time.month, utc_time.day,
+                      utc_time.hour, utc_time.minute, utc_time.second)
+
+            # 创建观测位置
+            observer = wgs84.latlon(latitude, longitude)
+
+            # 加载TLE数据（使用最新的活跃卫星数据）
+            # 这里使用Celestrak的活跃卫星TLE数据
+            try:
+                satellites = load.tle_file('https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle')
+                self.logger.info(f"成功加载 {len(satellites)} 个卫星的TLE数据")
+                if self.log_callback:
+                    self.log_callback(f"成功加载 {len(satellites)} 个卫星的TLE数据", "INFO")
+            except Exception as e:
+                error_msg = f"加载TLE数据失败: {str(e)}"
+                self.logger.error(error_msg)
+                if self.log_callback:
+                    self.log_callback(error_msg, "ERROR")
+                return None
+
+            # 查找在搜索半径内的卫星
+            results = []
+            for satellite in satellites:
+                try:
+                    # 计算卫星在观测时间和位置的位置
+                    geocentric = satellite.at(t)
+                    topocentric = (geocentric - observer.at(t))
+                    sat_ra, sat_dec, distance = topocentric.radec()
+
+                    # 计算角距离
+                    sat_ra_deg = sat_ra._degrees
+                    sat_dec_deg = sat_dec.degrees
+
+                    # 简单的角距离计算（球面三角）
+                    delta_ra = np.radians(sat_ra_deg - ra)
+                    delta_dec = np.radians(sat_dec_deg - dec)
+                    ra_rad = np.radians(ra)
+                    dec_rad = np.radians(dec)
+                    sat_dec_rad = np.radians(sat_dec_deg)
+
+                    separation = np.degrees(np.arccos(
+                        np.sin(dec_rad) * np.sin(sat_dec_rad) +
+                        np.cos(dec_rad) * np.cos(sat_dec_rad) * np.cos(delta_ra)
+                    ))
+
+                    # 如果在搜索半径内，添加到结果
+                    if separation <= search_radius:
+                        results.append({
+                            'name': satellite.name,
+                            'ra': sat_ra_deg,
+                            'dec': sat_dec_deg,
+                            'separation': separation,
+                            'distance_km': distance.km
+                        })
+                except Exception as e:
+                    # 跳过有问题的卫星
+                    continue
+
+            return results
+
+        except ImportError as e:
+            import_error_msg = "skyfield未安装或导入失败，请安装: pip install skyfield"
+            detail_error_msg = f"详细错误: {e}"
+            self.logger.error(import_error_msg)
+            self.logger.error(detail_error_msg)
+            if self.log_callback:
+                self.log_callback(import_error_msg, "ERROR")
+                self.log_callback(detail_error_msg, "ERROR")
+            return None
+        except Exception as e:
+            exec_error_msg = f"卫星查询执行失败: {str(e)}"
+            self.logger.error(exec_error_msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(exec_error_msg, "ERROR")
+            return None
+
     def _get_fits_rotation_angle(self, fits_path):
         """
         从FITS文件的WCS信息中提取旋转角度
@@ -5816,7 +6242,7 @@ class FitsImageViewer:
         更新查询按钮的颜色以反映查询状态（从当前cutout读取）
 
         Args:
-            query_type: 'skybot' 或 'vsx'
+            query_type: 'skybot', 'vsx' 或 'satellite'
         """
         try:
             # 检查是否有当前cutout
@@ -5833,11 +6259,16 @@ class FitsImageViewer:
                 label = self.skybot_result_label
                 queried = current_cutout.get('skybot_queried', False)
                 results = current_cutout.get('skybot_results', None)
-            else:
+            elif query_type == 'vsx':
                 button = self.vsx_button
                 label = self.vsx_result_label
                 queried = current_cutout.get('vsx_queried', False)
                 results = current_cutout.get('vsx_results', None)
+            else:  # satellite
+                button = self.satellite_button
+                label = self.satellite_result_label
+                queried = current_cutout.get('satellite_queried', False)
+                results = current_cutout.get('satellite_results', None)
 
             if not queried:
                 # 未查询 - 橙黄色
@@ -5965,6 +6396,8 @@ class FitsImageViewer:
             skybot_results = current_cutout.get('skybot_results', None)
             vsx_queried = current_cutout.get('vsx_queried', False)
             vsx_results = current_cutout.get('vsx_results', None)
+            satellite_queried = current_cutout.get('satellite_queried', False)
+            satellite_results = current_cutout.get('satellite_results', None)
 
             # 准备小行星列表内容
             skybot_lines = []
@@ -6037,6 +6470,33 @@ class FitsImageViewer:
 
                 f.write(f"变星列表:\n")
                 for line in vsx_lines:
+                    f.write(f"{line}\n")
+                f.write("\n")
+
+                # 准备卫星列表内容
+                satellite_lines = []
+                if satellite_queried:
+                    if satellite_results is not None and len(satellite_results) > 0:
+                        for i, sat in enumerate(satellite_results, 1):
+                            sat_info = []
+                            if 'name' in sat:
+                                sat_info.append(f"名称={sat['name']}")
+                            if 'ra' in sat:
+                                sat_info.append(f"RA={sat['ra']:.6f}°")
+                            if 'dec' in sat:
+                                sat_info.append(f"DEC={sat['dec']:.6f}°")
+                            if 'separation' in sat:
+                                sat_info.append(f"角距离={sat['separation']:.4f}°")
+                            if 'distance_km' in sat:
+                                sat_info.append(f"距离={sat['distance_km']:.1f}km")
+                            satellite_lines.append(f"  - 卫星{i}: {', '.join(sat_info)}")
+                    else:
+                        satellite_lines.append("  - (已查询，未找到)")
+                else:
+                    satellite_lines.append("  - (未查询)")
+
+                f.write(f"卫星列表:\n")
+                for line in satellite_lines:
                     f.write(f"{line}\n")
                 f.write("\n")
 
