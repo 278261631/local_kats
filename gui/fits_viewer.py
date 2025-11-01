@@ -380,6 +380,12 @@ class FitsImageViewer:
                                                    command=self._save_query_settings)
         self.save_search_radius_button.pack(side=tk.LEFT, padx=(0, 10))
 
+        # 批量查询按钮
+        self.batch_query_button = ttk.Button(toolbar_frame6, text="批量查询",
+                                            command=self._batch_query_asteroids_and_variables,
+                                            state="disabled")
+        self.batch_query_button.pack(side=tk.LEFT, padx=(5, 5))
+
         # Skybot查询按钮 (使用tk.Button以支持背景色)
         self.skybot_button = tk.Button(toolbar_frame6, text="查询小行星(Skybot)",
                                        command=self._query_skybot, state="disabled",
@@ -1852,6 +1858,7 @@ class FitsImageViewer:
             self.selected_file_path = None
             self.display_button.config(state="disabled")
             self.diff_button.config(state="disabled")
+            self.batch_query_button.config(state="disabled")
             if self.astap_processor:
                 self.astap_button.config(state="disabled")
             if self.wcs_checker:
@@ -1918,8 +1925,11 @@ class FitsImageViewer:
             # 如果是下载目录的文件，自动检查并加载diff结果
             if is_download_file:
                 self._auto_load_diff_results(file_path)
+
+            # 启用批量查询按钮（单个文件也支持批量查询其所有检测目标）
+            self.batch_query_button.config(state="normal")
         else:
-            # 选中的不是FITS文件
+            # 选中的不是FITS文件（可能是目录）
             self.selected_file_path = None
             self.display_button.config(state="disabled")
             self.diff_button.config(state="disabled")
@@ -1927,7 +1937,14 @@ class FitsImageViewer:
                 self.astap_button.config(state="disabled")
             if self.wcs_checker:
                 self.wcs_check_button.config(state="disabled")
-            self.file_info_label.config(text="未选择FITS文件")
+
+            # 检查是否选中了目录，如果是则启用批量查询按钮
+            if values and any(tag in tags for tag in ["region", "date", "telescope"]):
+                self.batch_query_button.config(state="normal")
+                self.file_info_label.config(text="已选择目录 [可批量查询]")
+            else:
+                self.batch_query_button.config(state="disabled")
+                self.file_info_label.config(text="未选择FITS文件")
 
     def _on_tree_double_click(self, event):
         """目录树双击事件"""
@@ -6085,5 +6102,411 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"保存参数文件失败: {str(e)}")
+
+    def _batch_query_asteroids_and_variables(self):
+        """批量查询小行星和变星"""
+        try:
+            # 获取当前选中的节点
+            selection = self.directory_tree.selection()
+            if not selection:
+                messagebox.showwarning("警告", "请先选择一个目录或文件")
+                return
+
+            item = selection[0]
+            values = self.directory_tree.item(item, "values")
+            tags = self.directory_tree.item(item, "tags")
+
+            if not values:
+                messagebox.showwarning("警告", "请选择一个目录或文件")
+                return
+
+            # 判断是文件还是目录
+            is_file = "fits_file" in tags
+
+            if is_file:
+                # 选中的是单个文件
+                file_path = values[0]
+
+                # 检查文件是否有diff结果
+                if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                    self.logger.warning("该文件没有检测结果，跳过批量查询")
+                    return
+
+                # 检查high_score_count
+                high_score_count = self._get_high_score_count_from_current_detection()
+                if high_score_count >= 8:
+                    self.logger.info(f"该文件的high_score_count为{high_score_count}，不符合批量查询条件（需要<8）")
+                    return
+
+                # 执行单文件批量查询
+                self._execute_single_file_batch_query()
+
+            else:
+                # 选中的是目录
+                directory = values[0]
+
+                # 收集目录下所有需要处理的文件
+                files_to_process = self._collect_files_for_batch_query(directory)
+
+                if not files_to_process:
+                    self.logger.info("没有找到需要查询的文件")
+                    return
+
+                # 执行批量查询
+                self._execute_batch_query(files_to_process)
+
+        except Exception as e:
+            error_msg = f"批量查询失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            messagebox.showerror("错误", error_msg)
+
+    def _execute_single_file_batch_query(self):
+        """对当前文件的所有检测目标执行批量查询"""
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.logger.warning("没有检测结果")
+                return
+
+            # 获取high_score_count，只查询高分目标
+            high_score_count = self._get_high_score_count_from_current_detection()
+            if high_score_count is None or high_score_count == 0:
+                self.logger.info("没有高分检测目标")
+                return
+
+            # 只处理前 high_score_count 个检测目标
+            total = min(high_score_count, len(self._all_cutout_sets))
+            success_count = 0
+            skip_count = 0
+
+            # 创建进度窗口
+            progress_window = tk.Toplevel(self.parent_frame)
+            progress_window.title("批量查询进度")
+            progress_window.geometry("500x150")
+
+            # 进度标签
+            progress_label = ttk.Label(progress_window, text="准备开始...")
+            progress_label.pack(pady=10)
+
+            # 详细信息
+            detail_label = ttk.Label(progress_window, text="", wraplength=450)
+            detail_label.pack(pady=5)
+
+            # 进度条
+            progress_bar = ttk.Progressbar(progress_window, length=400, mode='determinate')
+            progress_bar.pack(pady=10)
+            progress_bar['maximum'] = total
+
+            # 统计标签
+            stats_label = ttk.Label(progress_window, text="")
+            stats_label.pack(pady=5)
+
+            def update_progress(current, status):
+                progress_bar['value'] = current
+                progress_label.config(text=f"处理进度: {current}/{total}")
+                detail_label.config(text=f"状态: {status}")
+                stats_label.config(text=f"成功: {success_count} | 跳过: {skip_count}")
+                progress_window.update()
+
+            try:
+                for cutout_idx in range(total):
+                    self._current_cutout_index = cutout_idx
+
+                    # 检查是否已经查询过
+                    skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                    vsx_queried, vsx_result = self._check_existing_query_results('vsx')
+
+                    # 如果都已查询过，跳过
+                    if skybot_queried and vsx_queried:
+                        skip_count += 1
+                        update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 已全部查询过")
+                        continue
+
+                    # 查询小行星
+                    if not skybot_queried:
+                        update_progress(cutout_idx + 0.3, f"目标 {cutout_idx + 1}: 查询小行星...")
+                        self._query_skybot()
+
+                        # 检查小行星查询结果
+                        skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+
+                        # 如果找到小行星，跳过变星查询
+                        if skybot_queried and skybot_result and "找到" in skybot_result:
+                            success_count += 1
+                            update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 找到小行星，跳过变星查询")
+                            continue
+
+                    # 查询变星（只有在小行星无结果时才查询）
+                    if not vsx_queried:
+                        update_progress(cutout_idx + 0.7, f"目标 {cutout_idx + 1}: 查询变星...")
+                        self._query_vsx()
+                        success_count += 1
+                        update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 完成")
+                    else:
+                        success_count += 1
+                        update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 完成")
+
+                # 完成
+                progress_label.config(text="批量查询完成！")
+                detail_label.config(text=f"总计: {total} 个检测目标")
+                self.logger.info(f"批量查询完成！成功: {success_count}, 跳过: {skip_count}")
+
+            except Exception as e:
+                self.logger.error(f"批量查询过程出错: {str(e)}")
+            finally:
+                progress_window.destroy()
+
+        except Exception as e:
+            error_msg = f"单文件批量查询失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+
+    def _collect_files_for_batch_query(self, directory):
+        """收集目录下所有需要批量查询的文件"""
+        files_to_process = []
+
+        try:
+            # 递归遍历目录
+            for root, dirs, files in os.walk(directory):
+                for filename in files:
+                    if filename.lower().endswith(('.fits', '.fit', '.fts')):
+                        file_path = os.path.join(root, filename)
+
+                        # 检查文件的diff结果
+                        detection_info = self._check_file_diff_result(file_path, root)
+
+                        if detection_info and detection_info.get('has_result'):
+                            high_score_count = detection_info.get('high_score_count', 0)
+
+                            # 只处理 high_score_count < 8 的文件
+                            if high_score_count < 8:
+                                files_to_process.append({
+                                    'file_path': file_path,
+                                    'region_dir': root,
+                                    'high_score_count': high_score_count,
+                                    'detection_info': detection_info
+                                })
+                                self.logger.info(f"添加到批量查询列表: {filename} (high_score={high_score_count})")
+
+            self.logger.info(f"共收集到 {len(files_to_process)} 个文件需要批量查询")
+
+        except Exception as e:
+            self.logger.error(f"收集文件失败: {str(e)}")
+
+        return files_to_process
+
+    def _execute_batch_query(self, files_to_process):
+        """执行批量查询"""
+        total = len(files_to_process)
+        success_count = 0
+        skip_count = 0
+        error_count = 0
+
+        # 创建进度窗口
+        progress_window = tk.Toplevel(self.parent_frame)
+        progress_window.title("批量查询进度")
+        progress_window.geometry("500x200")
+
+        # 进度标签
+        progress_label = ttk.Label(progress_window, text="准备开始...")
+        progress_label.pack(pady=10)
+
+        # 详细信息
+        detail_label = ttk.Label(progress_window, text="", wraplength=450)
+        detail_label.pack(pady=5)
+
+        # 进度条
+        progress_bar = ttk.Progressbar(progress_window, length=400, mode='determinate')
+        progress_bar.pack(pady=10)
+        progress_bar['maximum'] = total
+
+        # 统计标签
+        stats_label = ttk.Label(progress_window, text="")
+        stats_label.pack(pady=5)
+
+        def update_progress(current, filename, status):
+            progress_bar['value'] = current
+            progress_label.config(text=f"处理进度: {current}/{total}")
+            detail_label.config(text=f"当前文件: {filename}\n状态: {status}")
+            stats_label.config(text=f"成功: {success_count} | 跳过: {skip_count} | 错误: {error_count}")
+            progress_window.update()
+
+        try:
+            for idx, file_info in enumerate(files_to_process, 1):
+                file_path = file_info['file_path']
+                filename = os.path.basename(file_path)
+
+                try:
+                    # 加载文件的diff结果
+                    update_progress(idx - 0.5, filename, "加载检测结果...")
+
+                    if not self._load_diff_results_for_file(file_path, file_info['region_dir']):
+                        skip_count += 1
+                        update_progress(idx, filename, "跳过（无法加载检测结果）")
+                        continue
+
+                    # 检查是否有检测结果
+                    if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                        skip_count += 1
+                        update_progress(idx, filename, "跳过（无检测结果）")
+                        continue
+
+                    # 获取high_score_count，只查询高分目标
+                    high_score_count = self._get_high_score_count_from_current_detection()
+                    if high_score_count is None or high_score_count == 0:
+                        skip_count += 1
+                        update_progress(idx, filename, "跳过（无高分目标）")
+                        continue
+
+                    # 只遍历前 high_score_count 个检测目标
+                    total_to_query = min(high_score_count, len(self._all_cutout_sets))
+                    queried_count = 0
+                    for cutout_idx in range(total_to_query):
+                        self._current_cutout_index = cutout_idx
+
+                        # 检查是否已经查询过
+                        skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                        vsx_queried, vsx_result = self._check_existing_query_results('vsx')
+
+                        # 如果都已查询过，跳过
+                        if skybot_queried and vsx_queried:
+                            continue
+
+                        # 查询小行星
+                        if not skybot_queried:
+                            update_progress(idx - 0.3, filename, f"查询小行星 ({cutout_idx + 1}/{total_to_query})...")
+                            self._query_skybot()
+                            queried_count += 1
+
+                            # 检查小行星查询结果
+                            skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+
+                            # 如果找到小行星，跳过变星查询
+                            if skybot_queried and skybot_result and "找到" in skybot_result:
+                                continue
+
+                        # 查询变星（只有在小行星无结果时才查询）
+                        if not vsx_queried:
+                            update_progress(idx - 0.1, filename, f"查询变星 ({cutout_idx + 1}/{total_to_query})...")
+                            self._query_vsx()
+                            queried_count += 1
+
+                    if queried_count > 0:
+                        success_count += 1
+                        update_progress(idx, filename, f"完成（查询了 {queried_count} 个目标）")
+                    else:
+                        skip_count += 1
+                        update_progress(idx, filename, "跳过（已全部查询过）")
+
+                except Exception as e:
+                    error_count += 1
+                    error_msg = f"处理失败: {str(e)}"
+                    self.logger.error(f"处理文件 {filename} 失败: {str(e)}")
+                    update_progress(idx, filename, error_msg)
+
+            # 完成
+            progress_label.config(text="批量查询完成！")
+            detail_label.config(text=f"总计: {total} 个文件")
+            self.logger.info(f"批量查询完成！成功: {success_count}, 跳过: {skip_count}, 错误: {error_count}")
+
+        except Exception as e:
+            self.logger.error(f"批量查询过程出错: {str(e)}")
+        finally:
+            progress_window.destroy()
+
+    def _load_diff_results_for_file(self, file_path, region_dir):
+        """为指定文件加载diff结果"""
+        try:
+            # 获取配置的输出目录
+            base_output_dir = None
+            if self.get_diff_output_dir_callback:
+                base_output_dir = self.get_diff_output_dir_callback()
+
+            if not base_output_dir or not os.path.exists(base_output_dir):
+                return False
+
+            # 从region_dir提取相对路径部分
+            download_dir = None
+            if self.get_download_dir_callback:
+                download_dir = self.get_download_dir_callback()
+
+            if not download_dir:
+                return False
+
+            # 标准化路径
+            normalized_region_dir = os.path.normpath(region_dir)
+            normalized_download_dir = os.path.normpath(download_dir)
+
+            # 获取相对路径
+            try:
+                relative_path = os.path.relpath(normalized_region_dir, normalized_download_dir)
+            except ValueError:
+                return False
+
+            # 构建输出目录路径
+            filename = os.path.basename(file_path)
+            output_region_dir = os.path.join(base_output_dir, relative_path)
+            file_basename = os.path.splitext(filename)[0]
+            potential_output_dir = os.path.join(output_region_dir, file_basename)
+
+            # 检查是否存在detection目录
+            if not os.path.exists(potential_output_dir) or not os.path.isdir(potential_output_dir):
+                return False
+
+            # 查找detection_开头的目录
+            detection_dir_path = None
+            try:
+                items = os.listdir(potential_output_dir)
+                for item_name in items:
+                    item_path = os.path.join(potential_output_dir, item_name)
+                    if os.path.isdir(item_path) and item_name.startswith('detection_'):
+                        detection_dir_path = item_path
+                        break
+            except Exception:
+                return False
+
+            if not detection_dir_path:
+                return False
+
+            # 加载cutouts（使用与_display_first_detection_cutouts相同的逻辑）
+            cutouts_dir = Path(detection_dir_path) / "cutouts"
+            if not cutouts_dir.exists():
+                self.logger.info("未找到cutouts文件夹")
+                return False
+
+            # 查找所有目标的图片（按文件名排序）
+            reference_files = sorted(cutouts_dir.glob("*_1_reference.png"))
+            aligned_files = sorted(cutouts_dir.glob("*_2_aligned.png"))
+            detection_files = sorted(cutouts_dir.glob("*_3_detection.png"))
+
+            if not (reference_files and aligned_files and detection_files):
+                self.logger.info("未找到完整的cutout图片")
+                return False
+
+            # 保存所有图片列表和当前索引
+            self._all_cutout_sets = []
+            for ref, aligned, det in zip(reference_files, aligned_files, detection_files):
+                cutout_set = {
+                    'reference': str(ref),
+                    'aligned': str(aligned),
+                    'detection': str(det),
+                    'skybot_results': None,
+                    'vsx_results': None,
+                    'skybot_queried': False,
+                    'vsx_queried': False
+                }
+                self._all_cutout_sets.append(cutout_set)
+
+            self._current_cutout_index = 0
+            self._total_cutouts = len(self._all_cutout_sets)
+
+            # 加载每个cutout的查询结果
+            for idx, cutout_set in enumerate(self._all_cutout_sets):
+                self._load_query_results_from_file(cutout_set, idx)
+
+            self.logger.info(f"成功加载 {self._total_cutouts} 个检测目标")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"加载文件diff结果失败: {str(e)}")
+            return False
 
 
