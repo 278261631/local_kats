@@ -45,7 +45,7 @@
     "max_jaggedness_ratio": 1.2,
     "detection_method": "contour",
     "score_threshold": 3.0,
-    "aligned_snr_threshold": 2.0,
+    "aligned_snr_threshold": 1.1,
     "sort_by": "aligned_snr"
   },
   "display_settings": {

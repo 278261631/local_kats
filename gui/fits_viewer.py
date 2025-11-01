@@ -210,7 +210,7 @@ class FitsImageViewer:
         self.jaggedness_ratio_var = tk.StringVar(value="2.0")
         self.detection_method_var = tk.StringVar(value="contour")
         self.score_threshold_var = tk.StringVar(value="3.0")
-        self.aligned_snr_threshold_var = tk.StringVar(value="2.0")
+        self.aligned_snr_threshold_var = tk.StringVar(value="1.1")
         self.sort_by_var = tk.StringVar(value="aligned_snr")
 
         # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
@@ -393,7 +393,7 @@ class FitsImageViewer:
 
         # 变星星等限制
         ttk.Label(toolbar_frame6, text="变星星等≤:").pack(side=tk.LEFT, padx=(10, 2))
-        self.vsx_mag_limit_var = tk.StringVar(value="16.0")
+        self.vsx_mag_limit_var = tk.StringVar(value="20.0")
         self.vsx_mag_limit_entry = ttk.Entry(toolbar_frame6, textvariable=self.vsx_mag_limit_var, width=6)
         self.vsx_mag_limit_entry.pack(side=tk.LEFT, padx=(0, 5))
 
@@ -612,7 +612,7 @@ class FitsImageViewer:
             self.score_threshold_var.set(str(score_threshold))
 
             # Aligned SNR阈值
-            aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+            aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 1.1)
             self.aligned_snr_threshold_var.set(str(aligned_snr_threshold))
 
             # 排序方式
@@ -1210,13 +1210,13 @@ class FitsImageViewer:
 
             # 获取配置的阈值和排序方式
             score_threshold = 3.0  # 默认综合得分阈值
-            aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
+            aligned_snr_threshold = 1.1  # 默认Aligned SNR阈值
             sort_by = 'aligned_snr'  # 默认排序方式
             if self.config_manager:
                 try:
                     batch_settings = self.config_manager.get_batch_process_settings()
                     score_threshold = batch_settings.get('score_threshold', 3.0)
-                    aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+                    aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 1.1)
                     sort_by = batch_settings.get('sort_by', 'aligned_snr')
                 except Exception:
                     pass
@@ -1603,13 +1603,13 @@ class FitsImageViewer:
                             else:
                                 # 获取配置的阈值和排序方式
                                 score_threshold = 3.0  # 默认综合得分阈值
-                                aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
+                                aligned_snr_threshold = 1.1  # 默认Aligned SNR阈值
                                 sort_by = 'aligned_snr'  # 默认排序方式
                                 if self.config_manager:
                                     try:
                                         batch_settings = self.config_manager.get_batch_process_settings()
                                         score_threshold = batch_settings.get('score_threshold', 3.0)
-                                        aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+                                        aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 1.1)
                                         sort_by = batch_settings.get('sort_by', 'aligned_snr')
                                     except Exception:
                                         pass
@@ -2112,13 +2112,13 @@ class FitsImageViewer:
                                         else:
                                             # 获取配置的阈值和排序方式
                                             score_threshold = 3.0  # 默认综合得分阈值
-                                            aligned_snr_threshold = 2.0  # 默认Aligned SNR阈值
+                                            aligned_snr_threshold = 1.1  # 默认Aligned SNR阈值
                                             sort_by = 'aligned_snr'  # 默认排序方式
                                             if self.config_manager:
                                                 try:
                                                     batch_settings = self.config_manager.get_batch_process_settings()
                                                     score_threshold = batch_settings.get('score_threshold', 3.0)
-                                                    aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 2.0)
+                                                    aligned_snr_threshold = batch_settings.get('aligned_snr_threshold', 1.1)
                                                     sort_by = batch_settings.get('sort_by', 'aligned_snr')
                                                 except Exception:
                                                     pass
@@ -2177,13 +2177,13 @@ class FitsImageViewer:
 
                                             # 获取配置的阈值和排序方式用于日志显示
                                             score_threshold_for_log = 3.0
-                                            aligned_snr_threshold_for_log = 2.0
+                                            aligned_snr_threshold_for_log = 1.1
                                             sort_by_for_log = 'aligned_snr'
                                             if self.config_manager:
                                                 try:
                                                     batch_settings = self.config_manager.get_batch_process_settings()
                                                     score_threshold_for_log = batch_settings.get('score_threshold', 3.0)
-                                                    aligned_snr_threshold_for_log = batch_settings.get('aligned_snr_threshold', 2.0)
+                                                    aligned_snr_threshold_for_log = batch_settings.get('aligned_snr_threshold', 1.1)
                                                     sort_by_for_log = batch_settings.get('sort_by', 'aligned_snr')
                                                 except Exception:
                                                     pass
@@ -5202,8 +5202,8 @@ class FitsImageViewer:
             try:
                 mag_limit = float(self.vsx_mag_limit_var.get())
             except ValueError:
-                self.logger.warning(f"无效的星等限制: {self.vsx_mag_limit_var.get()}，使用默认值16.0")
-                mag_limit = 16.0
+                self.logger.warning(f"无效的星等限制: {self.vsx_mag_limit_var.get()}，使用默认值20.0")
+                mag_limit = 20.0
 
             # 获取搜索半径
             try:
