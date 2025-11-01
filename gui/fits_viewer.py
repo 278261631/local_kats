@@ -464,6 +464,7 @@ class FitsImageViewer:
         ttk.Button(refresh_frame, text="刷新目录", command=self._refresh_directory_tree).pack(side=tk.LEFT)
         ttk.Button(refresh_frame, text="展开全部", command=self._expand_all).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="折叠全部", command=self._collapse_all).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(refresh_frame, text="跳转未查询", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
 
         # 创建目录树
         tree_frame = ttk.Frame(left_frame)
@@ -2318,6 +2319,69 @@ class FitsImageViewer:
 
         for item in self.directory_tree.get_children():
             collapse_recursive(item)
+
+    def _jump_to_next_unqueried(self):
+        """跳转到下一个未查询小行星、变星、卫星的high_score检测结果"""
+        try:
+            # 检查是否有检测结果
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                messagebox.showinfo("提示", "当前没有检测结果")
+                return
+
+            if not hasattr(self, '_current_cutout_index'):
+                messagebox.showinfo("提示", "请先显示检测结果")
+                return
+
+            # 获取high_score_count
+            high_score_count = self._get_high_score_count_from_current_detection()
+            if high_score_count is None or high_score_count == 0:
+                messagebox.showinfo("提示", "当前文件没有高分检测目标")
+                return
+
+            # 只在high_score范围内查找
+            max_index = min(high_score_count, len(self._all_cutout_sets))
+
+            # 从当前索引的下一个开始查找
+            start_index = self._current_cutout_index
+            found_index = None
+
+            # 循环查找
+            for i in range(max_index):
+                # 计算要检查的索引（从下一个开始，循环）
+                check_index = (start_index + i + 1) % max_index
+
+                # 临时设置当前索引以便检查查询结果
+                original_index = self._current_cutout_index
+                self._current_cutout_index = check_index
+
+                # 检查三种查询结果
+                skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                vsx_queried, vsx_result = self._check_existing_query_results('vsx')
+                satellite_queried, satellite_result = self._check_existing_query_results('satellite')
+
+                # 恢复原索引
+                self._current_cutout_index = original_index
+
+                # 判断是否符合条件：三个都未找到（已查询但未找到，或未查询）
+                skybot_not_found = (not skybot_queried) or (skybot_queried and skybot_result == "已查询，未找到")
+                vsx_not_found = (not vsx_queried) or (vsx_queried and vsx_result == "已查询，未找到")
+                satellite_not_found = (not satellite_queried) or (satellite_queried and satellite_result == "已查询，未找到")
+
+                if skybot_not_found and vsx_not_found and satellite_not_found:
+                    found_index = check_index
+                    break
+
+            if found_index is not None:
+                # 跳转到找到的检测结果
+                self._display_cutout_by_index(found_index)
+                self.logger.info(f"跳转到检测目标 #{found_index + 1}（未查询或未找到小行星/变星/卫星）")
+            else:
+                messagebox.showinfo("提示", f"在前{max_index}个高分检测目标中，未找到符合条件的检测结果\n（条件：未查询或未找到小行星、变星、卫星）")
+
+        except Exception as e:
+            error_msg = f"跳转失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            messagebox.showerror("错误", error_msg)
 
     def _open_download_directory(self):
         """打开当前下载目录"""
@@ -6292,7 +6356,7 @@ class FitsImageViewer:
         检查当前cutout目录的query_results.txt文件中是否已有查询结果
 
         Args:
-            query_type: 'skybot' 或 'vsx'
+            query_type: 'skybot', 'vsx' 或 'satellite'
 
         Returns:
             tuple: (has_result, result_text)
@@ -6342,10 +6406,24 @@ class FitsImageViewer:
                         # 已查询且找到结果
                         count = len(result_lines.split('\n'))
                         return True, f"已查询，找到 {count} 个"
-            else:  # vsx
+            elif query_type == 'vsx':
                 # 查找变星列表部分
                 import re
                 match = re.search(r'变星列表:\n((?:  - .*\n)+)', content)
+                if match:
+                    result_lines = match.group(1).strip()
+                    if '(未查询)' in result_lines:
+                        return False, None  # 未查询
+                    elif '(已查询，未找到)' in result_lines:
+                        return True, "已查询，未找到"  # 已查询但未找到
+                    else:
+                        # 已查询且找到结果
+                        count = len(result_lines.split('\n'))
+                        return True, f"已查询，找到 {count} 个"
+            else:  # satellite
+                # 查找卫星列表部分
+                import re
+                match = re.search(r'卫星列表:\n((?:  - .*\n)+)', content)
                 if match:
                     result_lines = match.group(1).strip()
                     if '(未查询)' in result_lines:
