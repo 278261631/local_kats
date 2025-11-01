@@ -386,6 +386,12 @@ class FitsImageViewer:
                                             state="disabled")
         self.batch_query_button.pack(side=tk.LEFT, padx=(5, 5))
 
+        # 批量删除查询结果按钮
+        self.batch_delete_query_button = ttk.Button(toolbar_frame6, text="删除查询结果",
+                                                    command=self._batch_delete_query_results,
+                                                    state="disabled")
+        self.batch_delete_query_button.pack(side=tk.LEFT, padx=(0, 5))
+
         # Skybot查询按钮 (使用tk.Button以支持背景色)
         self.skybot_button = tk.Button(toolbar_frame6, text="查询小行星(Skybot)",
                                        command=self._query_skybot, state="disabled",
@@ -1928,6 +1934,8 @@ class FitsImageViewer:
 
             # 启用批量查询按钮（单个文件也支持批量查询其所有检测目标）
             self.batch_query_button.config(state="normal")
+            # 启用批量删除查询结果按钮
+            self.batch_delete_query_button.config(state="normal")
         else:
             # 选中的不是FITS文件（可能是目录）
             self.selected_file_path = None
@@ -1941,9 +1949,11 @@ class FitsImageViewer:
             # 检查是否选中了目录，如果是则启用批量查询按钮
             if values and any(tag in tags for tag in ["region", "date", "telescope"]):
                 self.batch_query_button.config(state="normal")
+                self.batch_delete_query_button.config(state="normal")
                 self.file_info_label.config(text="已选择目录 [可批量查询]")
             else:
                 self.batch_query_button.config(state="disabled")
+                self.batch_delete_query_button.config(state="disabled")
                 self.file_info_label.config(text="未选择FITS文件")
 
     def _on_tree_double_click(self, event):
@@ -3074,6 +3084,10 @@ class FitsImageViewer:
             self._total_cutouts = len(self._all_cutout_sets)
 
             self.logger.info(f"找到 {self._total_cutouts} 组检测结果")
+
+            # 加载每个cutout的查询结果
+            for idx, cutout_set in enumerate(self._all_cutout_sets):
+                self._load_query_results_from_file(cutout_set, idx)
 
             # 检查是否需要自动启用中心距离过滤
             self._check_auto_enable_center_distance_filter()
@@ -6102,6 +6116,180 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"保存参数文件失败: {str(e)}")
+
+    def _batch_delete_query_results(self):
+        """批量删除查询结果文件"""
+        try:
+            # 获取当前选中的节点
+            selection = self.directory_tree.selection()
+            if not selection:
+                messagebox.showwarning("警告", "请先选择一个目录或文件")
+                return
+
+            item = selection[0]
+            values = self.directory_tree.item(item, "values")
+            tags = self.directory_tree.item(item, "tags")
+
+            if not values:
+                messagebox.showwarning("警告", "请选择一个目录或文件")
+                return
+
+            # 判断是文件还是目录
+            is_file = "fits_file" in tags
+
+            if is_file:
+                # 选中的是单个文件
+                file_path = values[0]
+
+                # 检查文件是否有diff结果
+                if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                    messagebox.showinfo("提示", "该文件没有检测结果")
+                    return
+
+                # 确认删除
+                result = messagebox.askyesno("确认删除",
+                                            f"确定要删除该文件的所有查询结果吗？\n\n文件: {os.path.basename(file_path)}")
+                if not result:
+                    return
+
+                # 删除当前文件的所有查询结果
+                deleted_count = self._delete_query_results_for_current_file()
+                messagebox.showinfo("完成", f"已删除 {deleted_count} 个查询结果文件")
+                self.logger.info(f"已删除 {deleted_count} 个查询结果文件")
+
+                # 刷新显示
+                if hasattr(self, '_current_cutout_index'):
+                    self._display_cutout_by_index(self._current_cutout_index)
+
+            else:
+                # 选中的是目录
+                directory = values[0]
+
+                # 确认删除
+                result = messagebox.askyesno("确认删除",
+                                            f"确定要删除该目录下所有文件的查询结果吗？\n\n目录: {directory}\n\n这将删除所有 query_results_*.txt 文件")
+                if not result:
+                    return
+
+                # 获取对应的输出目录
+                output_directory = self._get_output_directory_from_download_directory(directory)
+                if not output_directory:
+                    messagebox.showwarning("警告", "未找到对应的输出目录")
+                    return
+
+                self.logger.info(f"下载目录: {directory}")
+                self.logger.info(f"输出目录: {output_directory}")
+
+                # 删除输出目录下的所有查询结果文件
+                deleted_count = self._delete_query_results_for_directory(output_directory)
+                messagebox.showinfo("完成", f"已删除 {deleted_count} 个查询结果文件")
+                self.logger.info(f"已删除 {deleted_count} 个查询结果文件")
+
+        except Exception as e:
+            error_msg = f"批量删除查询结果失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            messagebox.showerror("错误", error_msg)
+
+    def _delete_query_results_for_current_file(self):
+        """删除当前文件的所有查询结果"""
+        deleted_count = 0
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                return 0
+
+            for idx, cutout_set in enumerate(self._all_cutout_sets):
+                detection_img = cutout_set.get('detection')
+                if not detection_img or not os.path.exists(detection_img):
+                    continue
+
+                cutout_dir = os.path.dirname(detection_img)
+                query_results_file = os.path.join(cutout_dir, f"query_results_{idx + 1:03d}.txt")
+
+                if os.path.exists(query_results_file):
+                    try:
+                        os.remove(query_results_file)
+                        deleted_count += 1
+                        self.logger.info(f"已删除: {query_results_file}")
+
+                        # 重置查询状态
+                        cutout_set['skybot_queried'] = False
+                        cutout_set['vsx_queried'] = False
+                        cutout_set['skybot_results'] = None
+                        cutout_set['vsx_results'] = None
+                    except Exception as e:
+                        self.logger.error(f"删除文件失败 {query_results_file}: {str(e)}")
+
+        except Exception as e:
+            self.logger.error(f"删除当前文件查询结果失败: {str(e)}")
+
+        return deleted_count
+
+    def _get_output_directory_from_download_directory(self, download_directory):
+        """根据下载目录获取对应的输出目录"""
+        try:
+            # 获取配置的输出目录
+            base_output_dir = None
+            if self.get_diff_output_dir_callback:
+                base_output_dir = self.get_diff_output_dir_callback()
+
+            if not base_output_dir or not os.path.exists(base_output_dir):
+                self.logger.warning("输出目录不存在")
+                return None
+
+            # 获取下载目录
+            download_dir = None
+            if self.get_download_dir_callback:
+                download_dir = self.get_download_dir_callback()
+
+            if not download_dir:
+                self.logger.warning("下载目录不存在")
+                return None
+
+            # 标准化路径
+            normalized_download_directory = os.path.normpath(download_directory)
+            normalized_download_dir = os.path.normpath(download_dir)
+
+            # 获取相对路径
+            try:
+                relative_path = os.path.relpath(normalized_download_directory, normalized_download_dir)
+            except ValueError:
+                self.logger.warning(f"无法计算相对路径: {normalized_download_directory} 相对于 {normalized_download_dir}")
+                return None
+
+            # 构建输出目录路径
+            output_directory = os.path.join(base_output_dir, relative_path)
+
+            if not os.path.exists(output_directory):
+                self.logger.warning(f"输出目录不存在: {output_directory}")
+                return None
+
+            return output_directory
+
+        except Exception as e:
+            self.logger.error(f"获取输出目录失败: {str(e)}")
+            return None
+
+    def _delete_query_results_for_directory(self, directory):
+        """删除目录下所有文件的查询结果"""
+        deleted_count = 0
+        try:
+            # 递归遍历目录
+            for root, dirs, files in os.walk(directory):
+                # 查找所有 query_results_*.txt 文件
+                for filename in files:
+                    if filename.startswith('query_results_') and filename.endswith('.txt'):
+                        file_path = os.path.join(root, filename)
+                        try:
+                            os.remove(file_path)
+                            deleted_count += 1
+                            self.logger.info(f"已删除: {file_path}")
+                        except Exception as e:
+                            self.logger.error(f"删除文件失败 {file_path}: {str(e)}")
+
+        except Exception as e:
+            self.logger.error(f"删除目录查询结果失败: {str(e)}")
+
+        return deleted_count
 
     def _batch_query_asteroids_and_variables(self):
         """批量查询小行星和变星"""
