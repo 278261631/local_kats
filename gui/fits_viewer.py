@@ -6215,6 +6215,9 @@ class FitsImageViewer:
                     skybot_queried, skybot_result = self._check_existing_query_results('skybot')
                     vsx_queried, vsx_result = self._check_existing_query_results('vsx')
 
+                    self.logger.info(f"目标 {cutout_idx + 1}: skybot_queried={skybot_queried}, skybot_result={skybot_result}")
+                    self.logger.info(f"目标 {cutout_idx + 1}: vsx_queried={vsx_queried}, vsx_result={vsx_result}")
+
                     # 如果都已查询过，跳过
                     if skybot_queried and vsx_queried:
                         skip_count += 1
@@ -6228,20 +6231,35 @@ class FitsImageViewer:
 
                         # 检查小行星查询结果
                         skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                        self.logger.info(f"目标 {cutout_idx + 1}: 小行星查询后 skybot_queried={skybot_queried}, skybot_result={skybot_result}")
 
-                        # 如果找到小行星，跳过变星查询
-                        if skybot_queried and skybot_result and "找到" in skybot_result:
-                            success_count += 1
-                            update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 找到小行星，跳过变星查询")
-                            continue
+                    # 判断是否需要查询变星
+                    # 只有当小行星找到结果时才跳过变星查询
+                    should_query_vsx = True
+                    # 检查是否真的找到了小行星（排除"未找到"的情况）
+                    if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
+                        # 小行星有结果，跳过变星查询
+                        should_query_vsx = False
+                        success_count += 1
+                        update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 找到小行星，跳过变星查询")
+                        self.logger.info(f"目标 {cutout_idx + 1}: 找到小行星，跳过变星查询")
 
-                    # 查询变星（只有在小行星无结果时才查询）
-                    if not vsx_queried:
+                    self.logger.info(f"目标 {cutout_idx + 1}: should_query_vsx={should_query_vsx}, vsx_queried={vsx_queried}")
+
+                    # 查询变星（只有在小行星无有效结果时才查询）
+                    if should_query_vsx and not vsx_queried:
+                        self.logger.info(f"目标 {cutout_idx + 1}: 开始查询变星...")
                         update_progress(cutout_idx + 0.7, f"目标 {cutout_idx + 1}: 查询变星...")
                         self._query_vsx()
                         success_count += 1
                         update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 完成")
+                    elif not should_query_vsx:
+                        # 已经跳过变星查询
+                        self.logger.info(f"目标 {cutout_idx + 1}: 跳过变星查询（小行星已找到）")
+                        pass
                     else:
+                        # 变星已查询过
+                        self.logger.info(f"目标 {cutout_idx + 1}: 变星已查询过")
                         success_count += 1
                         update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 完成")
 
@@ -6379,12 +6397,16 @@ class FitsImageViewer:
                             # 检查小行星查询结果
                             skybot_queried, skybot_result = self._check_existing_query_results('skybot')
 
-                            # 如果找到小行星，跳过变星查询
-                            if skybot_queried and skybot_result and "找到" in skybot_result:
-                                continue
+                        # 判断是否需要查询变星
+                        # 只有当小行星找到结果时才跳过变星查询
+                        should_query_vsx = True
+                        # 检查是否真的找到了小行星（排除"未找到"的情况）
+                        if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
+                            # 小行星有结果，跳过变星查询
+                            should_query_vsx = False
 
-                        # 查询变星（只有在小行星无结果时才查询）
-                        if not vsx_queried:
+                        # 查询变星（只有在小行星无有效结果时才查询）
+                        if should_query_vsx and not vsx_queried:
                             update_progress(idx - 0.1, filename, f"查询变星 ({cutout_idx + 1}/{total_to_query})...")
                             self._query_vsx()
                             queried_count += 1
