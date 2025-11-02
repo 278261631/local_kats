@@ -2320,6 +2320,161 @@ class FitsImageViewer:
         for item in self.directory_tree.get_children():
             collapse_recursive(item)
 
+    def _select_current_file_in_tree(self):
+        """在目录树中选中当前文件"""
+        if not self.selected_file_path:
+            return
+
+        try:
+            # 递归查找文件节点
+            def find_file_node(parent_item):
+                for child in self.directory_tree.get_children(parent_item):
+                    values = self.directory_tree.item(child, "values")
+                    tags = self.directory_tree.item(child, "tags")
+
+                    # 检查是否是目标文件
+                    if values and "fits_file" in tags:
+                        file_path = values[0]
+                        # 标准化路径进行比较
+                        if os.path.normpath(file_path) == os.path.normpath(self.selected_file_path):
+                            return child
+
+                    # 递归查找子节点
+                    result = find_file_node(child)
+                    if result:
+                        return result
+
+                return None
+
+            # 从根节点开始查找
+            file_node = None
+            for root_item in self.directory_tree.get_children():
+                file_node = find_file_node(root_item)
+                if file_node:
+                    break
+
+            if file_node:
+                # 展开父节点路径
+                parent = self.directory_tree.parent(file_node)
+                while parent:
+                    self.directory_tree.item(parent, open=True)
+                    parent = self.directory_tree.parent(parent)
+
+                # 选中并聚焦到文件节点
+                self.directory_tree.selection_set(file_node)
+                self.directory_tree.focus(file_node)
+                self.directory_tree.see(file_node)
+                self.logger.info(f"已在目录树中选中文件: {os.path.basename(self.selected_file_path)}")
+            else:
+                self.logger.warning(f"未在目录树中找到文件: {self.selected_file_path}")
+
+        except Exception as e:
+            self.logger.error(f"在目录树中选中文件时出错: {e}")
+
+    def _update_selected_file_path_from_cutout(self, cutout_img_path):
+        """从cutout图片路径反推原始FITS文件路径并更新selected_file_path"""
+        try:
+            # cutout路径结构: E:/fix_data/output/GY1/20251101/K020/文件名/detection_xxx/cutouts/xxx.png
+            # 需要映射到下载目录: E:/fix_data/download/GY1/20251101/K020/文件名.fits
+
+            cutout_path = Path(cutout_img_path)
+            path_parts = cutout_path.parts
+
+            self.logger.info(f"从cutout路径反推FITS文件，路径: {cutout_img_path}")
+            self.logger.info(f"路径部分: {path_parts}")
+
+            # 查找detection目录的位置
+            detection_index = -1
+            for i, part in enumerate(path_parts):
+                if part.startswith('detection_'):
+                    detection_index = i
+                    break
+
+            if detection_index < 0:
+                self.logger.warning("未找到detection目录")
+                return
+
+            # 从detection目录往前推：
+            # detection_index-2: 文件名目录（去掉末尾的_）
+            # detection_index-3: 天区目录（如K020）
+            # detection_index-4: 日期目录（如20251101）
+            # detection_index-5: 系统名目录（如GY1）
+            # detection_index-6: output或download
+
+            if detection_index < 6:
+                self.logger.warning(f"路径层级不足: {detection_index}")
+                return
+
+            file_dir_name = path_parts[detection_index - 1]  # 文件名目录
+            region_name = path_parts[detection_index - 2]    # 天区
+            date_name = path_parts[detection_index - 3]      # 日期
+            system_name = path_parts[detection_index - 4]    # 系统名
+
+            self.logger.info(f"解析路径: 系统={system_name}, 日期={date_name}, 天区={region_name}, 文件目录={file_dir_name}")
+
+            # 获取下载目录
+            download_dir = None
+            if self.get_download_dir_callback:
+                download_dir = self.get_download_dir_callback()
+
+            if not download_dir or not os.path.exists(download_dir):
+                self.logger.warning("下载目录未设置或不存在")
+                return
+
+            # 构建原始FITS文件所在目录
+            original_dir = Path(download_dir) / system_name / date_name / region_name
+
+            if not original_dir.exists():
+                self.logger.warning(f"原始文件目录不存在: {original_dir}")
+                return
+
+            self.logger.info(f"查找原始FITS文件目录: {original_dir}")
+
+            # 从文件目录名提取原始文件名
+            # 文件目录名格式: GY1_K020-1_No%20Filter_60S_Bin2_UTC20251101_154555_-20C_
+            # 原始文件名格式: GY1_K020-1_No%20Filter_60S_Bin2_UTC20251101_154555_-20C_.fit
+            # 注意：文件名中保留了URL编码的%20，不需要解码
+
+            self.logger.info(f"文件目录名: {file_dir_name}")
+
+            # 查找匹配的FITS文件（.fits或.fit）
+            all_fits_files = list(original_dir.glob("*.fits")) + list(original_dir.glob("*.fit"))
+            self.logger.info(f"找到 {len(all_fits_files)} 个FITS文件")
+
+            # 直接使用文件目录名匹配（因为文件名和目录名几乎相同，只是末尾可能有下划线）
+            # 查找文件名以file_dir_name开头的文件
+            matching_files = [f for f in all_fits_files
+                            if f.stem.startswith(file_dir_name.rstrip('_')) and
+                            not any(suffix in f.name.lower()
+                                  for suffix in ['_aligned', '_stretched', '_noise_cleaned', '_difference'])]
+
+            if matching_files:
+                self.selected_file_path = str(matching_files[0])
+                self.logger.info(f"已设置selected_file_path: {self.selected_file_path}")
+            else:
+                # 如果没找到精确匹配，尝试模糊匹配
+                self.logger.warning(f"未找到精确匹配的文件，尝试模糊匹配")
+                # 提取关键部分（系统名_天区_时间）
+                import re
+                key_match = re.search(r'(GY\d+_K\d{3}.*UTC\d{8}_\d{6})', file_dir_name)
+                if key_match:
+                    key_part = key_match.group(1)
+                    self.logger.info(f"关键部分: {key_part}")
+                    fuzzy_matches = [f for f in all_fits_files
+                                   if key_part in f.name and
+                                   not any(suffix in f.name.lower()
+                                         for suffix in ['_aligned', '_stretched', '_noise_cleaned', '_difference'])]
+                    if fuzzy_matches:
+                        self.selected_file_path = str(fuzzy_matches[0])
+                        self.logger.info(f"模糊匹配成功: {self.selected_file_path}")
+                    else:
+                        self.logger.warning(f"在 {original_dir} 中未找到匹配的FITS文件")
+                else:
+                    self.logger.warning(f"无法提取关键部分")
+
+        except Exception as e:
+            self.logger.error(f"从cutout路径反推FITS文件时出错: {e}", exc_info=True)
+
     def _jump_to_next_unqueried(self):
         """跳转到下一个未查询小行星、变星、卫星的high_score检测结果"""
         try:
@@ -2375,6 +2530,9 @@ class FitsImageViewer:
                 # 跳转到找到的检测结果
                 self._display_cutout_by_index(found_index)
                 self.logger.info(f"跳转到检测目标 #{found_index + 1}（未查询或未找到小行星/变星/卫星）")
+
+                # 在目录树中高亮选中当前文件
+                self._select_current_file_in_tree()
             else:
                 messagebox.showinfo("提示", f"在前{max_index}个高分检测目标中，未找到符合条件的检测结果\n（条件：未查询或未找到小行星、变星、卫星）")
 
@@ -3264,6 +3422,9 @@ class FitsImageViewer:
         self.logger.info(f"  Reference: {os.path.basename(reference_img)}")
         self.logger.info(f"  Aligned: {os.path.basename(aligned_img)}")
         self.logger.info(f"  Detection: {os.path.basename(detection_img)}")
+
+        # 从cutout路径反推原始FITS文件路径并设置selected_file_path
+        self._update_selected_file_path_from_cutout(detection_img)
 
         # 更新计数标签
         self.cutout_count_label.config(text=f"{index + 1}/{self._total_cutouts}")
