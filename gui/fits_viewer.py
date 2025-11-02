@@ -1947,7 +1947,8 @@ class FitsImageViewer:
             self.logger.info(f"已选择FITS文件: {filename}")
 
             # 如果是下载目录的文件，自动检查并加载diff结果
-            if is_download_file:
+            # 但如果是程序自动选择（_auto_selecting），则不重新加载，保持当前索引
+            if is_download_file and not getattr(self, '_auto_selecting', False):
                 self._auto_load_diff_results(file_path)
 
             # 启用批量查询按钮（单个文件也支持批量查询其所有检测目标）
@@ -2332,6 +2333,17 @@ class FitsImageViewer:
             return
 
         try:
+            # 检查当前选中的节点是否已经是目标文件
+            selection = self.directory_tree.selection()
+            if selection:
+                node = selection[0]
+                values = self.directory_tree.item(node, "values")
+                tags = self.directory_tree.item(node, "tags")
+                if values and "fits_file" in tags:
+                    file_path = values[0]
+                    if os.path.normpath(file_path) == os.path.normpath(self.selected_file_path):
+                        self.logger.info("当前选中的节点已经是目标文件，无需重新选择")
+                        return
             # 递归查找文件节点
             def find_file_node(parent_item):
                 for child in self.directory_tree.get_children(parent_item):
