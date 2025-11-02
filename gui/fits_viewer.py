@@ -2546,7 +2546,7 @@ class FitsImageViewer:
             return None
 
     def _load_next_file_with_results(self):
-        """加载下一个有检测结果的文件"""
+        """加载下一个有检测结果的文件（仅在初始选择的目录范围内）"""
         try:
             # 获取当前选中的文件路径
             if not hasattr(self, 'selected_file_path') or not self.selected_file_path:
@@ -2574,10 +2574,28 @@ class FitsImageViewer:
                     self.logger.info("没有选中的节点")
                     return False
 
+            # 确定查找范围的根节点
+            # 如果有保存的搜索根节点，使用它；否则使用当前文件所在的天区目录
+            if not hasattr(self, '_search_root_node'):
+                # 第一次调用，保存当前文件所在的天区目录作为搜索根节点
+                parent_node = self.directory_tree.parent(current_file_node)
+                if not parent_node:
+                    self.logger.info("未找到父节点")
+                    return False
+                self._search_root_node = parent_node
+                self.logger.info(f"设置搜索根节点: {self.directory_tree.item(parent_node, 'text')}")
+
             # 获取父节点（天区目录）
             parent_node = self.directory_tree.parent(current_file_node)
             if not parent_node:
                 self.logger.info("未找到父节点")
+                return False
+
+            # 检查当前文件是否在搜索根节点范围内
+            if not self._is_node_under_root(current_file_node, self._search_root_node):
+                self.logger.info("当前文件不在搜索根节点范围内，停止查找")
+                # 清除搜索根节点
+                delattr(self, '_search_root_node')
                 return False
 
             # 获取所有兄弟节点（同一天区下的所有文件）
@@ -2616,54 +2634,90 @@ class FitsImageViewer:
 
                         return True
 
-            # 当前天区没有更多文件了，尝试查找下一个天区
-            self.logger.info("当前天区没有更多文件，尝试查找下一个天区")
+            # 当前天区没有更多文件了，尝试在搜索根节点范围内查找下一个子目录
+            self.logger.info("当前天区没有更多文件，尝试在搜索根节点范围内查找下一个子目录")
 
-            # 获取天区的父节点（日期目录）
-            date_node = self.directory_tree.parent(parent_node)
-            if not date_node:
-                self.logger.info("未找到日期节点")
-                return False
+            # 在搜索根节点下查找所有子目录（递归）
+            next_file = self._find_next_file_in_root(current_file_node, self._search_root_node)
+            if next_file:
+                self.logger.info(f"在搜索根节点范围内找到下一个有检测结果的文件: {self.directory_tree.item(next_file, 'text')}")
 
-            # 获取所有天区节点
-            all_regions = self.directory_tree.get_children(date_node)
+                self.directory_tree.selection_set(next_file)
+                self.directory_tree.focus(next_file)
+                self.directory_tree.see(next_file)
 
-            # 找到当前天区的索引
-            current_region_index = -1
-            for i, region in enumerate(all_regions):
-                if region == parent_node:
-                    current_region_index = i
-                    break
+                # 触发选择事件，加载检测结果
+                self._on_tree_select(None)
 
-            if current_region_index == -1:
-                self.logger.info("未找到当前天区的索引")
-                return False
+                return True
 
-            # 从下一个天区开始查找
-            for i in range(current_region_index + 1, len(all_regions)):
-                region = all_regions[i]
-
-                # 在这个天区中查找第一个有检测结果的文件
-                first_file = self._find_first_file_with_results(region)
-                if first_file:
-                    self.logger.info(f"在下一个天区中找到有检测结果的文件: {self.directory_tree.item(first_file, 'text')}")
-
-                    self.directory_tree.selection_set(first_file)
-                    self.directory_tree.focus(first_file)
-                    self.directory_tree.see(first_file)
-
-                    # 触发选择事件，加载检测结果
-                    self._on_tree_select(None)
-
-                    return True
-
-            # 当前日期没有更多天区了
-            self.logger.info("当前日期没有更多天区，未实现跨日期查找")
+            # 搜索根节点范围内没有更多文件了
+            self.logger.info(f"搜索根节点 {self.directory_tree.item(self._search_root_node, 'text')} 范围内没有更多文件")
+            # 清除搜索根节点
+            delattr(self, '_search_root_node')
             return False
 
         except Exception as e:
             self.logger.error(f"加载下一个文件失败: {e}", exc_info=True)
             return False
+
+    def _is_node_under_root(self, node, root_node):
+        """检查节点是否在根节点的子树中"""
+        try:
+            current = node
+            while current:
+                if current == root_node:
+                    return True
+                current = self.directory_tree.parent(current)
+            return False
+        except Exception as e:
+            self.logger.error(f"检查节点层级关系失败: {e}")
+            return False
+
+    def _find_next_file_in_root(self, current_file_node, root_node):
+        """在根节点范围内查找当前文件之后的下一个有检测结果的文件"""
+        try:
+            # 收集根节点下所有有检测结果的文件节点（按树的顺序）
+            all_files = []
+
+            def collect_files(parent):
+                for child in self.directory_tree.get_children(parent):
+                    tags = self.directory_tree.item(child, "tags")
+
+                    if "fits_file" in tags:
+                        # 检查是否有检测结果
+                        if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
+                            all_files.append(child)
+
+                    # 递归收集子节点
+                    collect_files(child)
+
+            # 从根节点开始收集
+            collect_files(root_node)
+
+            self.logger.info(f"在根节点范围内找到 {len(all_files)} 个有检测结果的文件")
+
+            # 找到当前文件的位置
+            current_index = -1
+            for i, file_node in enumerate(all_files):
+                if file_node == current_file_node:
+                    current_index = i
+                    break
+
+            if current_index == -1:
+                self.logger.info("当前文件不在收集的文件列表中")
+                return None
+
+            # 返回下一个文件
+            if current_index + 1 < len(all_files):
+                return all_files[current_index + 1]
+            else:
+                self.logger.info("已经是最后一个文件")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"查找下一个文件失败: {e}", exc_info=True)
+            return None
 
     def _find_file_node_in_tree(self, file_path):
         """在目录树中查找指定文件路径的节点"""
@@ -2790,8 +2844,12 @@ class FitsImageViewer:
                     self.logger.info("已加载下一个文件，继续查找")
                     self._jump_to_next_unqueried()
                 else:
-                    # 没有更多文件了
-                    messagebox.showinfo("提示", "所有文件都已检查完毕\n未找到更多符合条件的检测结果\n（条件：已查询小行星和变星，但都未找到）")
+                    # 没有更多文件了，清除搜索根节点
+                    if hasattr(self, '_search_root_node'):
+                        root_name = self.directory_tree.item(self._search_root_node, 'text')
+                        self.logger.info(f"清除搜索根节点: {root_name}")
+                        delattr(self, '_search_root_node')
+                    messagebox.showinfo("提示", "在选定目录范围内所有文件都已检查完毕\n未找到更多符合条件的检测结果\n（条件：已查询小行星和变星，但都未找到）")
 
         except Exception as e:
             error_msg = f"跳转失败: {str(e)}"
