@@ -1871,6 +1871,12 @@ class FitsImageViewer:
     
     def _on_tree_select(self, event):
         """目录树选择事件"""
+        # 清除搜索根节点（用户手动选择新文件时重置查找范围）
+        # 但如果是程序自动选择（_auto_selecting标志），则不清除
+        if hasattr(self, '_search_root_node') and not getattr(self, '_auto_selecting', False):
+            self.logger.info("用户手动选择文件，清除搜索根节点")
+            delattr(self, '_search_root_node')
+
         selection = self.directory_tree.selection()
         if not selection:
             self.selected_file_path = None
@@ -2494,13 +2500,18 @@ class FitsImageViewer:
                 # 递归查找所有子节点中的文件
                 first_file = self._find_first_file_with_results(item)
                 if first_file:
-                    # 选中该文件
-                    self.directory_tree.selection_set(first_file)
-                    self.directory_tree.focus(first_file)
-                    self.directory_tree.see(first_file)
+                    # 设置自动选择标志，防止清除搜索根节点
+                    self._auto_selecting = True
+                    try:
+                        # 选中该文件
+                        self.directory_tree.selection_set(first_file)
+                        self.directory_tree.focus(first_file)
+                        self.directory_tree.see(first_file)
 
-                    # 触发选择事件，加载检测结果
-                    self._on_tree_select(None)
+                        # 触发选择事件，加载检测结果
+                        self._on_tree_select(None)
+                    finally:
+                        self._auto_selecting = False
 
                     self.logger.info(f"已自动加载第一个有检测结果的文件")
                     return True
@@ -2577,13 +2588,13 @@ class FitsImageViewer:
             # 确定查找范围的根节点
             # 如果有保存的搜索根节点，使用它；否则使用当前文件所在的天区目录
             if not hasattr(self, '_search_root_node'):
-                # 第一次调用，保存当前文件所在的天区目录作为搜索根节点
+                # 备用：如果还没有设置搜索根节点，使用当前文件所在的天区目录
                 parent_node = self.directory_tree.parent(current_file_node)
                 if not parent_node:
                     self.logger.info("未找到父节点")
                     return False
                 self._search_root_node = parent_node
-                self.logger.info(f"设置搜索根节点: {self.directory_tree.item(parent_node, 'text')}")
+                self.logger.info(f"[备用] 设置搜索根节点: {self.directory_tree.item(parent_node, 'text')}")
 
             # 获取父节点（天区目录）
             parent_node = self.directory_tree.parent(current_file_node)
@@ -2625,12 +2636,17 @@ class FitsImageViewer:
                         # 找到有检测结果的文件，选中它
                         self.logger.info(f"找到下一个有检测结果的文件: {self.directory_tree.item(sibling, 'text')}")
 
-                        self.directory_tree.selection_set(sibling)
-                        self.directory_tree.focus(sibling)
-                        self.directory_tree.see(sibling)
+                        # 设置自动选择标志，防止清除搜索根节点
+                        self._auto_selecting = True
+                        try:
+                            self.directory_tree.selection_set(sibling)
+                            self.directory_tree.focus(sibling)
+                            self.directory_tree.see(sibling)
 
-                        # 触发选择事件，加载检测结果
-                        self._on_tree_select(None)
+                            # 触发选择事件，加载检测结果
+                            self._on_tree_select(None)
+                        finally:
+                            self._auto_selecting = False
 
                         return True
 
@@ -2642,12 +2658,17 @@ class FitsImageViewer:
             if next_file:
                 self.logger.info(f"在搜索根节点范围内找到下一个有检测结果的文件: {self.directory_tree.item(next_file, 'text')}")
 
-                self.directory_tree.selection_set(next_file)
-                self.directory_tree.focus(next_file)
-                self.directory_tree.see(next_file)
+                # 设置自动选择标志，防止清除搜索根节点
+                self._auto_selecting = True
+                try:
+                    self.directory_tree.selection_set(next_file)
+                    self.directory_tree.focus(next_file)
+                    self.directory_tree.see(next_file)
 
-                # 触发选择事件，加载检测结果
-                self._on_tree_select(None)
+                    # 触发选择事件，加载检测结果
+                    self._on_tree_select(None)
+                finally:
+                    self._auto_selecting = False
 
                 return True
 
@@ -2761,12 +2782,146 @@ class FitsImageViewer:
     def _jump_to_next_unqueried(self):
         """跳转到下一个未查询小行星、变星、卫星的high_score检测结果"""
         try:
+            # 设置搜索根节点（如果还没有设置）
+            # 注意：必须在检查检测结果之前设置，因为可能需要根据选中的目录节点来加载文件
+            if not hasattr(self, '_search_root_node'):
+                self.logger.info("开始设置搜索根节点")
+                current_file_node = None
+
+                # 优先使用当前选中的节点（最可靠）
+                selection = self.directory_tree.selection()
+                if selection:
+                    node = selection[0]
+                    tags = self.directory_tree.item(node, "tags")
+                    node_text = self.directory_tree.item(node, "text")
+                    self.logger.info(f"当前选中的节点: {node_text}, tags: {tags}")
+
+                    if "fits_file" in tags:
+                        current_file_node = node
+                        self.logger.info(f"使用当前选中的文件节点: {node_text}")
+                    elif any(tag in tags for tag in ["region", "date", "telescope"]):
+                        # 如果选中的是目录节点，使用它作为搜索根节点
+                        self._search_root_node = node
+                        self.logger.info(f"当前选中的是目录节点，直接设置为搜索根节点: {node_text}")
+                        # 跳过后续处理
+                        current_file_node = "skip"
+                    else:
+                        self.logger.info(f"当前选中的节点不是文件节点或目录节点")
+
+                # 如果没有选中节点，尝试通过文件路径查找
+                if not current_file_node and hasattr(self, 'selected_file_path') and self.selected_file_path:
+                    self.logger.info(f"尝试通过文件路径查找: {self.selected_file_path}")
+                    current_file_node = self._find_file_node_in_tree(self.selected_file_path)
+                    if current_file_node:
+                        self.logger.info(f"通过路径找到文件节点: {self.directory_tree.item(current_file_node, 'text')}")
+                    else:
+                        self.logger.info("通过路径未找到文件节点")
+
+                # 如果已经设置了搜索根节点（目录节点），跳过
+                if current_file_node == "skip":
+                    pass  # 已经设置了搜索根节点
+                elif current_file_node:
+                    # 获取父节点（天区目录）作为搜索根节点
+                    parent_node = self.directory_tree.parent(current_file_node)
+                    if parent_node:
+                        self._search_root_node = parent_node
+                        self.logger.info(f"设置搜索根节点: {self.directory_tree.item(parent_node, 'text')}")
+                    else:
+                        self.logger.info("未找到父节点")
+                else:
+                    self.logger.info("未找到当前文件节点，无法设置搜索根节点")
+            else:
+                self.logger.info(f"已有搜索根节点: {self.directory_tree.item(self._search_root_node, 'text')}")
+
+            # 检查当前加载的检测结果是否在搜索根节点范围内
+            need_reload = False
+            self.logger.info("检查当前加载的检测结果是否在搜索根节点范围内")
+
+            if hasattr(self, '_all_cutout_sets') and self._all_cutout_sets:
+                self.logger.info(f"当前有检测结果，共 {len(self._all_cutout_sets)} 组")
+
+                # 尝试获取当前文件节点
+                current_file_node = None
+
+                # 方法1：通过selected_file_path查找
+                if hasattr(self, 'selected_file_path') and self.selected_file_path:
+                    self.logger.info(f"尝试通过selected_file_path查找: {self.selected_file_path}")
+                    current_file_node = self._find_file_node_in_tree(self.selected_file_path)
+                    if current_file_node:
+                        self.logger.info("通过selected_file_path找到文件节点")
+
+                # 方法2：通过当前选中的节点
+                if not current_file_node:
+                    self.logger.info("尝试通过当前选中的节点查找")
+                    selection = self.directory_tree.selection()
+                    if selection:
+                        node = selection[0]
+                        tags = self.directory_tree.item(node, "tags")
+                        if "fits_file" in tags:
+                            current_file_node = node
+                            self.logger.info("通过当前选中的节点找到文件节点")
+                        else:
+                            self.logger.info(f"当前选中的不是文件节点: {self.directory_tree.item(node, 'text')}")
+
+                # 方法3：从cutout路径推断
+                if not current_file_node and self._all_cutout_sets:
+                    self.logger.info("尝试从cutout路径推断文件所在天区")
+                    # 从第一个cutout的路径中提取天区信息
+                    first_cutout = self._all_cutout_sets[0]['detection']
+                    from pathlib import Path
+                    path_parts = Path(first_cutout).parts
+                    # 查找detection目录的位置
+                    for i, part in enumerate(path_parts):
+                        if part.startswith('detection_'):
+                            if i >= 2:
+                                region_name = path_parts[i - 2]  # 天区名称
+                                self.logger.info(f"从cutout路径推断天区: {region_name}")
+                                # 检查这个天区是否是搜索根节点
+                                root_text = self.directory_tree.item(self._search_root_node, 'text')
+                                if region_name not in root_text:
+                                    self.logger.info(f"当前检测结果的天区({region_name})与搜索根节点({root_text})不匹配，需要重新加载")
+                                    need_reload = True
+                                else:
+                                    self.logger.info(f"当前检测结果的天区({region_name})与搜索根节点({root_text})匹配")
+                            break
+
+                # 如果找到了文件节点，检查是否在搜索根节点范围内
+                if current_file_node and not need_reload:
+                    if not self._is_node_under_root(current_file_node, self._search_root_node):
+                        self.logger.info(f"当前加载的文件不在搜索根节点范围内，需要重新加载")
+                        need_reload = True
+                    else:
+                        self.logger.info("当前加载的文件在搜索根节点范围内")
+                elif not current_file_node and not need_reload:
+                    self.logger.info("未找到当前文件节点，需要重新加载")
+                    need_reload = True
+            else:
+                self.logger.info("没有加载检测结果，需要加载")
+                need_reload = True
+
+            # 如果需要重新加载，自动加载搜索根节点下第一个有检测结果的文件
+            if need_reload:
+                self.logger.info("尝试在搜索根节点范围内加载第一个有检测结果的文件")
+                first_file = self._find_first_file_with_results(self._search_root_node)
+                if first_file:
+                    # 设置自动选择标志
+                    self._auto_selecting = True
+                    try:
+                        self.directory_tree.selection_set(first_file)
+                        self.directory_tree.focus(first_file)
+                        self.directory_tree.see(first_file)
+                        self._on_tree_select(None)
+                    finally:
+                        self._auto_selecting = False
+                    self.logger.info("已加载第一个有检测结果的文件")
+                else:
+                    messagebox.showinfo("提示", "在选定目录范围内没有找到有检测结果的文件")
+                    return
+
             # 检查是否有检测结果
             if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
-                # 尝试自动加载第一个有检测结果的文件
-                if not self._auto_load_first_file_with_results():
-                    messagebox.showinfo("提示", "当前天区没有检测结果\n请先选择一个有检测结果的文件")
-                    return
+                messagebox.showinfo("提示", "当前文件没有检测结果")
+                return
 
             if not hasattr(self, '_current_cutout_index'):
                 # 如果有cutout_sets但没有current_index，显示第一个
