@@ -2475,17 +2475,252 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"从cutout路径反推FITS文件时出错: {e}", exc_info=True)
 
+    def _auto_load_first_file_with_results(self):
+        """自动查找并加载第一个有检测结果的文件"""
+        try:
+            # 获取当前选中的节点
+            selection = self.directory_tree.selection()
+            if not selection:
+                self.logger.info("没有选中任何节点")
+                return False
+
+            item = selection[0]
+            tags = self.directory_tree.item(item, "tags")
+
+            # 如果选中的是天区或更高层级的节点，查找第一个有检测结果的文件
+            if any(tag in tags for tag in ["region", "date", "telescope", "root_dir"]):
+                self.logger.info("选中的是目录节点，查找第一个有检测结果的文件")
+
+                # 递归查找所有子节点中的文件
+                first_file = self._find_first_file_with_results(item)
+                if first_file:
+                    # 选中该文件
+                    self.directory_tree.selection_set(first_file)
+                    self.directory_tree.focus(first_file)
+                    self.directory_tree.see(first_file)
+
+                    # 触发选择事件，加载检测结果
+                    self._on_tree_select(None)
+
+                    self.logger.info(f"已自动加载第一个有检测结果的文件")
+                    return True
+                else:
+                    self.logger.info("未找到有检测结果的文件")
+                    return False
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"自动加载第一个文件失败: {e}", exc_info=True)
+            return False
+
+    def _find_first_file_with_results(self, parent_item):
+        """递归查找第一个有检测结果的文件节点"""
+        try:
+            # 获取所有子节点
+            children = self.directory_tree.get_children(parent_item)
+
+            for child in children:
+                tags = self.directory_tree.item(child, "tags")
+
+                # 如果是文件节点且有diff结果标记
+                if "fits_file" in tags:
+                    # 检查是否有diff结果标记（通过颜色标记判断）
+                    # diff_gold_red: 有高分检测
+                    # diff_blue: 有检测但无高分
+                    # diff_purple: 检测列表为空
+                    if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
+                        self.logger.info(f"找到有检测结果的文件: {self.directory_tree.item(child, 'text')}")
+                        return child
+
+                # 如果是目录节点，递归查找
+                if any(tag in tags for tag in ["region", "date", "telescope"]):
+                    result = self._find_first_file_with_results(child)
+                    if result:
+                        return result
+
+            return None
+
+        except Exception as e:
+            self.logger.error(f"查找文件节点失败: {e}")
+            return None
+
+    def _load_next_file_with_results(self):
+        """加载下一个有检测结果的文件"""
+        try:
+            # 获取当前选中的文件路径
+            if not hasattr(self, 'selected_file_path') or not self.selected_file_path:
+                self.logger.info("没有当前选中的文件")
+                return False
+
+            current_file_path = self.selected_file_path
+            self.logger.info(f"当前文件: {current_file_path}")
+
+            # 在目录树中找到当前文件的节点
+            current_file_node = self._find_file_node_in_tree(current_file_path)
+
+            # 如果找不到，尝试使用当前选中的节点
+            if not current_file_node:
+                self.logger.info("未找到当前文件在目录树中的节点，尝试使用当前选中的节点")
+                selection = self.directory_tree.selection()
+                if selection:
+                    current_file_node = selection[0]
+                    tags = self.directory_tree.item(current_file_node, "tags")
+                    if "fits_file" not in tags:
+                        self.logger.info("当前选中的节点不是文件节点")
+                        return False
+                    self.logger.info(f"使用当前选中的节点: {self.directory_tree.item(current_file_node, 'text')}")
+                else:
+                    self.logger.info("没有选中的节点")
+                    return False
+
+            # 获取父节点（天区目录）
+            parent_node = self.directory_tree.parent(current_file_node)
+            if not parent_node:
+                self.logger.info("未找到父节点")
+                return False
+
+            # 获取所有兄弟节点（同一天区下的所有文件）
+            all_siblings = self.directory_tree.get_children(parent_node)
+
+            # 找到当前文件在兄弟节点中的位置
+            current_index = -1
+            for i, sibling in enumerate(all_siblings):
+                if sibling == current_file_node:
+                    current_index = i
+                    break
+
+            if current_index == -1:
+                self.logger.info("未找到当前文件的索引")
+                return False
+
+            self.logger.info(f"当前文件索引: {current_index}/{len(all_siblings)}")
+
+            # 从下一个文件开始查找有检测结果的文件
+            for i in range(current_index + 1, len(all_siblings)):
+                sibling = all_siblings[i]
+                tags = self.directory_tree.item(sibling, "tags")
+
+                # 检查是否是文件节点且有diff结果
+                if "fits_file" in tags:
+                    if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
+                        # 找到有检测结果的文件，选中它
+                        self.logger.info(f"找到下一个有检测结果的文件: {self.directory_tree.item(sibling, 'text')}")
+
+                        self.directory_tree.selection_set(sibling)
+                        self.directory_tree.focus(sibling)
+                        self.directory_tree.see(sibling)
+
+                        # 触发选择事件，加载检测结果
+                        self._on_tree_select(None)
+
+                        return True
+
+            # 当前天区没有更多文件了，尝试查找下一个天区
+            self.logger.info("当前天区没有更多文件，尝试查找下一个天区")
+
+            # 获取天区的父节点（日期目录）
+            date_node = self.directory_tree.parent(parent_node)
+            if not date_node:
+                self.logger.info("未找到日期节点")
+                return False
+
+            # 获取所有天区节点
+            all_regions = self.directory_tree.get_children(date_node)
+
+            # 找到当前天区的索引
+            current_region_index = -1
+            for i, region in enumerate(all_regions):
+                if region == parent_node:
+                    current_region_index = i
+                    break
+
+            if current_region_index == -1:
+                self.logger.info("未找到当前天区的索引")
+                return False
+
+            # 从下一个天区开始查找
+            for i in range(current_region_index + 1, len(all_regions)):
+                region = all_regions[i]
+
+                # 在这个天区中查找第一个有检测结果的文件
+                first_file = self._find_first_file_with_results(region)
+                if first_file:
+                    self.logger.info(f"在下一个天区中找到有检测结果的文件: {self.directory_tree.item(first_file, 'text')}")
+
+                    self.directory_tree.selection_set(first_file)
+                    self.directory_tree.focus(first_file)
+                    self.directory_tree.see(first_file)
+
+                    # 触发选择事件，加载检测结果
+                    self._on_tree_select(None)
+
+                    return True
+
+            # 当前日期没有更多天区了
+            self.logger.info("当前日期没有更多天区，未实现跨日期查找")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"加载下一个文件失败: {e}", exc_info=True)
+            return False
+
+    def _find_file_node_in_tree(self, file_path):
+        """在目录树中查找指定文件路径的节点"""
+        try:
+            # 标准化路径用于比较
+            normalized_file_path = os.path.normpath(file_path)
+            self.logger.info(f"查找文件节点: {normalized_file_path}")
+
+            def search_node(parent_item):
+                for child in self.directory_tree.get_children(parent_item):
+                    values = self.directory_tree.item(child, "values")
+                    tags = self.directory_tree.item(child, "tags")
+
+                    if values and "fits_file" in tags:
+                        # 标准化节点中的路径
+                        node_path = os.path.normpath(values[0])
+                        if node_path == normalized_file_path:
+                            self.logger.info(f"找到匹配的文件节点: {self.directory_tree.item(child, 'text')}")
+                            return child
+
+                    # 递归搜索子节点
+                    result = search_node(child)
+                    if result:
+                        return result
+
+                return None
+
+            # 从根节点开始搜索
+            for root_item in self.directory_tree.get_children():
+                result = search_node(root_item)
+                if result:
+                    return result
+
+            self.logger.warning(f"未找到文件节点: {normalized_file_path}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"查找文件节点失败: {e}", exc_info=True)
+            return None
+
     def _jump_to_next_unqueried(self):
         """跳转到下一个未查询小行星、变星、卫星的high_score检测结果"""
         try:
             # 检查是否有检测结果
             if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
-                messagebox.showinfo("提示", "当前没有检测结果")
-                return
+                # 尝试自动加载第一个有检测结果的文件
+                if not self._auto_load_first_file_with_results():
+                    messagebox.showinfo("提示", "当前天区没有检测结果\n请先选择一个有检测结果的文件")
+                    return
 
             if not hasattr(self, '_current_cutout_index'):
-                messagebox.showinfo("提示", "请先显示检测结果")
-                return
+                # 如果有cutout_sets但没有current_index，显示第一个
+                if hasattr(self, '_all_cutout_sets') and self._all_cutout_sets:
+                    self._display_cutout_by_index(0)
+                else:
+                    messagebox.showinfo("提示", "请先显示检测结果")
+                    return
 
             # 获取high_score_count
             high_score_count = self._get_high_score_count_from_current_detection()
@@ -2500,10 +2735,17 @@ class FitsImageViewer:
             start_index = self._current_cutout_index
             found_index = None
 
-            # 循环查找
-            for i in range(max_index):
+            # 循环查找（从下一个开始，不包括当前索引）
+            self.logger.info(f"开始查找未查询的检测目标，当前索引={start_index}, 最大索引={max_index}")
+
+            for i in range(1, max_index + 1):
                 # 计算要检查的索引（从下一个开始，循环）
-                check_index = (start_index + i + 1) % max_index
+                check_index = (start_index + i) % max_index
+
+                # 如果循环回到起点，说明已经检查完所有索引
+                if check_index == start_index:
+                    self.logger.info(f"循环回到起点，退出查找")
+                    break
 
                 # 临时设置当前索引以便检查查询结果
                 original_index = self._current_cutout_index
@@ -2517,24 +2759,39 @@ class FitsImageViewer:
                 # 恢复原索引
                 self._current_cutout_index = original_index
 
-                # 判断是否符合条件：三个都未找到（已查询但未找到，或未查询）
-                skybot_not_found = (not skybot_queried) or (skybot_queried and skybot_result == "已查询，未找到")
-                vsx_not_found = (not vsx_queried) or (vsx_queried and vsx_result == "已查询，未找到")
-                satellite_not_found = (not satellite_queried) or (satellite_queried and satellite_result == "已查询，未找到")
+                # 判断是否符合条件：已查询小行星和变星，但都未找到
+                # 注意：这里要求必须已经查询过，且结果为"未找到"
+                skybot_queried_not_found = skybot_queried and skybot_result == "已查询，未找到"
+                vsx_queried_not_found = vsx_queried and vsx_result == "已查询，未找到"
+                satellite_queried_not_found = satellite_queried and satellite_result == "已查询，未找到"
 
-                if skybot_not_found and vsx_not_found and satellite_not_found:
+                self.logger.info(f"检查索引 {check_index}: skybot={skybot_queried}/{skybot_result}, vsx={vsx_queried}/{vsx_result}, satellite={satellite_queried}/{satellite_result}")
+                self.logger.info(f"  已查询且未找到: skybot={skybot_queried_not_found}, vsx={vsx_queried_not_found}, satellite={satellite_queried_not_found}")
+
+                # 符合条件：小行星和变星都已查询且未找到
+                if skybot_queried_not_found and vsx_queried_not_found:
                     found_index = check_index
+                    self.logger.info(f"找到符合条件的检测目标（小行星和变星都已查询且未找到），索引={found_index}")
                     break
 
             if found_index is not None:
                 # 跳转到找到的检测结果
                 self._display_cutout_by_index(found_index)
-                self.logger.info(f"跳转到检测目标 #{found_index + 1}（未查询或未找到小行星/变星/卫星）")
+                self.logger.info(f"跳转到检测目标 #{found_index + 1}（已查询小行星和变星，但都未找到）")
 
                 # 在目录树中高亮选中当前文件
                 self._select_current_file_in_tree()
             else:
-                messagebox.showinfo("提示", f"在前{max_index}个高分检测目标中，未找到符合条件的检测结果\n（条件：未查询或未找到小行星、变星、卫星）")
+                # 当前文件没有找到符合条件的目标，尝试加载下一个文件
+                self.logger.info(f"当前文件的前{max_index}个高分检测目标中未找到符合条件的结果，尝试加载下一个文件")
+
+                if self._load_next_file_with_results():
+                    # 成功加载下一个文件，递归调用自己继续查找
+                    self.logger.info("已加载下一个文件，继续查找")
+                    self._jump_to_next_unqueried()
+                else:
+                    # 没有更多文件了
+                    messagebox.showinfo("提示", "所有文件都已检查完毕\n未找到更多符合条件的检测结果\n（条件：已查询小行星和变星，但都未找到）")
 
         except Exception as e:
             error_msg = f"跳转失败: {str(e)}"
