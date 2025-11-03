@@ -2850,7 +2850,9 @@ class FitsImageViewer:
         新逻辑：
         1. 收集整个目录树中所有符合条件的检测结果（高分数目 < 8 的文件中的高分项）
            - 使用缓存机制，避免每次都重新收集
-        2. 从当前位置向下查找下一个符合条件的检测结果（已查询小行星和变星，但都未找到）
+        2. 从当前位置向下查找下一个符合条件的检测结果：
+           - 已查询小行星和变星，但都未找到
+           - 或者有结果，但所有结果的像素距离都 >= 10像素
         3. 跳转到该检测结果
         """
         try:
@@ -2913,7 +2915,7 @@ class FitsImageViewer:
                 self._jump_candidates_cache = all_candidates
 
             if not all_candidates:
-                messagebox.showinfo("提示", "目录树中没有符合条件的检测结果\n（条件：高分数目 > 0 且 < 8）")
+                messagebox.showinfo("提示", "目录树中没有符合条件的检测结果\n（条件：高分数目 > 0 且 < 8，且小行星/变星都未找到或距离>=10px）")
                 return
 
             # 步骤2: 确定当前位置
@@ -2978,7 +2980,9 @@ class FitsImageViewer:
     def _get_qualified_detection_indices(self, file_path, high_score_count):
         """获取文件中符合条件的检测索引列表
 
-        条件：小行星和变星都已查询且未找到
+        条件：
+        1. 小行星和变星都已查询且未找到
+        2. 或者有结果，但所有结果的像素距离都 >= 10像素
 
         Args:
             file_path: FITS文件路径
@@ -3092,30 +3096,52 @@ class FitsImageViewer:
                     # 检查小行星查询结果
                     skybot_queried = False
                     skybot_not_found = False
+                    skybot_all_far = False  # 所有小行星都距离>=10像素
                     if "小行星列表:" in content:
                         skybot_queried = True
                         # 检查小行星列表后面是否包含 "(已查询，未找到)"
                         skybot_section = content.split("小行星列表:")[1].split("变星列表:")[0] if "变星列表:" in content else content.split("小行星列表:")[1]
                         if "(已查询，未找到)" in skybot_section:
                             skybot_not_found = True
+                        else:
+                            # 检查是否所有小行星的像素距离都>=10像素
+                            skybot_all_far = self._check_all_distances_far(skybot_section, 10.0)
 
                     # 检查变星查询结果
                     vsx_queried = False
                     vsx_not_found = False
+                    vsx_all_far = False  # 所有变星都距离>=10像素
                     if "变星列表:" in content:
                         vsx_queried = True
                         # 检查变星列表后面是否包含 "(已查询，未找到)"
                         vsx_section = content.split("变星列表:")[1].split("卫星列表:")[0] if "卫星列表:" in content else content.split("变星列表:")[1]
                         if "(已查询，未找到)" in vsx_section:
                             vsx_not_found = True
+                        else:
+                            # 检查是否所有变星的像素距离都>=10像素
+                            vsx_all_far = self._check_all_distances_far(vsx_section, 10.0)
 
-                    self.logger.info(f"      skybot: queried={skybot_queried}, not_found={skybot_not_found}")
-                    self.logger.info(f"      vsx: queried={vsx_queried}, not_found={vsx_not_found}")
+                    self.logger.info(f"      skybot: queried={skybot_queried}, not_found={skybot_not_found}, all_far={skybot_all_far}")
+                    self.logger.info(f"      vsx: queried={vsx_queried}, not_found={vsx_not_found}, all_far={vsx_all_far}")
 
                     # 判断是否符合条件
-                    if skybot_queried and skybot_not_found and vsx_queried and vsx_not_found:
+                    # 条件1: 小行星和变星都已查询且未找到
+                    # 条件2: 小行星和变星都已查询，且所有结果的像素距离都>=10像素
+                    skybot_no_close_match = skybot_not_found or skybot_all_far
+                    vsx_no_close_match = vsx_not_found or vsx_all_far
+
+                    if skybot_queried and vsx_queried and skybot_no_close_match and vsx_no_close_match:
                         qualified_indices.append(i)
-                        self.logger.info(f"  ✓ 文件 {filename_without_ext}, 索引 {i} 符合条件")
+                        reason = []
+                        if skybot_not_found:
+                            reason.append("小行星未找到")
+                        elif skybot_all_far:
+                            reason.append("小行星距离>=10px")
+                        if vsx_not_found:
+                            reason.append("变星未找到")
+                        elif vsx_all_far:
+                            reason.append("变星距离>=10px")
+                        self.logger.info(f"  ✓ 文件 {filename_without_ext}, 索引 {i} 符合条件 ({', '.join(reason)})")
 
                 except Exception as e:
                     self.logger.warning(f"读取查询结果文件失败: {query_file}, {e}")
@@ -3130,6 +3156,39 @@ class FitsImageViewer:
             self.logger.debug(f"  未找到符合条件的检测索引")
 
         return qualified_indices
+
+    def _check_all_distances_far(self, section_text, min_distance):
+        """检查文本中所有像素距离是否都>=指定距离
+
+        Args:
+            section_text: 查询结果文本片段（小行星列表或变星列表部分）
+            min_distance: 最小距离阈值（像素）
+
+        Returns:
+            bool: 如果所有距离都>=min_distance返回True，否则返回False
+                  如果没有找到任何距离信息，返回False
+        """
+        import re
+
+        # 查找所有像素距离
+        # 格式: "像素距离=24.6px" 或 "像素距离=24px"
+        distance_pattern = r'像素距离=([\d.]+)px'
+        distances = re.findall(distance_pattern, section_text)
+
+        if not distances:
+            # 没有找到距离信息，说明没有结果或结果中没有像素距离
+            return False
+
+        # 检查所有距离是否都>=min_distance
+        all_far = all(float(d) >= min_distance for d in distances)
+
+        if all_far:
+            self.logger.info(f"        所有距离都>=10px: {[float(d) for d in distances]}")
+        else:
+            close_distances = [float(d) for d in distances if float(d) < min_distance]
+            self.logger.info(f"        有近距离结果(<10px): {close_distances}")
+
+        return all_far
 
     def _check_next_candidate(self):
         """跳转到下一个候选检测结果（辅助函数，用于异步加载文件）"""
@@ -3150,7 +3209,7 @@ class FitsImageViewer:
                     delattr(self, '_jump_current_position')
                 if hasattr(self, '_jump_waiting_for_load'):
                     delattr(self, '_jump_waiting_for_load')
-                messagebox.showinfo("提示", "没有找到更多符合条件的检测结果\n（条件：高分数目 < 8 且小行星和变星都已查询且未找到）")
+                messagebox.showinfo("提示", "没有找到更多符合条件的检测结果\n（条件：高分数目 < 8 且小行星/变星都未找到或距离>=10px）")
                 return
 
             # 获取当前候选（已经是符合条件的）
@@ -3170,7 +3229,7 @@ class FitsImageViewer:
                 # 当前文件已加载，直接跳转
                 self.logger.info(f"  当前文件已加载，直接跳转到索引 {detection_index}")
                 self._display_cutout_by_index(detection_index)
-                self.logger.info(f"跳转到检测目标 #{detection_index + 1}（小行星和变星都已查询且未找到）")
+                self.logger.info(f"跳转到检测目标 #{detection_index + 1}（小行星/变星都未找到或距离>=10px）")
             else:
                 # 需要加载新文件
                 self.logger.info(f"  需要加载新文件: {os.path.basename(file_path)}")
@@ -3182,7 +3241,7 @@ class FitsImageViewer:
                 def jump_after_load():
                     if hasattr(self, '_all_cutout_sets') and self._all_cutout_sets:
                         self._display_cutout_by_index(detection_index)
-                        self.logger.info(f"跳转到检测目标 #{detection_index + 1}（小行星和变星都已查询且未找到）")
+                        self.logger.info(f"跳转到检测目标 #{detection_index + 1}（小行星/变星都未找到或距离>=10px）")
                     else:
                         self.logger.warning("文件加载后没有检测结果")
                 self.parent_frame.after(500, jump_after_load)
