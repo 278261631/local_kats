@@ -1947,8 +1947,7 @@ class FitsImageViewer:
             self.logger.info(f"已选择FITS文件: {filename}")
 
             # 如果是下载目录的文件，自动检查并加载diff结果
-            # 但如果是程序自动选择（_auto_selecting），则不重新加载，保持当前索引
-            if is_download_file and not getattr(self, '_auto_selecting', False):
+            if is_download_file:
                 self._auto_load_diff_results(file_path)
 
             # 启用批量查询按钮（单个文件也支持批量查询其所有检测目标）
@@ -2514,16 +2513,12 @@ class FitsImageViewer:
                 if first_file:
                     # 设置自动选择标志，防止清除搜索根节点
                     self._auto_selecting = True
-                    try:
-                        # 选中该文件
-                        self.directory_tree.selection_set(first_file)
-                        self.directory_tree.focus(first_file)
-                        self.directory_tree.see(first_file)
-
-                        # 触发选择事件，加载检测结果
-                        self._on_tree_select(None)
-                    finally:
-                        self._auto_selecting = False
+                    # 选中该文件
+                    self.directory_tree.selection_set(first_file)
+                    self.directory_tree.focus(first_file)
+                    self.directory_tree.see(first_file)
+                    # selection_set 会异步触发选择事件，需要延迟清除标志
+                    self.parent_frame.after(10, lambda: setattr(self, '_auto_selecting', False))
 
                     self.logger.info(f"已自动加载第一个有检测结果的文件")
                     return True
@@ -2538,7 +2533,7 @@ class FitsImageViewer:
             return False
 
     def _find_first_file_with_results(self, parent_item):
-        """递归查找第一个有检测结果的文件节点"""
+        """递归查找第一个有检测结果的文件节点（跳过高分数目 >= 8 的文件）"""
         try:
             # 获取所有子节点
             children = self.directory_tree.get_children(parent_item)
@@ -2553,7 +2548,16 @@ class FitsImageViewer:
                     # diff_blue: 有检测但无高分
                     # diff_purple: 检测列表为空
                     if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
-                        self.logger.info(f"找到有检测结果的文件: {self.directory_tree.item(child, 'text')}")
+                        # 从文件名中提取高分数目
+                        file_text = self.directory_tree.item(child, 'text')
+                        high_score_count = self._extract_high_score_count_from_text(file_text)
+
+                        # 如果高分数目 >= 8，跳过该文件
+                        if high_score_count is not None and high_score_count >= 8:
+                            self.logger.info(f"跳过高分数目 >= 8 的文件: {file_text} (high_score={high_score_count})")
+                            continue
+
+                        self.logger.info(f"找到有检测结果的文件: {file_text}")
                         return child
 
                 # 如果是目录节点，递归查找
@@ -2566,6 +2570,17 @@ class FitsImageViewer:
 
         except Exception as e:
             self.logger.error(f"查找文件节点失败: {e}")
+            return None
+
+    def _extract_high_score_count_from_text(self, text):
+        """从文件名文本中提取高分数目，例如 '📄 [91] filename.fit' -> 91"""
+        try:
+            import re
+            match = re.search(r'\[(\d+)\]', text)
+            if match:
+                return int(match.group(1))
+            return None
+        except Exception:
             return None
 
     def _load_next_file_with_results(self):
@@ -2645,20 +2660,24 @@ class FitsImageViewer:
                 # 检查是否是文件节点且有diff结果
                 if "fits_file" in tags:
                     if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
+                        # 检查高分数目是否 >= 8
+                        file_text = self.directory_tree.item(sibling, 'text')
+                        high_score_count = self._extract_high_score_count_from_text(file_text)
+
+                        if high_score_count is not None and high_score_count >= 8:
+                            self.logger.info(f"跳过高分数目 >= 8 的文件: {file_text} (high_score={high_score_count})")
+                            continue
+
                         # 找到有检测结果的文件，选中它
-                        self.logger.info(f"找到下一个有检测结果的文件: {self.directory_tree.item(sibling, 'text')}")
+                        self.logger.info(f"找到下一个有检测结果的文件: {file_text}")
 
                         # 设置自动选择标志，防止清除搜索根节点
                         self._auto_selecting = True
-                        try:
-                            self.directory_tree.selection_set(sibling)
-                            self.directory_tree.focus(sibling)
-                            self.directory_tree.see(sibling)
-
-                            # 触发选择事件，加载检测结果
-                            self._on_tree_select(None)
-                        finally:
-                            self._auto_selecting = False
+                        self.directory_tree.selection_set(sibling)
+                        self.directory_tree.focus(sibling)
+                        self.directory_tree.see(sibling)
+                        # selection_set 会异步触发选择事件，需要延迟清除标志
+                        self.parent_frame.after(10, lambda: setattr(self, '_auto_selecting', False))
 
                         return True
 
@@ -2672,15 +2691,11 @@ class FitsImageViewer:
 
                 # 设置自动选择标志，防止清除搜索根节点
                 self._auto_selecting = True
-                try:
-                    self.directory_tree.selection_set(next_file)
-                    self.directory_tree.focus(next_file)
-                    self.directory_tree.see(next_file)
-
-                    # 触发选择事件，加载检测结果
-                    self._on_tree_select(None)
-                finally:
-                    self._auto_selecting = False
+                self.directory_tree.selection_set(next_file)
+                self.directory_tree.focus(next_file)
+                self.directory_tree.see(next_file)
+                # selection_set 会异步触发选择事件，需要延迟清除标志
+                self.parent_frame.after(10, lambda: setattr(self, '_auto_selecting', False))
 
                 return True
 
@@ -2720,7 +2735,14 @@ class FitsImageViewer:
                     if "fits_file" in tags:
                         # 检查是否有检测结果
                         if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
-                            all_files.append(child)
+                            # 检查高分数目是否 >= 8
+                            file_text = self.directory_tree.item(child, 'text')
+                            high_score_count = self._extract_high_score_count_from_text(file_text)
+
+                            if high_score_count is not None and high_score_count >= 8:
+                                self.logger.debug(f"跳过高分数目 >= 8 的文件: {file_text} (high_score={high_score_count})")
+                            else:
+                                all_files.append(child)
 
                     # 递归收集子节点
                     collect_files(child)
@@ -2770,11 +2792,12 @@ class FitsImageViewer:
                         if node_path == normalized_file_path:
                             self.logger.info(f"找到匹配的文件节点: {self.directory_tree.item(child, 'text')}")
                             return child
-
-                    # 递归搜索子节点
-                    result = search_node(child)
-                    if result:
-                        return result
+                        # 文件节点不应该有子节点，不需要递归搜索
+                    else:
+                        # 只对目录节点进行递归搜索
+                        result = search_node(child)
+                        if result:
+                            return result
 
                 return None
 
@@ -2918,21 +2941,37 @@ class FitsImageViewer:
                 if first_file:
                     # 设置自动选择标志
                     self._auto_selecting = True
-                    try:
-                        self.directory_tree.selection_set(first_file)
-                        self.directory_tree.focus(first_file)
-                        self.directory_tree.see(first_file)
-                        self._on_tree_select(None)
-                    finally:
+                    self.directory_tree.selection_set(first_file)
+                    self.directory_tree.focus(first_file)
+                    self.directory_tree.see(first_file)
+                    # selection_set 会异步触发选择事件，需要延迟清除标志并继续搜索
+                    # 使用after延迟执行，确保diff结果加载完成
+                    def continue_search():
                         self._auto_selecting = False
-                    self.logger.info("已加载第一个有检测结果的文件")
+                        # 递归调用自己，继续在当前文件中查找
+                        self._jump_to_next_unqueried()
+                    self.parent_frame.after(100, continue_search)
+                    self.logger.info("已加载第一个有检测结果的文件，等待diff结果加载完成后继续搜索")
+                    return  # 返回，等待异步加载完成后继续
                 else:
                     messagebox.showinfo("提示", "在选定目录范围内没有找到有检测结果的文件")
                     return
 
             # 检查是否有检测结果
             if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
-                messagebox.showinfo("提示", "当前文件没有检测结果")
+                self.logger.info("当前文件没有检测结果，尝试加载下一个文件")
+                # 尝试加载下一个文件
+                if self._load_next_file_with_results():
+                    # 成功加载下一个文件，递归调用自己继续查找
+                    self.logger.info("已加载下一个文件，继续查找")
+                    self._jump_to_next_unqueried()
+                else:
+                    # 没有更多文件了
+                    if hasattr(self, '_search_root_node'):
+                        root_name = self.directory_tree.item(self._search_root_node, 'text')
+                        self.logger.info(f"清除搜索根节点: {root_name}")
+                        delattr(self, '_search_root_node')
+                    messagebox.showinfo("提示", "在选定目录范围内所有文件都已检查完毕\n未找到检测结果")
                 return
 
             if not hasattr(self, '_current_cutout_index'):
@@ -2940,13 +2979,48 @@ class FitsImageViewer:
                 if hasattr(self, '_all_cutout_sets') and self._all_cutout_sets:
                     self._display_cutout_by_index(0)
                 else:
-                    messagebox.showinfo("提示", "请先显示检测结果")
+                    self.logger.info("没有current_index，尝试加载下一个文件")
+                    # 尝试加载下一个文件
+                    if self._load_next_file_with_results():
+                        self.logger.info("已加载下一个文件，等待加载完成后继续查找")
+                        # 延迟200ms等待文件加载完成，然后继续查找
+                        self.parent_frame.after(200, self._jump_to_next_unqueried)
+                    else:
+                        if hasattr(self, '_search_root_node'):
+                            root_name = self.directory_tree.item(self._search_root_node, 'text')
+                            delattr(self, '_search_root_node')
+                        messagebox.showinfo("提示", "在选定目录范围内所有文件都已检查完毕\n未找到检测结果")
                     return
 
             # 获取high_score_count
             high_score_count = self._get_high_score_count_from_current_detection()
             if high_score_count is None or high_score_count == 0:
-                messagebox.showinfo("提示", "当前文件没有高分检测目标")
+                self.logger.info("当前文件没有高分检测目标，尝试加载下一个文件")
+                # 尝试加载下一个文件
+                if self._load_next_file_with_results():
+                    self.logger.info("已加载下一个文件，等待加载完成后继续查找")
+                    # 延迟200ms等待文件加载完成，然后继续查找
+                    self.parent_frame.after(200, self._jump_to_next_unqueried)
+                else:
+                    if hasattr(self, '_search_root_node'):
+                        root_name = self.directory_tree.item(self._search_root_node, 'text')
+                        delattr(self, '_search_root_node')
+                    messagebox.showinfo("提示", "在选定目录范围内所有文件都已检查完毕\n未找到高分检测目标")
+                return
+
+            # 检查高分数目是否太多（>= 8），如果太多则跳过该文件
+            if high_score_count >= 8:
+                self.logger.info(f"当前文件的高分数目为 {high_score_count}（>= 8），跳过该文件，尝试加载下一个文件")
+                # 尝试加载下一个文件
+                if self._load_next_file_with_results():
+                    self.logger.info("已加载下一个文件，等待加载完成后继续查找")
+                    # 延迟200ms等待文件加载完成，然后继续查找
+                    self.parent_frame.after(200, self._jump_to_next_unqueried)
+                else:
+                    if hasattr(self, '_search_root_node'):
+                        root_name = self.directory_tree.item(self._search_root_node, 'text')
+                        delattr(self, '_search_root_node')
+                    messagebox.showinfo("提示", "在选定目录范围内所有文件都已检查完毕\n未找到符合条件的文件\n（条件：高分数目 < 8）")
                 return
 
             # 只在high_score范围内查找
@@ -2956,18 +3030,17 @@ class FitsImageViewer:
             start_index = self._current_cutout_index
             found_index = None
 
+            # 如果当前索引不在高分项范围内，从索引0开始查找
+            if start_index >= max_index:
+                self.logger.info(f"当前索引 {start_index} 不在高分项范围内（0-{max_index-1}），从索引0开始查找")
+                start_index = -1  # 设置为-1，这样下一个索引就是0
+
             # 循环查找（从下一个开始，不包括当前索引）
-            self.logger.info(f"开始查找未查询的检测目标，当前索引={start_index}, 最大索引={max_index}")
+            # 注意：只检查高分项（索引 0 到 max_index-1）
+            self.logger.info(f"开始查找未查询的检测目标，当前索引={start_index}, 高分项数量={max_index}")
 
-            for i in range(1, max_index + 1):
-                # 计算要检查的索引（从下一个开始，循环）
-                check_index = (start_index + i) % max_index
-
-                # 如果循环回到起点，说明已经检查完所有索引
-                if check_index == start_index:
-                    self.logger.info(f"循环回到起点，退出查找")
-                    break
-
+            # 从下一个索引开始，到 max_index-1 结束
+            for check_index in range(start_index + 1, max_index):
                 # 临时设置当前索引以便检查查询结果
                 original_index = self._current_cutout_index
                 self._current_cutout_index = check_index
@@ -2980,14 +3053,12 @@ class FitsImageViewer:
                 # 恢复原索引
                 self._current_cutout_index = original_index
 
-                # 判断是否符合条件：已查询小行星和变星，但都未找到
+                # 判断是否符合条件：已查询小行星和变星，但都未找到（不考虑卫星）
                 # 注意：这里要求必须已经查询过，且结果为"未找到"
                 skybot_queried_not_found = skybot_queried and skybot_result == "已查询，未找到"
                 vsx_queried_not_found = vsx_queried and vsx_result == "已查询，未找到"
-                satellite_queried_not_found = satellite_queried and satellite_result == "已查询，未找到"
 
-                self.logger.info(f"检查索引 {check_index}: skybot={skybot_queried}/{skybot_result}, vsx={vsx_queried}/{vsx_result}, satellite={satellite_queried}/{satellite_result}")
-                self.logger.info(f"  已查询且未找到: skybot={skybot_queried_not_found}, vsx={vsx_queried_not_found}, satellite={satellite_queried_not_found}")
+                self.logger.info(f"检查索引 {check_index}: skybot={skybot_queried}/{skybot_result}, vsx={vsx_queried}/{vsx_result}")
 
                 # 符合条件：小行星和变星都已查询且未找到
                 if skybot_queried_not_found and vsx_queried_not_found:
@@ -2995,10 +3066,40 @@ class FitsImageViewer:
                     self.logger.info(f"找到符合条件的检测目标（小行星和变星都已查询且未找到），索引={found_index}")
                     break
 
+            # 如果没有找到，从头开始查找到当前索引之前
+            if found_index is None and start_index > 0:
+                self.logger.info(f"从索引 {start_index + 1} 到 {max_index - 1} 未找到，从头开始查找到索引 {start_index - 1}")
+                for check_index in range(0, start_index):
+
+                    # 临时设置当前索引以便检查查询结果
+                    original_index = self._current_cutout_index
+                    self._current_cutout_index = check_index
+
+                    # 检查三种查询结果
+                    skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                    vsx_queried, vsx_result = self._check_existing_query_results('vsx')
+                    satellite_queried, satellite_result = self._check_existing_query_results('satellite')
+
+                    # 恢复原索引
+                    self._current_cutout_index = original_index
+
+                    # 判断是否符合条件：已查询小行星和变星，但都未找到（不考虑卫星）
+                    # 注意：这里要求必须已经查询过，且结果为"未找到"
+                    skybot_queried_not_found = skybot_queried and skybot_result == "已查询，未找到"
+                    vsx_queried_not_found = vsx_queried and vsx_result == "已查询，未找到"
+
+                    self.logger.info(f"检查索引 {check_index}: skybot={skybot_queried}/{skybot_result}, vsx={vsx_queried}/{vsx_result}")
+
+                    # 符合条件：小行星和变星都已查询且未找到
+                    if skybot_queried_not_found and vsx_queried_not_found:
+                        found_index = check_index
+                        self.logger.info(f"找到符合条件的检测目标（小行星和变星都已查询且未找到），索引={found_index}")
+                        break
+
             if found_index is not None:
                 # 跳转到找到的检测结果
                 self._display_cutout_by_index(found_index)
-                self.logger.info(f"跳转到检测目标 #{found_index + 1}（已查询小行星和变星，但都未找到）")
+                self.logger.info(f"跳转到检测目标 #{found_index + 1}（小行星和变星都已查询且未找到）")
 
                 # 在目录树中高亮选中当前文件
                 self._select_current_file_in_tree()
@@ -3007,16 +3108,17 @@ class FitsImageViewer:
                 self.logger.info(f"当前文件的前{max_index}个高分检测目标中未找到符合条件的结果，尝试加载下一个文件")
 
                 if self._load_next_file_with_results():
-                    # 成功加载下一个文件，递归调用自己继续查找
-                    self.logger.info("已加载下一个文件，继续查找")
-                    self._jump_to_next_unqueried()
+                    # 成功加载下一个文件，延迟等待加载完成后继续查找
+                    self.logger.info("已加载下一个文件，等待加载完成后继续查找")
+                    # 延迟200ms等待文件加载完成，然后继续查找
+                    self.parent_frame.after(200, self._jump_to_next_unqueried)
                 else:
                     # 没有更多文件了，清除搜索根节点
                     if hasattr(self, '_search_root_node'):
                         root_name = self.directory_tree.item(self._search_root_node, 'text')
                         self.logger.info(f"清除搜索根节点: {root_name}")
                         delattr(self, '_search_root_node')
-                    messagebox.showinfo("提示", "在选定目录范围内所有文件都已检查完毕\n未找到更多符合条件的检测结果\n（条件：已查询小行星和变星，但都未找到）")
+                    messagebox.showinfo("提示", "在选定目录范围内所有文件都已检查完毕\n未找到更多符合条件的检测结果\n（条件：高分数目 < 8 且小行星和变星都已查询且未找到）")
 
         except Exception as e:
             error_msg = f"跳转失败: {str(e)}"
