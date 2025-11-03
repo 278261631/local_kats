@@ -7258,6 +7258,93 @@ class FitsImageViewer:
             self.logger.error(f"检查已有查询结果失败: {str(e)}")
             return False, None
 
+    def _calculate_radec_pixel_distance_in_cutout(self, ra, dec):
+        """计算RA/DEC坐标在cutout图像中距离中心的像素距离
+
+        Args:
+            ra: RA坐标（度）
+            dec: DEC坐标（度）
+
+        Returns:
+            float: cutout图像中的像素距离，如果无法计算则返回None
+        """
+        try:
+            # 获取当前cutout的detection图像路径
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                return None
+            if not hasattr(self, '_current_cutout_index'):
+                return None
+
+            current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            detection_img = current_cutout.get('detection')
+            if not detection_img:
+                return None
+
+            # 获取diff输出目录（detection图像的父目录的父目录）
+            cutout_dir = os.path.dirname(detection_img)
+            detection_dir = os.path.dirname(cutout_dir)
+            fits_dir = os.path.dirname(detection_dir)
+
+            # 查找aligned.fits文件
+            aligned_files = [f for f in os.listdir(fits_dir)
+                           if f.endswith('_aligned.fits') and os.path.isfile(os.path.join(fits_dir, f))]
+
+            if not aligned_files:
+                return None
+
+            # 使用第一个aligned文件
+            aligned_file = os.path.join(fits_dir, aligned_files[0])
+
+            # 读取FITS文件获取WCS
+            from astropy.io import fits
+            from astropy.wcs import WCS
+            from PIL import Image
+
+            with fits.open(aligned_file) as hdul:
+                header = hdul[0].header
+
+                # 创建WCS对象
+                wcs = WCS(header)
+
+                # 将RA/DEC转换为aligned.fits中的像素坐标
+                pixel_coords = wcs.all_world2pix([[ra, dec]], 0)
+                pixel_x_aligned = pixel_coords[0][0]
+                pixel_y_aligned = pixel_coords[0][1]
+
+            # 从cutout文件名中提取检测目标的中心坐标（在aligned.fits中的坐标）
+            # 文件名格式: 001_X1878_Y0562_3_detection.png
+            detection_filename = os.path.basename(detection_img)
+            import re
+            coord_match = re.search(r'X(\d+)_Y(\d+)', detection_filename)
+            if not coord_match:
+                return None
+
+            center_x_aligned = float(coord_match.group(1))
+            center_y_aligned = float(coord_match.group(2))
+
+            # 读取cutout图像获取尺寸
+            cutout_img = Image.open(detection_img)
+            cutout_width, cutout_height = cutout_img.size
+            cutout_center_x = cutout_width / 2.0
+            cutout_center_y = cutout_height / 2.0
+
+            # 计算目标在aligned.fits中相对于检测中心的偏移
+            offset_x = pixel_x_aligned - center_x_aligned
+            offset_y = pixel_y_aligned - center_y_aligned
+
+            # 在cutout图像中，检测中心对应cutout的中心
+            # 所以目标在cutout中的位置 = cutout中心 + 偏移
+            pixel_x_cutout = cutout_center_x + offset_x
+            pixel_y_cutout = cutout_center_y + offset_y
+
+            # 计算距离cutout中心的距离
+            distance = np.sqrt(offset_x**2 + offset_y**2)
+            return distance
+
+        except Exception as e:
+            self.logger.debug(f"计算RA/DEC在cutout中的像素距离失败: {e}")
+            return None
+
     def _update_detection_txt_with_query_results(self):
         """将查询结果保存到当前cutout目录的query_results.txt文件中"""
         try:
@@ -7311,6 +7398,13 @@ class FitsImageViewer:
                             asteroid_info.append(f"RA={row['RA']:.6f}°")
                         if 'DEC' in colnames:
                             asteroid_info.append(f"DEC={row['DEC']:.6f}°")
+
+                        # 计算在cutout图像中距离中心的像素距离
+                        if 'RA' in colnames and 'DEC' in colnames:
+                            pixel_dist = self._calculate_radec_pixel_distance_in_cutout(row['RA'], row['DEC'])
+                            if pixel_dist is not None:
+                                asteroid_info.append(f"像素距离={pixel_dist:.1f}px")
+
                         if 'Mv' in colnames:
                             asteroid_info.append(f"星等={row['Mv']}")
                         if 'Dg' in colnames:
@@ -7336,6 +7430,13 @@ class FitsImageViewer:
                             vstar_info.append(f"RA={row['RAJ2000']:.6f}°")
                         if 'DEJ2000' in colnames:
                             vstar_info.append(f"DEC={row['DEJ2000']:.6f}°")
+
+                        # 计算在cutout图像中距离中心的像素距离
+                        if 'RAJ2000' in colnames and 'DEJ2000' in colnames:
+                            pixel_dist = self._calculate_radec_pixel_distance_in_cutout(row['RAJ2000'], row['DEJ2000'])
+                            if pixel_dist is not None:
+                                vstar_info.append(f"像素距离={pixel_dist:.1f}px")
+
                         if 'max' in colnames:
                             vstar_info.append(f"最大星等={row['max']}")
                         if 'min' in colnames:
