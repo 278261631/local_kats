@@ -1178,12 +1178,51 @@ class SignalBlobDetector:
         else:
             print(f"已为 {len(blobs)} 个检测结果生成截图（未生成GIF）")
 
-    def format_skybot_results(self, skybot_results):
+    def _calculate_radec_pixel_distance(self, ra, dec, header, detection_center):
+        """计算RA/DEC坐标距离检测中心的像素距离
+
+        Args:
+            ra: RA坐标（度）
+            dec: DEC坐标（度）
+            header: FITS header（包含WCS信息）
+            detection_center: 检测中心坐标(x, y)
+
+        Returns:
+            float: 像素距离，如果无法计算则返回None
+        """
+        try:
+            from astropy.wcs import WCS
+            import numpy as np
+
+            # 创建WCS对象
+            wcs = WCS(header)
+
+            # 将RA/DEC转换为像素坐标
+            pixel_coords = wcs.all_world2pix([[ra, dec]], 0)
+            pixel_x = pixel_coords[0][0]
+            pixel_y = pixel_coords[0][1]
+
+            # 计算相对于检测中心的偏移
+            center_x, center_y = detection_center
+            offset_x = pixel_x - center_x
+            offset_y = pixel_y - center_y
+
+            # 计算距离
+            distance = np.sqrt(offset_x**2 + offset_y**2)
+            return distance
+
+        except Exception as e:
+            # 静默失败，不影响其他信息的输出
+            return None
+
+    def format_skybot_results(self, skybot_results, header=None, detection_center=None):
         """
         格式化Skybot查询结果为文本
 
         Args:
             skybot_results: Skybot查询结果表
+            header: FITS header（可选，用于计算像素距离）
+            detection_center: 检测中心坐标(x, y)（可选，用于计算像素距离）
 
         Returns:
             格式化后的文本列表
@@ -1208,6 +1247,15 @@ class SignalBlobDetector:
                 asteroid_info.append(f"RA={row['RA']:.6f}°")
             if 'DEC' in colnames:
                 asteroid_info.append(f"DEC={row['DEC']:.6f}°")
+
+            # 计算像素距离（如果提供了必要的参数）
+            if 'RA' in colnames and 'DEC' in colnames and header is not None and detection_center is not None:
+                pixel_dist = self._calculate_radec_pixel_distance(
+                    row['RA'], row['DEC'], header, detection_center
+                )
+                if pixel_dist is not None:
+                    asteroid_info.append(f"像素距离={pixel_dist:.1f}px")
+
             if 'Mv' in colnames:
                 asteroid_info.append(f"星等={row['Mv']}")
             if 'Dg' in colnames:
@@ -1217,12 +1265,14 @@ class SignalBlobDetector:
 
         return lines
 
-    def format_vsx_results(self, vsx_results):
+    def format_vsx_results(self, vsx_results, header=None, detection_center=None):
         """
         格式化VSX查询结果为文本
 
         Args:
             vsx_results: VSX查询结果表
+            header: FITS header（可选，用于计算像素距离）
+            detection_center: 检测中心坐标(x, y)（可选，用于计算像素距离）
 
         Returns:
             格式化后的文本列表
@@ -1245,6 +1295,15 @@ class SignalBlobDetector:
                 vstar_info.append(f"RA={row['RAJ2000']:.6f}°")
             if 'DEJ2000' in colnames:
                 vstar_info.append(f"DEC={row['DEJ2000']:.6f}°")
+
+            # 计算像素距离（如果提供了必要的参数）
+            if 'RAJ2000' in colnames and 'DEJ2000' in colnames and header is not None and detection_center is not None:
+                pixel_dist = self._calculate_radec_pixel_distance(
+                    row['RAJ2000'], row['DEJ2000'], header, detection_center
+                )
+                if pixel_dist is not None:
+                    vstar_info.append(f"像素距离={pixel_dist:.1f}px")
+
             if 'max' in colnames:
                 vstar_info.append(f"最大星等={row['max']}")
             if 'min' in colnames:
@@ -1358,14 +1417,28 @@ class SignalBlobDetector:
 
             # 写入小行星列表
             f.write(f"小行星列表:\n")
-            skybot_lines = self.format_skybot_results(skybot_results)
+            # 如果有blobs，使用第一个blob的中心作为检测中心
+            detection_center = None
+            if blobs and len(blobs) > 0:
+                first_blob_center = blobs[0]['center']
+                detection_center = (first_blob_center[0], first_blob_center[1])
+
+            skybot_lines = self.format_skybot_results(
+                skybot_results,
+                header=header,
+                detection_center=detection_center
+            )
             for line in skybot_lines:
                 f.write(f"{line}\n")
             f.write("\n")
 
             # 写入变星列表
             f.write(f"变星列表:\n")
-            vsx_lines = self.format_vsx_results(vsx_results)
+            vsx_lines = self.format_vsx_results(
+                vsx_results,
+                header=header,
+                detection_center=detection_center
+            )
             for line in vsx_lines:
                 f.write(f"{line}\n")
             f.write("\n")

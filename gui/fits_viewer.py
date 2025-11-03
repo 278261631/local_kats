@@ -7342,7 +7342,7 @@ class FitsImageViewer:
             return distance
 
         except Exception as e:
-            self.logger.debug(f"计算RA/DEC在cutout中的像素距离失败: {e}")
+            self.logger.warning(f"计算RA/DEC在cutout中的像素距离失败: {e}", exc_info=True)
             return None
 
     def _update_detection_txt_with_query_results(self):
@@ -7401,7 +7401,13 @@ class FitsImageViewer:
 
                         # 计算在cutout图像中距离中心的像素距离
                         if 'RA' in colnames and 'DEC' in colnames:
-                            pixel_dist = self._calculate_radec_pixel_distance_in_cutout(row['RA'], row['DEC'])
+                            # 确保RA/DEC是纯数字（处理Astropy Quantity对象）
+                            # 使用.value属性获取数值，如果不是Quantity对象则直接使用
+                            ra_value = row['RA'].value if hasattr(row['RA'], 'value') else float(row['RA'])
+                            dec_value = row['DEC'].value if hasattr(row['DEC'], 'value') else float(row['DEC'])
+                            self.logger.info(f"计算小行星像素距离: RA={ra_value}, DEC={dec_value}")
+                            pixel_dist = self._calculate_radec_pixel_distance_in_cutout(ra_value, dec_value)
+                            self.logger.info(f"小行星像素距离计算结果: {pixel_dist}")
                             if pixel_dist is not None:
                                 asteroid_info.append(f"像素距离={pixel_dist:.1f}px")
 
@@ -7433,7 +7439,13 @@ class FitsImageViewer:
 
                         # 计算在cutout图像中距离中心的像素距离
                         if 'RAJ2000' in colnames and 'DEJ2000' in colnames:
-                            pixel_dist = self._calculate_radec_pixel_distance_in_cutout(row['RAJ2000'], row['DEJ2000'])
+                            # 确保RA/DEC是纯数字（处理Astropy Quantity对象）
+                            # 使用.value属性获取数值，如果不是Quantity对象则直接使用
+                            ra_value = row['RAJ2000'].value if hasattr(row['RAJ2000'], 'value') else float(row['RAJ2000'])
+                            dec_value = row['DEJ2000'].value if hasattr(row['DEJ2000'], 'value') else float(row['DEJ2000'])
+                            self.logger.info(f"计算变星像素距离: RA={ra_value}, DEC={dec_value}")
+                            pixel_dist = self._calculate_radec_pixel_distance_in_cutout(ra_value, dec_value)
+                            self.logger.info(f"变星像素距离计算结果: {pixel_dist}")
                             if pixel_dist is not None:
                                 vstar_info.append(f"像素距离={pixel_dist:.1f}px")
 
