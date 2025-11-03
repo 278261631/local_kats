@@ -2894,11 +2894,24 @@ class FitsImageViewer:
 
             # 在候选列表中查找当前位置
             if current_file_path:
+                self.logger.info(f"在 {len(all_candidates)} 个候选中查找当前位置")
+                self.logger.info(f"  当前文件: {os.path.basename(current_file_path) if current_file_path else 'None'}")
+                self.logger.info(f"  当前检测索引: {current_detection_index}")
+
+                # 规范化当前路径（统一使用反斜杠）
+                current_file_path_normalized = os.path.normpath(current_file_path)
+
                 for i, (file_node, detection_index, file_path) in enumerate(all_candidates):
-                    if file_path == current_file_path and detection_index == current_detection_index:
+                    # 规范化候选路径（统一使用反斜杠）
+                    file_path_normalized = os.path.normpath(file_path)
+
+                    if file_path_normalized == current_file_path_normalized and detection_index == current_detection_index:
                         current_position = i
-                        self.logger.info(f"找到当前位置在候选列表中的索引: {current_position}")
+                        self.logger.info(f"✓ 找到当前位置在候选列表中的索引: {current_position}")
                         break
+
+                if current_position == -1:
+                    self.logger.info(f"✗ 未在候选列表中找到当前位置")
 
             if current_position == -1:
                 self.logger.info("未找到当前位置，从第一个候选开始查找")
