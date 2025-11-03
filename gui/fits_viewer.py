@@ -4390,7 +4390,9 @@ class FitsImageViewer:
             self.logger.warning(f"合并格式缺失: ra_compact={file_info.get('ra_compact')}, dec_compact={file_info.get('dec_compact')}")
 
         # 时间显示
-        time_info = self._extract_time_from_filename(file_info.get('filename', ''))
+        # 优先使用原始文件名（包含UTC时间），如果没有则使用当前文件名
+        filename_for_time = file_info.get('original_filename', file_info.get('filename', ''))
+        time_info = self._extract_time_from_filename(filename_for_time)
         if time_info:
             # 保存UTC时间用于后续更新
             self._current_utc_time = time_info.get('utc_datetime')
@@ -4411,7 +4413,7 @@ class FitsImageViewer:
                 self.logger.info(f"本地时间: {time_info['local']}")
         else:
             self._current_utc_time = None
-            self.logger.warning("未能从文件名提取时间信息")
+            self.logger.warning(f"未能从文件名提取时间信息: {filename_for_time}")
 
     def _extract_time_from_filename(self, filename):
         """
@@ -4429,6 +4431,8 @@ class FitsImageViewer:
         from datetime import datetime, timedelta
 
         try:
+            self.logger.info(f"尝试从文件名提取时间: {filename}")
+
             # 匹配UTC时间格式: UTC20250628_191828
             pattern = r'UTC(\d{8})_(\d{6})'
             match = re.search(pattern, filename)
@@ -4436,6 +4440,8 @@ class FitsImageViewer:
             if not match:
                 self.logger.warning(f"文件名中未找到UTC时间格式: {filename}")
                 return None
+
+            self.logger.info(f"成功匹配UTC时间: {match.group(0)}")
 
             date_str = match.group(1)  # 20250628
             time_str = match.group(2)  # 191828
@@ -4694,6 +4700,8 @@ class FitsImageViewer:
                     # 文件名目录（detection的父目录）
                     file_dir = path_parts[detection_index - 1]
                     self.logger.info(f"文件目录: {file_dir}")
+                    # 保存原始文件名用于提取时间
+                    info['original_filename'] = file_dir
 
                 if detection_index >= 2:
                     info['region'] = path_parts[detection_index - 2]  # 天区
@@ -5961,10 +5969,18 @@ class FitsImageViewer:
             dec = float(file_info['dec'])
 
             # 检查是否有UTC时间
+            # 如果_current_utc_time未设置，尝试从文件名提取
             if not hasattr(self, '_current_utc_time') or not self._current_utc_time:
-                self.logger.error("无法获取UTC时间信息")
-                self.skybot_result_label.config(text="时间缺失", foreground="red")
-                return
+                # 尝试从原始文件名提取时间
+                filename_for_time = file_info.get('original_filename', file_info.get('filename', ''))
+                time_info = self._extract_time_from_filename(filename_for_time)
+                if time_info:
+                    self._current_utc_time = time_info.get('utc_datetime')
+                    self.logger.info(f"从文件名提取UTC时间: {self._current_utc_time}")
+                else:
+                    self.logger.error("无法获取UTC时间信息")
+                    self.skybot_result_label.config(text="时间缺失", foreground="red")
+                    return
 
             utc_time = self._current_utc_time
 
@@ -6597,10 +6613,18 @@ class FitsImageViewer:
             dec = float(file_info['dec'])
 
             # 检查是否有UTC时间
+            # 如果_current_utc_time未设置，尝试从文件名提取
             if not hasattr(self, '_current_utc_time') or not self._current_utc_time:
-                self.logger.error("无法获取UTC时间信息")
-                self.satellite_result_label.config(text="时间缺失", foreground="red")
-                return
+                # 尝试从原始文件名提取时间
+                filename_for_time = file_info.get('original_filename', file_info.get('filename', ''))
+                time_info = self._extract_time_from_filename(filename_for_time)
+                if time_info:
+                    self._current_utc_time = time_info.get('utc_datetime')
+                    self.logger.info(f"从文件名提取UTC时间: {self._current_utc_time}")
+                else:
+                    self.logger.error("无法获取UTC时间信息")
+                    self.satellite_result_label.config(text="时间缺失", foreground="red")
+                    return
 
             utc_time = self._current_utc_time
 
