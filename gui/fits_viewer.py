@@ -293,14 +293,14 @@ class FitsImageViewer:
         # 检测结果导航按钮
         ttk.Label(toolbar_frame3, text="  |  ").pack(side=tk.LEFT, padx=(10, 5))
 
-        self.prev_cutout_button = ttk.Button(toolbar_frame3, text="◀ 上一组",
+        self.prev_cutout_button = ttk.Button(toolbar_frame3, text="◀ 上一组 (-)",
                                             command=self._show_previous_cutout, state="disabled")
         self.prev_cutout_button.pack(side=tk.LEFT, padx=(0, 5))
 
         self.cutout_count_label = ttk.Label(toolbar_frame3, text="0/0", foreground="blue")
         self.cutout_count_label.pack(side=tk.LEFT, padx=(0, 5))
 
-        self.next_cutout_button = ttk.Button(toolbar_frame3, text="下一组 ▶",
+        self.next_cutout_button = ttk.Button(toolbar_frame3, text="下一组 (=) ▶",
                                             command=self._show_next_cutout, state="disabled")
         self.next_cutout_button.pack(side=tk.LEFT, padx=(0, 5))
 
@@ -485,7 +485,7 @@ class FitsImageViewer:
         ttk.Button(refresh_frame, text="刷新目录", command=self._refresh_directory_tree).pack(side=tk.LEFT)
         ttk.Button(refresh_frame, text="展开全部", command=self._expand_all).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="折叠全部", command=self._collapse_all).pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Button(refresh_frame, text="跳转未查询", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(refresh_frame, text="跳转未查询 (g)", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
 
         # 创建目录树
         tree_frame = ttk.Frame(left_frame)
