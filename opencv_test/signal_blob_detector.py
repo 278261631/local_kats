@@ -1250,8 +1250,11 @@ class SignalBlobDetector:
 
             # 计算像素距离（如果提供了必要的参数）
             if 'RA' in colnames and 'DEC' in colnames and header is not None and detection_center is not None:
+                # 确保RA/DEC是纯数字（处理Astropy Quantity对象）
+                ra_value = row['RA'].value if hasattr(row['RA'], 'value') else float(row['RA'])
+                dec_value = row['DEC'].value if hasattr(row['DEC'], 'value') else float(row['DEC'])
                 pixel_dist = self._calculate_radec_pixel_distance(
-                    row['RA'], row['DEC'], header, detection_center
+                    ra_value, dec_value, header, detection_center
                 )
                 if pixel_dist is not None:
                     asteroid_info.append(f"像素距离={pixel_dist:.1f}px")
@@ -1298,8 +1301,11 @@ class SignalBlobDetector:
 
             # 计算像素距离（如果提供了必要的参数）
             if 'RAJ2000' in colnames and 'DEJ2000' in colnames and header is not None and detection_center is not None:
+                # 确保RA/DEC是纯数字（处理Astropy Quantity对象）
+                ra_value = row['RAJ2000'].value if hasattr(row['RAJ2000'], 'value') else float(row['RAJ2000'])
+                dec_value = row['DEJ2000'].value if hasattr(row['DEJ2000'], 'value') else float(row['DEJ2000'])
                 pixel_dist = self._calculate_radec_pixel_distance(
-                    row['RAJ2000'], row['DEJ2000'], header, detection_center
+                    ra_value, dec_value, header, detection_center
                 )
                 if pixel_dist is not None:
                     vstar_info.append(f"像素距离={pixel_dist:.1f}px")
