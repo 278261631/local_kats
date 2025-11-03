@@ -449,7 +449,28 @@ class FitsImageViewer:
 
         # 创建右侧图像显示区域
         self._create_image_display(content_frame)
+
+        # 绑定全局快捷键
+        self._bind_global_shortcuts()
         
+    def _bind_global_shortcuts(self):
+        """绑定全局快捷键"""
+        # 获取顶层窗口
+        top = self.parent_frame.winfo_toplevel()
+
+        # g - 跳转未查询
+        top.bind('g', lambda e: self._jump_to_next_unqueried())
+
+        # - 和 [ - 上一组
+        top.bind('-', lambda e: self._show_previous_cutout())
+        top.bind('[', lambda e: self._show_previous_cutout())
+
+        # = 和 ] - 下一组
+        top.bind('=', lambda e: self._show_next_cutout())
+        top.bind(']', lambda e: self._show_next_cutout())
+
+        self.logger.info("已绑定全局快捷键: g(跳转未查询), -/[(上一组), =/](下一组)")
+
     def _create_directory_tree(self, parent):
         """创建左侧目录树"""
         # 左侧框架
