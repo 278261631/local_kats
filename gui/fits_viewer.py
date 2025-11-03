@@ -1349,6 +1349,9 @@ class FitsImageViewer:
     def _refresh_directory_tree(self):
         """刷新目录树"""
         try:
+            # 清除跳转未查询的候选列表缓存
+            self._clear_jump_candidates_cache()
+
             # 配置标签样式
             self.directory_tree.tag_configure("wcs_green", foreground="green")
             self.directory_tree.tag_configure("wcs_orange", foreground="orange")
@@ -2814,63 +2817,79 @@ class FitsImageViewer:
             self.logger.error(f"查找文件节点失败: {e}", exc_info=True)
             return None
 
+    def _clear_jump_candidates_cache(self):
+        """清除跳转未查询的候选列表缓存"""
+        if hasattr(self, '_jump_candidates_cache'):
+            delattr(self, '_jump_candidates_cache')
+            self.logger.info("已清除跳转未查询的候选列表缓存")
+
     def _jump_to_next_unqueried(self):
         """跳转到下一个未查询的检测结果
 
         新逻辑：
         1. 收集整个目录树中所有符合条件的检测结果（高分数目 < 8 的文件中的高分项）
+           - 使用缓存机制，避免每次都重新收集
         2. 从当前位置向下查找下一个符合条件的检测结果（已查询小行星和变星，但都未找到）
         3. 跳转到该检测结果
         """
         try:
-            # 步骤1: 收集整个目录树中所有符合条件的检测结果
-            self.logger.info("=" * 60)
-            self.logger.info("开始收集整个目录树中所有符合条件的检测结果")
+            # 检查是否有缓存的候选列表
+            if hasattr(self, '_jump_candidates_cache') and self._jump_candidates_cache:
+                self.logger.info("=" * 60)
+                self.logger.info(f"使用缓存的候选列表（共 {len(self._jump_candidates_cache)} 个候选）")
+                all_candidates = self._jump_candidates_cache
+            else:
+                # 步骤1: 收集整个目录树中所有符合条件的检测结果
+                self.logger.info("=" * 60)
+                self.logger.info("开始收集整个目录树中所有符合条件的检测结果")
 
-            # 获取目录树的根节点
-            root_items = self.directory_tree.get_children()
-            if not root_items:
-                messagebox.showinfo("提示", "目录树为空")
-                return
+                # 获取目录树的根节点
+                root_items = self.directory_tree.get_children()
+                if not root_items:
+                    messagebox.showinfo("提示", "目录树为空")
+                    return
 
-            # 收集所有符合条件的检测结果
-            # 每个元素是一个元组: (file_node, detection_index, file_path)
-            all_candidates = []
+                # 收集所有符合条件的检测结果
+                # 每个元素是一个元组: (file_node, detection_index, file_path)
+                all_candidates = []
 
-            def collect_candidates(parent_node):
-                """递归收集所有符合条件的检测结果"""
-                for child in self.directory_tree.get_children(parent_node):
-                    tags = self.directory_tree.item(child, "tags")
+                def collect_candidates(parent_node):
+                    """递归收集所有符合条件的检测结果"""
+                    for child in self.directory_tree.get_children(parent_node):
+                        tags = self.directory_tree.item(child, "tags")
 
-                    if "fits_file" in tags:
-                        # 检查是否有检测结果
-                        if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
-                            # 提取高分数目
-                            file_text = self.directory_tree.item(child, 'text')
-                            high_score_count = self._extract_high_score_count_from_text(file_text)
+                        if "fits_file" in tags:
+                            # 检查是否有检测结果
+                            if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
+                                # 提取高分数目
+                                file_text = self.directory_tree.item(child, 'text')
+                                high_score_count = self._extract_high_score_count_from_text(file_text)
 
-                            # 只处理高分数目 > 0 且 < 8 的文件
-                            if high_score_count is not None and high_score_count > 0 and high_score_count < 8:
-                                # 获取文件路径
-                                values = self.directory_tree.item(child, "values")
-                                if values:
-                                    file_path = values[0]
+                                # 只处理高分数目 > 0 且 < 8 的文件
+                                if high_score_count is not None and high_score_count > 0 and high_score_count < 8:
+                                    # 获取文件路径
+                                    values = self.directory_tree.item(child, "values")
+                                    if values:
+                                        file_path = values[0]
 
-                                    # 读取该文件的检测结果，找出符合条件的检测索引
-                                    qualified_indices = self._get_qualified_detection_indices(file_path, high_score_count)
+                                        # 读取该文件的检测结果，找出符合条件的检测索引
+                                        qualified_indices = self._get_qualified_detection_indices(file_path, high_score_count)
 
-                                    # 将符合条件的检测结果添加到候选列表
-                                    for detection_index in qualified_indices:
-                                        all_candidates.append((child, detection_index, file_path))
+                                        # 将符合条件的检测结果添加到候选列表
+                                        for detection_index in qualified_indices:
+                                            all_candidates.append((child, detection_index, file_path))
 
-                    # 递归处理子节点
-                    collect_candidates(child)
+                        # 递归处理子节点
+                        collect_candidates(child)
 
-            # 从根节点开始收集
-            for root_item in root_items:
-                collect_candidates(root_item)
+                # 从根节点开始收集
+                for root_item in root_items:
+                    collect_candidates(root_item)
 
-            self.logger.info(f"收集到 {len(all_candidates)} 个候选检测结果")
+                self.logger.info(f"收集到 {len(all_candidates)} 个候选检测结果")
+
+                # 缓存候选列表
+                self._jump_candidates_cache = all_candidates
 
             if not all_candidates:
                 messagebox.showinfo("提示", "目录树中没有符合条件的检测结果\n（条件：高分数目 > 0 且 < 8）")
