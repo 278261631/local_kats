@@ -483,9 +483,8 @@ class FitsImageViewer:
         refresh_frame.pack(fill=tk.X, pady=(0, 5))
 
         ttk.Button(refresh_frame, text="刷新目录", command=self._refresh_directory_tree).pack(side=tk.LEFT)
-        ttk.Button(refresh_frame, text="展开全部", command=self._expand_all).pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Button(refresh_frame, text="折叠全部", command=self._collapse_all).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="跳转未查询 (g)", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(refresh_frame, text="批量导出未查询", command=self._batch_export_unqueried).pack(side=tk.LEFT, padx=(5, 0))
 
         # 创建目录树
         tree_frame = ttk.Frame(left_frame)
@@ -2330,25 +2329,7 @@ class FitsImageViewer:
         finally:
             self.display_button.config(state="normal", text="显示图像")
 
-    def _expand_all(self):
-        """展开所有节点"""
-        def expand_recursive(item):
-            self.directory_tree.item(item, open=True)
-            for child in self.directory_tree.get_children(item):
-                expand_recursive(child)
 
-        for item in self.directory_tree.get_children():
-            expand_recursive(item)
-
-    def _collapse_all(self):
-        """折叠所有节点"""
-        def collapse_recursive(item):
-            self.directory_tree.item(item, open=False)
-            for child in self.directory_tree.get_children(item):
-                collapse_recursive(child)
-
-        for item in self.directory_tree.get_children():
-            collapse_recursive(item)
 
     def _select_current_file_in_tree(self):
         """在目录树中选中当前文件"""
@@ -3255,6 +3236,208 @@ class FitsImageViewer:
                 delattr(self, '_jump_current_position')
             if hasattr(self, '_jump_waiting_for_load'):
                 delattr(self, '_jump_waiting_for_load')
+
+    def _batch_export_unqueried(self):
+        """批量导出所有未查询的检测结果文件"""
+        try:
+            # 获取输出目录配置
+            if not self.config_manager:
+                messagebox.showerror("错误", "配置管理器未初始化")
+                return
+
+            export_settings = self.config_manager.get_unqueried_export_settings()
+            output_dir = export_settings.get("output_directory", "")
+
+            # 如果输出目录为空或不存在，提示用户选择
+            if not output_dir or not os.path.exists(output_dir):
+                from tkinter import filedialog
+                output_dir = filedialog.askdirectory(title="选择导出目录")
+                if not output_dir:
+                    return
+                # 保存到配置
+                self.config_manager.update_unqueried_export_settings(output_directory=output_dir)
+
+            # 收集所有符合条件的检测结果（复用跳转未查询的逻辑）
+            self.logger.info("=" * 60)
+            self.logger.info("开始批量导出未查询的检测结果")
+            self.logger.info(f"输出目录: {output_dir}")
+
+            # 获取目录树的根节点
+            root_items = self.directory_tree.get_children()
+            if not root_items:
+                messagebox.showinfo("提示", "目录树为空")
+                return
+
+            # 收集所有符合条件的检测结果
+            all_candidates = []
+
+            def collect_candidates(parent_node):
+                """递归收集所有符合条件的检测结果"""
+                for child in self.directory_tree.get_children(parent_node):
+                    tags = self.directory_tree.item(child, "tags")
+
+                    if "fits_file" in tags:
+                        # 检查是否有检测结果
+                        if any(tag in tags for tag in ["diff_gold_red", "diff_blue", "diff_purple"]):
+                            # 提取高分数目
+                            file_text = self.directory_tree.item(child, 'text')
+                            high_score_count = self._extract_high_score_count_from_text(file_text)
+
+                            # 只处理高分数目 > 0 且 < 8 的文件
+                            if high_score_count is not None and high_score_count > 0 and high_score_count < 8:
+                                # 获取文件路径
+                                values = self.directory_tree.item(child, "values")
+                                if values:
+                                    file_path = values[0]
+
+                                    # 读取该文件的检测结果，找出符合条件的检测索引
+                                    qualified_indices = self._get_qualified_detection_indices(file_path, high_score_count)
+
+                                    # 将符合条件的检测结果添加到候选列表
+                                    for detection_index in qualified_indices:
+                                        all_candidates.append((child, detection_index, file_path))
+
+                    # 递归处理子节点
+                    collect_candidates(child)
+
+            # 从根节点开始收集
+            for root_item in root_items:
+                collect_candidates(root_item)
+
+            self.logger.info(f"收集到 {len(all_candidates)} 个符合条件的检测结果")
+
+            if not all_candidates:
+                messagebox.showinfo("提示", "没有找到符合条件的检测结果\n（条件：高分数目 > 0 且 < 8，且小行星/变星都未找到或距离>=10px）")
+                return
+
+            # 确认是否继续
+            result = messagebox.askyesno(
+                "确认导出",
+                f"找到 {len(all_candidates)} 个符合条件的检测结果\n是否开始导出？"
+            )
+            if not result:
+                return
+
+            # 开始导出
+            import shutil
+            exported_count = 0
+            failed_count = 0
+
+            for i, (file_node, detection_index, file_path) in enumerate(all_candidates, 1):
+                try:
+                    self.logger.info(f"[{i}/{len(all_candidates)}] 导出: {os.path.basename(file_path)}, 索引 {detection_index}")
+
+                    # 获取detection目录
+                    from pathlib import Path
+                    fits_path = Path(file_path)
+                    filename_without_ext = fits_path.stem
+
+                    # 构建diff输出目录路径
+                    system_match = re.match(r'([A-Z0-9]+)_', filename_without_ext)
+                    if not system_match:
+                        self.logger.warning(f"  无法从文件名提取系统名: {filename_without_ext}")
+                        failed_count += 1
+                        continue
+                    system_name = system_match.group(1)
+
+                    date_match = re.search(r'UTC(\d{8})_', filename_without_ext)
+                    if not date_match:
+                        self.logger.warning(f"  无法从文件名提取日期: {filename_without_ext}")
+                        failed_count += 1
+                        continue
+                    date_str = date_match.group(1)
+
+                    parts = filename_without_ext.split('_')
+                    if len(parts) < 2:
+                        self.logger.warning(f"  无法从文件名提取天区: {filename_without_ext}")
+                        failed_count += 1
+                        continue
+
+                    region_part = parts[1]
+                    region_match = re.match(r'([A-Z]\d+)', region_part)
+                    if not region_match:
+                        self.logger.warning(f"  无法从天区部分提取天区: {region_part}")
+                        failed_count += 1
+                        continue
+                    region = region_match.group(1)
+
+                    # 构建diff输出目录
+                    diff_base_dir = Path("E:/fix_data/diff_temp")
+                    file_dir = diff_base_dir / system_name / date_str / region / filename_without_ext
+
+                    if not file_dir.exists():
+                        self.logger.warning(f"  diff输出目录不存在: {file_dir}")
+                        failed_count += 1
+                        continue
+
+                    # 查找detection目录
+                    detection_dirs = list(file_dir.glob("detection_*"))
+                    if not detection_dirs:
+                        self.logger.warning(f"  未找到detection目录")
+                        failed_count += 1
+                        continue
+
+                    detection_dir = max(detection_dirs, key=lambda p: p.name)
+                    cutouts_dir = detection_dir / "cutouts"
+
+                    if not cutouts_dir.exists():
+                        self.logger.warning(f"  cutouts目录不存在")
+                        failed_count += 1
+                        continue
+
+                    # 构建输出子目录：系统名/日期/天区/文件名/detection_xxx
+                    export_subdir = Path(output_dir) / system_name / date_str / region / filename_without_ext / detection_dir.name
+                    export_subdir.mkdir(parents=True, exist_ok=True)
+
+                    # 复制文件：reference.png, aligned.png, query_results_xxx.txt
+                    files_to_copy = [
+                        cutouts_dir / "reference.png",
+                        cutouts_dir / "aligned.png",
+                        cutouts_dir / f"query_results_{detection_index+1:03d}.txt"
+                    ]
+
+                    copied_files = []
+                    for src_file in files_to_copy:
+                        if src_file.exists():
+                            dst_file = export_subdir / src_file.name
+                            shutil.copy2(src_file, dst_file)
+                            copied_files.append(src_file.name)
+                            self.logger.info(f"    已复制: {src_file.name}")
+                        else:
+                            self.logger.warning(f"    文件不存在: {src_file.name}")
+
+                    if copied_files:
+                        exported_count += 1
+                        self.logger.info(f"  ✓ 导出成功，共复制 {len(copied_files)} 个文件")
+                    else:
+                        failed_count += 1
+                        self.logger.warning(f"  ✗ 没有文件被复制")
+
+                except Exception as e:
+                    self.logger.error(f"  导出失败: {str(e)}", exc_info=True)
+                    failed_count += 1
+
+            # 显示结果
+            result_msg = f"导出完成！\n\n成功: {exported_count}\n失败: {failed_count}\n总计: {len(all_candidates)}\n\n输出目录: {output_dir}"
+            messagebox.showinfo("导出完成", result_msg)
+            self.logger.info("=" * 60)
+            self.logger.info(f"批量导出完成: 成功 {exported_count}, 失败 {failed_count}")
+
+            # 打开输出目录
+            if exported_count > 0:
+                result = messagebox.askyesno("打开目录", "是否打开输出目录？")
+                if result:
+                    if platform.system() == 'Windows':
+                        os.startfile(output_dir)
+                    elif platform.system() == 'Darwin':  # macOS
+                        subprocess.run(['open', output_dir])
+                    else:  # Linux
+                        subprocess.run(['xdg-open', output_dir])
+
+        except Exception as e:
+            error_msg = f"批量导出失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            messagebox.showerror("错误", error_msg)
 
     def _open_download_directory(self):
         """打开当前下载目录"""

@@ -84,6 +84,9 @@ class ConfigManager:
                 "default_colormap": "gray",
                 "auto_select_from_download_dir": True
             },
+            "unqueried_export_settings": {
+                "output_directory": ""  # 未查询检测结果导出目录
+            },
             "url_template_type": "standard",  # "standard" 或 "with_year"
             # URL模板现在从独立的URL配置文件中读取
             "url_templates": url_config_manager.get_available_templates()
@@ -291,6 +294,24 @@ class ConfigManager:
         for key, value in kwargs.items():
             if key in ["enable_center_distance_filter", "max_center_distance", "auto_enable_threshold"]:
                 self.config["detection_filter_settings"][key] = value
+        self.save_config()
+
+    def get_unqueried_export_settings(self) -> Dict[str, Any]:
+        """获取未查询检测结果导出设置"""
+        # 如果配置中没有未查询导出设置，使用默认值
+        if "unqueried_export_settings" not in self.config:
+            self.config["unqueried_export_settings"] = self.default_config["unqueried_export_settings"].copy()
+            self.save_config()
+        return self.config["unqueried_export_settings"]
+
+    def update_unqueried_export_settings(self, **kwargs):
+        """更新未查询检测结果导出设置"""
+        if "unqueried_export_settings" not in self.config:
+            self.config["unqueried_export_settings"] = self.default_config["unqueried_export_settings"].copy()
+
+        for key, value in kwargs.items():
+            if key == "output_directory":
+                self.config["unqueried_export_settings"][key] = value
         self.save_config()
 
     def get_url_template_type(self) -> str:
