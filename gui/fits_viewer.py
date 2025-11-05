@@ -3389,22 +3389,48 @@ class FitsImageViewer:
                     export_subdir = Path(output_dir) / system_name / date_str / region / filename_without_ext / detection_dir.name
                     export_subdir.mkdir(parents=True, exist_ok=True)
 
-                    # 复制文件：reference.png, aligned.png, query_results_xxx.txt
-                    files_to_copy = [
-                        cutouts_dir / "reference.png",
-                        cutouts_dir / "aligned.png",
-                        cutouts_dir / f"query_results_{detection_index+1:03d}.txt"
-                    ]
+                    # 查找对应的cutout文件
+                    # 文件名格式: 001_RA285.123456_DEC43.567890_GY5_K096_1_reference.png
+                    # 或: 001_X1234_Y5678_GY5_K096_1_reference.png
+                    detection_num = detection_index + 1
+                    reference_pattern = f"{detection_num:03d}_*_1_reference.png"
+                    aligned_pattern = f"{detection_num:03d}_*_2_aligned.png"
+                    query_results_file = cutouts_dir / f"query_results_{detection_num:03d}.txt"
+
+                    # 查找文件
+                    reference_files = list(cutouts_dir.glob(reference_pattern))
+                    aligned_files = list(cutouts_dir.glob(aligned_pattern))
 
                     copied_files = []
-                    for src_file in files_to_copy:
-                        if src_file.exists():
-                            dst_file = export_subdir / src_file.name
-                            shutil.copy2(src_file, dst_file)
-                            copied_files.append(src_file.name)
-                            self.logger.info(f"    已复制: {src_file.name}")
-                        else:
-                            self.logger.warning(f"    文件不存在: {src_file.name}")
+
+                    # 复制reference.png
+                    if reference_files:
+                        src_file = reference_files[0]
+                        dst_file = export_subdir / src_file.name
+                        shutil.copy2(src_file, dst_file)
+                        copied_files.append(src_file.name)
+                        self.logger.info(f"    已复制: {src_file.name}")
+                    else:
+                        self.logger.warning(f"    文件不存在: {reference_pattern}")
+
+                    # 复制aligned.png
+                    if aligned_files:
+                        src_file = aligned_files[0]
+                        dst_file = export_subdir / src_file.name
+                        shutil.copy2(src_file, dst_file)
+                        copied_files.append(src_file.name)
+                        self.logger.info(f"    已复制: {src_file.name}")
+                    else:
+                        self.logger.warning(f"    文件不存在: {aligned_pattern}")
+
+                    # 复制query_results文件
+                    if query_results_file.exists():
+                        dst_file = export_subdir / query_results_file.name
+                        shutil.copy2(query_results_file, dst_file)
+                        copied_files.append(query_results_file.name)
+                        self.logger.info(f"    已复制: {query_results_file.name}")
+                    else:
+                        self.logger.warning(f"    文件不存在: {query_results_file.name}")
 
                     if copied_files:
                         exported_count += 1
