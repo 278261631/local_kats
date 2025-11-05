@@ -7941,13 +7941,14 @@ class FitsImageViewer:
                         cmd,
                         cwd=str(oss_sync_dir),
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,  # 将stderr重定向到stdout
                         text=True,
                         encoding='utf-8',
-                        errors='replace'
+                        errors='replace',
+                        bufsize=1  # 行缓冲,实时输出
                     )
 
-                    # 实时读取输出
+                    # 实时读取输出(stdout和stderr合并)
                     for line in process.stdout:
                         line = line.strip()
                         if line:
@@ -7957,17 +7958,18 @@ class FitsImageViewer:
                     return_code = process.wait()
 
                     if return_code == 0:
+                        self.logger.info("=" * 60)
                         self.logger.info("OSS上传完成")
+                        self.logger.info("=" * 60)
                         # 在主线程中显示消息
                         self.parent_frame.after(0, lambda: messagebox.showinfo(
                             "上传完成",
                             "检测结果已成功上传到OSS\n\n详细日志请查看 oss_sync/oss_upload.log"
                         ))
                     else:
-                        stderr_output = process.stderr.read()
+                        self.logger.error("=" * 60)
                         self.logger.error(f"OSS上传失败，返回码: {return_code}")
-                        if stderr_output:
-                            self.logger.error(f"错误信息: {stderr_output}")
+                        self.logger.error("=" * 60)
                         # 在主线程中显示错误
                         self.parent_frame.after(0, lambda: messagebox.showerror(
                             "上传失败",
