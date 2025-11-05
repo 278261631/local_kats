@@ -3524,6 +3524,23 @@ class FitsImageViewer:
             str: 生成的HTML文件路径
         """
         from datetime import datetime
+        import html
+
+        def escape_path(path):
+            """转义路径用于HTML，使用URL编码处理特殊字符"""
+            if not path:
+                return ""
+            # 先替换反斜杠为正斜杠
+            path = path.replace('\\', '/')
+            # 对路径进行URL编码，但保留斜杠
+            from urllib.parse import quote
+            # 分割路径，对每个部分进行URL编码
+            parts = path.split('/')
+            encoded_parts = [quote(part, safe='') for part in parts]
+            encoded_path = '/'.join(encoded_parts)
+            # HTML转义引号，防止破坏HTML属性
+            encoded_path = encoded_path.replace('"', '&quot;')
+            return encoded_path
 
         html_file = os.path.join(output_dir, "detection_results.html")
 
@@ -3772,14 +3789,22 @@ class FitsImageViewer:
                 if match:
                     ra_dec_text = f"RA: {match.group(1)}°  DEC: {match.group(2)}°"
 
-            reference_path = f"{item['relative_path']}/{item['reference_file']}" if item['reference_file'] else ""
-            aligned_path = f"{item['relative_path']}/{item['aligned_file']}" if item['aligned_file'] else ""
+            # 使用正斜杠作为路径分隔符，浏览器可以正确识别
+            # 不需要URL编码，直接使用原始路径
+            reference_path = escape_path(f"{item['relative_path']}/{item['reference_file']}") if item['reference_file'] else ""
+            aligned_path = escape_path(f"{item['relative_path']}/{item['aligned_file']}") if item['aligned_file'] else ""
+
+            # 转义文本内容
+            system_name_escaped = html.escape(item['system_name'])
+            region_escaped = html.escape(item['region'])
+            date_str_escaped = html.escape(item['date_str'])
+            filename_escaped = html.escape(item['filename'])
 
             html_content += f"""
             <div class="detection-card">
                 <div class="card-header">
                     <h2>检测结果 #{item['index']}</h2>
-                    <div class="meta">系统: {item['system_name']} | 天区: {item['region']} | 日期: {item['date_str']}</div>
+                    <div class="meta">系统: {system_name_escaped} | 天区: {region_escaped} | 日期: {date_str_escaped}</div>
                 </div>
 
                 <div class="card-images">
@@ -3810,7 +3835,7 @@ class FitsImageViewer:
             html_content += f"""
                     <div class="info-row">
                         <span class="info-label">文件名:</span>
-                        <span class="info-value">{item['filename']}</span>
+                        <span class="info-value">{filename_escaped}</span>
                     </div>
                     <div class="info-row">
                         <span class="info-label">检测编号:</span>
@@ -3818,14 +3843,15 @@ class FitsImageViewer:
                     </div>
                     <div class="info-row">
                         <span class="info-label">坐标:</span>
-                        <span class="info-value">{ra_dec_text}</span>
+                        <span class="info-value">{html.escape(ra_dec_text)}</span>
                     </div>
 """
 
             if item.get('query_results_content'):
+                query_content_escaped = html.escape(item['query_results_content'])
                 html_content += f"""
                     <div class="query-results">
-                        <pre>{item['query_results_content']}</pre>
+                        <pre>{query_content_escaped}</pre>
                     </div>
 """
 
@@ -3839,7 +3865,7 @@ class FitsImageViewer:
 
         <div class="footer">
             <p>生成于 {datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")}</p>
-            <p>导出目录: {output_dir}</p>
+            <p>导出目录: {html.escape(output_dir)}</p>
         </div>
     </div>
 
