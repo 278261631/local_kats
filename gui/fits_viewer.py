@@ -3652,7 +3652,9 @@ class FitsImageViewer:
             encoded_path = encoded_path.replace('"', '&quot;')
             return encoded_path
 
-        html_file = os.path.join(output_dir, "detection_results.html")
+        # 从第一个导出项中提取日期，用于HTML文件名
+        date_str = exported_items[0]['date_str'] if exported_items else datetime.now().strftime("%Y%m%d")
+        html_file = os.path.join(output_dir, f"detection_results_{date_str}.html")
 
         # 生成HTML内容
         html_content = f"""<!DOCTYPE html>

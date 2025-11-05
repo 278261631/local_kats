@@ -153,20 +153,52 @@ class OSSUploader:
         # 方法3: 如果都失败，返回 None
         return None
 
-    def _get_oss_path(self, local_file: Path, oss_root: Path) -> str:
+    def _get_batch_date(self, oss_root: Path) -> Optional[datetime]:
+        """
+        从oss_root目录中提取批次日期
+        优先从HTML文件名提取，其次从目录结构提取
+
+        Args:
+            oss_root: OSS 根目录
+
+        Returns:
+            批次日期，如果提取失败则返回 None
+        """
+        # 方法1: 从HTML文件名提取日期
+        # 格式: detection_results_20251102.html
+        html_files = list(oss_root.glob("detection_results_*.html"))
+        if html_files:
+            html_file = html_files[0]
+            match = re.search(r'detection_results_(\d{8})\.html', html_file.name)
+            if match:
+                date_str = match.group(1)
+                try:
+                    return datetime.strptime(date_str, "%Y%m%d")
+                except ValueError:
+                    pass
+
+        # 方法2: 从目录结构中提取日期
+        # 遍历所有文件，找到第一个包含日期的路径
+        for file_path in oss_root.rglob("*"):
+            if file_path.is_file():
+                file_date = self._extract_date_from_path(file_path)
+                if file_date:
+                    return file_date
+
+        return None
+
+    def _get_oss_path(self, local_file: Path, oss_root: Path, batch_date: datetime) -> str:
         """
         根据文件路径生成 OSS 路径
-        格式: yyyy/yyyymmdd/原始相对路径
+        格式: yyyy/yyyymmdd/原始相对路径(去除路径中的日期目录)
 
         Args:
             local_file: 本地文件路径
             oss_root: OSS 根目录
+            batch_date: 批次日期(所有文件使用同一个日期)
 
         Returns:
             OSS 对象路径
-
-        Raises:
-            ValueError: 如果无法从路径中提取日期
         """
         # 获取相对于 oss_root 的路径
         try:
@@ -175,21 +207,17 @@ class OSSUploader:
             # 如果文件不在 oss_root 下，使用文件名
             relative_path = Path(local_file.name)
 
-        # 从文件路径中提取日期
-        file_date = self._extract_date_from_path(local_file)
+        # 使用批次日期
+        year = batch_date.strftime("%Y")
+        date_str = batch_date.strftime("%Y%m%d")
 
-        # 如果提取失败，抛出异常
-        if file_date is None:
-            error_msg = f"无法从文件路径中提取日期: {local_file}\n" \
-                       f"请确保文件路径包含 UTC 时间戳(如 UTC20251102)或日期目录(如 20251102)"
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
+        # 从相对路径中移除日期目录(如果存在)
+        # 例如: GY5/20251102/K021/... -> GY5/K021/...
+        parts = list(relative_path.parts)
+        filtered_parts = [part for part in parts if not re.match(r'^\d{8}$', part)]
+        cleaned_relative_path = Path(*filtered_parts) if filtered_parts else Path(relative_path.name)
 
-        # 构建路径: yyyy/yyyymmdd/原始相对路径
-        year = file_date.strftime("%Y")
-        date_str = file_date.strftime("%Y%m%d")
-
-        oss_path = f"{year}/{date_str}/{relative_path.as_posix()}"
+        oss_path = f"{year}/{date_str}/{cleaned_relative_path.as_posix()}"
 
         return oss_path
     
@@ -314,7 +342,14 @@ class OSSUploader:
             self.logger.warning("没有文件需要上传")
             return
 
+        # 获取批次日期
+        batch_date = self._get_batch_date(oss_root)
+        if batch_date is None:
+            self.logger.error("✗ 无法从目录中提取批次日期，上传终止")
+            return
+
         self.logger.info("=" * 60)
+        self.logger.info(f"批次日期: {batch_date.strftime('%Y%m%d')}")
         self.logger.info(f"开始上传 {len(files)} 个文件")
         self.logger.info(f"并发数: {max_workers}")
         self.logger.info("=" * 60)
@@ -330,12 +365,12 @@ class OSSUploader:
             future_to_file = {}
             for file in files:
                 try:
-                    oss_path = self._get_oss_path(file, oss_root)
+                    oss_path = self._get_oss_path(file, oss_root, batch_date)
                     future = executor.submit(self._upload_file, file, oss_path, retry_times)
                     future_to_file[future] = (file, oss_path)
-                except ValueError as e:
-                    # 无法提取日期，记录错误并跳过该文件
-                    self.logger.error(f"✗ 跳过文件(无法提取日期): {file.name}")
+                except Exception as e:
+                    # 生成OSS路径失败，记录错误并跳过该文件
+                    self.logger.error(f"✗ 跳过文件(生成OSS路径失败): {file.name} - {str(e)}")
                     failed_count += 1
 
             # 处理完成的任务
