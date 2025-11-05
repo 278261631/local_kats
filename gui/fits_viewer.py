@@ -7708,14 +7708,14 @@ class FitsImageViewer:
             return False, None
 
     def _calculate_radec_pixel_distance_in_cutout(self, ra, dec):
-        """计算RA/DEC坐标在cutout图像中距离中心的像素距离
+        """计算RA/DEC坐标在cutout图像中距离中心的像素距离和像素位置
 
         Args:
             ra: RA坐标（度）
             dec: DEC坐标（度）
 
         Returns:
-            float: cutout图像中的像素距离，如果无法计算则返回None
+            tuple: (distance, pixel_x, pixel_y) - cutout图像中的像素距离和坐标，如果无法计算则返回None
         """
         try:
             # 获取当前cutout的detection图像路径
@@ -7788,7 +7788,9 @@ class FitsImageViewer:
 
             # 计算距离cutout中心的距离
             distance = np.sqrt(offset_x**2 + offset_y**2)
-            return distance
+
+            # 返回距离和像素位置
+            return (distance, pixel_x_cutout, pixel_y_cutout)
 
         except Exception as e:
             self.logger.warning(f"计算RA/DEC在cutout中的像素距离失败: {e}", exc_info=True)
@@ -7848,17 +7850,19 @@ class FitsImageViewer:
                         if 'DEC' in colnames:
                             asteroid_info.append(f"DEC={row['DEC']:.6f}°")
 
-                        # 计算在cutout图像中距离中心的像素距离
+                        # 计算在cutout图像中距离中心的像素距离和像素位置
                         if 'RA' in colnames and 'DEC' in colnames:
                             # 确保RA/DEC是纯数字（处理Astropy Quantity对象）
                             # 使用.value属性获取数值，如果不是Quantity对象则直接使用
                             ra_value = row['RA'].value if hasattr(row['RA'], 'value') else float(row['RA'])
                             dec_value = row['DEC'].value if hasattr(row['DEC'], 'value') else float(row['DEC'])
                             self.logger.info(f"计算小行星像素距离: RA={ra_value}, DEC={dec_value}")
-                            pixel_dist = self._calculate_radec_pixel_distance_in_cutout(ra_value, dec_value)
-                            self.logger.info(f"小行星像素距离计算结果: {pixel_dist}")
-                            if pixel_dist is not None:
+                            pixel_result = self._calculate_radec_pixel_distance_in_cutout(ra_value, dec_value)
+                            self.logger.info(f"小行星像素距离计算结果: {pixel_result}")
+                            if pixel_result is not None:
+                                pixel_dist, pixel_x, pixel_y = pixel_result
                                 asteroid_info.append(f"像素距离={pixel_dist:.1f}px")
+                                asteroid_info.append(f"像素位置=({pixel_x:.1f}, {pixel_y:.1f})")
 
                         if 'Mv' in colnames:
                             asteroid_info.append(f"星等={row['Mv']}")
@@ -7886,17 +7890,19 @@ class FitsImageViewer:
                         if 'DEJ2000' in colnames:
                             vstar_info.append(f"DEC={row['DEJ2000']:.6f}°")
 
-                        # 计算在cutout图像中距离中心的像素距离
+                        # 计算在cutout图像中距离中心的像素距离和像素位置
                         if 'RAJ2000' in colnames and 'DEJ2000' in colnames:
                             # 确保RA/DEC是纯数字（处理Astropy Quantity对象）
                             # 使用.value属性获取数值，如果不是Quantity对象则直接使用
                             ra_value = row['RAJ2000'].value if hasattr(row['RAJ2000'], 'value') else float(row['RAJ2000'])
                             dec_value = row['DEJ2000'].value if hasattr(row['DEJ2000'], 'value') else float(row['DEJ2000'])
                             self.logger.info(f"计算变星像素距离: RA={ra_value}, DEC={dec_value}")
-                            pixel_dist = self._calculate_radec_pixel_distance_in_cutout(ra_value, dec_value)
-                            self.logger.info(f"变星像素距离计算结果: {pixel_dist}")
-                            if pixel_dist is not None:
+                            pixel_result = self._calculate_radec_pixel_distance_in_cutout(ra_value, dec_value)
+                            self.logger.info(f"变星像素距离计算结果: {pixel_result}")
+                            if pixel_result is not None:
+                                pixel_dist, pixel_x, pixel_y = pixel_result
                                 vstar_info.append(f"像素距离={pixel_dist:.1f}px")
+                                vstar_info.append(f"像素位置=({pixel_x:.1f}, {pixel_y:.1f})")
 
                         if 'max' in colnames:
                             vstar_info.append(f"最大星等={row['max']}")
