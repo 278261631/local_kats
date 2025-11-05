@@ -453,6 +453,11 @@ class FitsWebDownloaderGUI:
                                      state="readonly", width=15)
             sort_combo.grid(row=0, column=5, sticky=tk.W, padx=5)
 
+            # 直线检测过滤开关
+            line_detection_check = ttk.Checkbutton(row4_frame, text="批量导出时过滤过中心直线",
+                                                  variable=self.fits_viewer.enable_line_detection_filter_var)
+            line_detection_check.grid(row=0, column=6, sticky=tk.W, padx=(20, 5))
+
         # 第五行：GPS和MPC设置
         row5_frame = ttk.LabelFrame(settings_container, text="观测站设置", padding=10)
         row5_frame.pack(fill=tk.X, pady=(0, 10))

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Callable
 from datetime import datetime, timedelta
 from diff_orb_integration import DiffOrbIntegration
+import cv2
 
 # 添加项目根目录到路径以导入dss_cds_downloader
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -214,6 +215,7 @@ class FitsImageViewer:
         self.score_threshold_var = tk.StringVar(value="3.0")
         self.aligned_snr_threshold_var = tk.StringVar(value="1.1")
         self.sort_by_var = tk.StringVar(value="aligned_snr")
+        self.enable_line_detection_filter_var = tk.BooleanVar(value=True)  # 默认启用直线检测过滤
 
         # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
         self.gps_lat_var = tk.StringVar(value="43.4")
@@ -678,7 +680,11 @@ class FitsImageViewer:
             generate_gif = batch_settings.get('generate_gif', False)
             self.generate_gif_var.set(generate_gif)
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}")
+            # 直线检测过滤开关
+            enable_line_detection_filter = batch_settings.get('enable_line_detection_filter', True)
+            self.enable_line_detection_filter_var.set(enable_line_detection_filter)
+
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 直线检测过滤={enable_line_detection_filter}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -730,6 +736,9 @@ class FitsImageViewer:
             # 绑定生成GIF复选框
             self.generate_gif_var.trace('w', self._on_batch_settings_change)
 
+            # 绑定直线检测过滤复选框
+            self.enable_line_detection_filter_var.trace('w', self._on_batch_settings_change)
+
             self.logger.info("批量处理参数控件事件已绑定")
 
         except Exception as e:
@@ -778,6 +787,9 @@ class FitsImageViewer:
             # 获取生成GIF设置
             generate_gif = self.generate_gif_var.get()
 
+            # 获取直线检测过滤设置
+            enable_line_detection_filter = self.enable_line_detection_filter_var.get()
+
             # 保存到配置文件
             self.config_manager.update_batch_process_settings(
                 noise_method=noise_method,
@@ -788,10 +800,11 @@ class FitsImageViewer:
                 detection_method=detection_method,
                 sort_by=sort_by,
                 wcs_use_sparse=wcs_use_sparse,
-                generate_gif=generate_gif
+                generate_gif=generate_gif,
+                enable_line_detection_filter=enable_line_detection_filter
             )
 
-            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}")
+            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 直线检测过滤={enable_line_detection_filter}")
 
         except Exception as e:
             self.logger.error(f"保存批量处理参数失败: {str(e)}")
@@ -3334,6 +3347,7 @@ class FitsImageViewer:
             import shutil
             exported_count = 0
             failed_count = 0
+            skipped_count = 0  # 因直线检测而跳过的数量
             exported_items = []  # 用于收集导出的检测目标信息
 
             for i, (file_node, detection_index, file_path) in enumerate(all_candidates, 1):
@@ -3414,6 +3428,14 @@ class FitsImageViewer:
                     reference_files = list(cutouts_dir.glob(reference_pattern))
                     aligned_files = list(cutouts_dir.glob(aligned_pattern))
 
+                    # 检查aligned图像是否有过中心的直线（如果启用了直线检测过滤）
+                    if self.enable_line_detection_filter_var.get() and aligned_files:
+                        aligned_file = aligned_files[0]
+                        if self._has_line_through_center(aligned_file):
+                            self.logger.warning(f"  ✗ 跳过: aligned图像中检测到过中心的直线")
+                            skipped_count += 1
+                            continue
+
                     copied_files = []
 
                     # 复制reference.png
@@ -3492,10 +3514,10 @@ class FitsImageViewer:
                     self.logger.error(f"生成HTML文件失败: {str(e)}", exc_info=True)
 
             # 显示结果
-            result_msg = f"导出完成！\n\n成功: {exported_count}\n失败: {failed_count}\n总计: {len(all_candidates)}\n\n输出目录: {output_dir}"
+            result_msg = f"导出完成！\n\n成功: {exported_count}\n跳过(有直线): {skipped_count}\n失败: {failed_count}\n总计: {len(all_candidates)}\n\n输出目录: {output_dir}"
             messagebox.showinfo("导出完成", result_msg)
             self.logger.info("=" * 60)
-            self.logger.info(f"批量导出完成: 成功 {exported_count}, 失败 {failed_count}")
+            self.logger.info(f"批量导出完成: 成功 {exported_count}, 跳过 {skipped_count}, 失败 {failed_count}")
 
             # 打开输出目录
             if exported_count > 0:
@@ -3512,6 +3534,94 @@ class FitsImageViewer:
             error_msg = f"批量导出失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
+
+    def _has_line_through_center(self, image_path, distance_threshold=50):
+        """检测图像中是否有明显直线并且直线过图像中心
+
+        Args:
+            image_path: 图像文件路径
+            distance_threshold: 直线到中心点的距离阈值（像素），默认50
+
+        Returns:
+            bool: 如果检测到过中心的直线返回True，否则返回False
+        """
+        try:
+            # 读取图像
+            img = cv2.imread(str(image_path))
+            if img is None:
+                self.logger.warning(f"无法读取图像: {image_path}")
+                return False
+
+            # 转换为灰度图
+            if len(img.shape) == 3:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = img.copy()
+
+            # 获取图像中心
+            height, width = gray.shape
+            center_x = width / 2.0
+            center_y = height / 2.0
+
+            # 使用自适应阈值增强对比度
+            # 计算高百分位数作为阈值
+            threshold_value = np.percentile(gray, 95)
+            _, binary = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
+
+            # 边缘检测
+            edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+
+            # 霍夫直线检测
+            # 使用较严格的参数，只检测明显的长直线
+            lines = cv2.HoughLinesP(
+                edges,
+                rho=1,
+                theta=np.pi/180,
+                threshold=50,
+                minLineLength=min(width, height) * 0.3,  # 至少占图像宽度或高度的30%
+                maxLineGap=20
+            )
+
+            if lines is None:
+                self.logger.info(f"未检测到直线: {os.path.basename(image_path)}")
+                return False
+
+            self.logger.info(f"检测到 {len(lines)} 条直线: {os.path.basename(image_path)}")
+
+            # 检查每条直线是否过中心
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+
+                # 计算直线长度
+                line_length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
+                # 只考虑较长的直线
+                if line_length < min(width, height) * 0.3:
+                    continue
+
+                # 计算点到直线的距离
+                # 使用点到直线距离公式: |Ax + By + C| / sqrt(A^2 + B^2)
+                # 直线方程: (y2-y1)x - (x2-x1)y + (x2-x1)y1 - (y2-y1)x1 = 0
+                A = y2 - y1
+                B = -(x2 - x1)
+                C = (x2 - x1) * y1 - (y2 - y1) * x1
+
+                # 计算中心点到直线的距离
+                distance = abs(A * center_x + B * center_y + C) / np.sqrt(A**2 + B**2)
+
+                self.logger.info(f"  直线长度={line_length:.1f}, 到中心距离={distance:.1f}像素")
+
+                # 如果距离小于阈值，认为直线过中心
+                if distance < distance_threshold:
+                    self.logger.warning(f"检测到过中心的直线: {os.path.basename(image_path)}, 距离={distance:.1f}像素")
+                    return True
+
+            self.logger.info(f"未检测到过中心的直线: {os.path.basename(image_path)}")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"直线检测失败: {str(e)}", exc_info=True)
+            return False
 
     def _generate_export_html(self, output_dir, exported_items):
         """生成导出检测目标的HTML展示文件
