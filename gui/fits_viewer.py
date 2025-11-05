@@ -3037,8 +3037,16 @@ class FitsImageViewer:
                 return qualified_indices
             region = region_match.group(1)  # K052
 
-            # 构建diff输出目录
-            diff_base_dir = Path("E:/fix_data/diff_temp")
+            # 构建diff输出目录 - 从配置文件读取
+            diff_base_dir = None
+            if self.get_diff_output_dir_callback:
+                diff_base_dir = self.get_diff_output_dir_callback()
+
+            if not diff_base_dir:
+                self.logger.warning("diff输出目录未配置")
+                return qualified_indices
+
+            diff_base_dir = Path(diff_base_dir)
             # 使用原始文件名（包含%20）构建路径
             file_dir = diff_base_dir / system_name / date_str / region / filename_without_ext
 
@@ -3388,8 +3396,17 @@ class FitsImageViewer:
                         continue
                     region = region_match.group(1)
 
-                    # 构建diff输出目录
-                    diff_base_dir = Path("E:/fix_data/diff_temp")
+                    # 构建diff输出目录 - 从配置文件读取
+                    diff_base_dir = None
+                    if self.get_diff_output_dir_callback:
+                        diff_base_dir = self.get_diff_output_dir_callback()
+
+                    if not diff_base_dir:
+                        self.logger.warning(f"  diff输出目录未配置，跳过文件: {filename_without_ext}")
+                        failed_count += 1
+                        continue
+
+                    diff_base_dir = Path(diff_base_dir)
                     file_dir = diff_base_dir / system_name / date_str / region / filename_without_ext
 
                     if not file_dir.exists():
