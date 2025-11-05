@@ -7824,6 +7824,18 @@ class FitsImageViewer:
 
             self.logger.info(f"保存查询结果到: {query_results_file}")
 
+            # 获取中心点的RA/DEC坐标
+            reference_img = current_cutout.get('reference')
+            aligned_img = current_cutout.get('aligned')
+            selected_filename = ""
+            if hasattr(self, 'selected_file_path') and self.selected_file_path:
+                selected_filename = os.path.basename(self.selected_file_path)
+
+            file_info = self._extract_file_info(reference_img, aligned_img, detection_img, selected_filename)
+            center_ra = file_info.get('ra', 'N/A')
+            center_dec = file_info.get('dec', 'N/A')
+            self.logger.info(f"中心点坐标: RA={center_ra}°, DEC={center_dec}°")
+
             # 从当前cutout读取查询结果
             skybot_queried = current_cutout.get('skybot_queried', False)
             skybot_results = current_cutout.get('skybot_results', None)
@@ -7924,7 +7936,8 @@ class FitsImageViewer:
                 f.write(f"查询结果\n")
                 f.write(f"=" * 80 + "\n")
                 f.write(f"时间: {timestamp}\n")
-                f.write(f"检测目标序号: {self._current_cutout_index + 1}\n\n")
+                f.write(f"检测目标序号: {self._current_cutout_index + 1}\n")
+                f.write(f"中心点坐标: RA={center_ra}°, DEC={center_dec}°\n\n")
 
                 f.write(f"小行星列表:\n")
                 for line in skybot_lines:
