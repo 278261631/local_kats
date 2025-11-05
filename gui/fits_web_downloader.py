@@ -253,7 +253,7 @@ class FitsWebDownloaderGUI:
 
         ttk.Button(detected_frame, text="选择保存目录", command=self._select_detected_dir).pack(side=tk.RIGHT)
 
-        # 未查询导出目录选择
+        # 未查询导出目录选择（也用于OSS上传）
         unqueried_export_frame = ttk.Frame(download_frame)
         unqueried_export_frame.pack(fill=tk.X, pady=(5, 5))
 
@@ -325,7 +325,8 @@ class FitsWebDownloaderGUI:
             get_diff_output_dir_callback=self._get_diff_output_dir,
             get_url_selections_callback=self._get_url_selections,
             log_callback=self.get_error_logger_callback(),  # 传递日志回调函数
-            file_selection_frame=file_frame  # 传递文件选择框架
+            file_selection_frame=file_frame,  # 传递文件选择框架
+            get_unqueried_export_dir_callback=self._get_unqueried_export_dir  # 传递未查询导出目录回调函数（也用于OSS上传）
         )
 
         # 设置diff_orb的GUI回调
@@ -998,7 +999,7 @@ class FitsWebDownloaderGUI:
             self._log(f"检测结果将保存到: {directory}/YYYYMMDD/saved_HHMMSS_NNN/")
 
     def _select_unqueried_export_dir(self):
-        """选择未查询导出目录"""
+        """选择未查询导出目录（也用于OSS上传）"""
         # 获取当前目录作为初始目录
         current_dir = self.unqueried_export_dir_var.get()
         initial_dir = current_dir if current_dir and os.path.exists(current_dir) else os.path.expanduser("~")
@@ -1010,6 +1011,7 @@ class FitsWebDownloaderGUI:
             self.config_manager.update_last_selected(unqueried_export_directory=directory)
             self._log(f"未查询导出目录已设置: {directory}")
             self._log(f"未查询检测结果将导出到: {directory}/系统名/日期/天区/文件名/detection_xxx/")
+            self._log(f"此目录也将用于OSS上传")
 
     def _get_selected_files(self):
         """获取选中的文件"""
@@ -1568,6 +1570,10 @@ Diff统计:
     def _get_diff_output_dir(self):
         """获取diff输出根目录的回调函数"""
         return self.diff_output_dir_var.get().strip()
+
+    def _get_unqueried_export_dir(self):
+        """获取未查询导出目录的回调函数（也用于OSS上传）"""
+        return self.unqueried_export_dir_var.get().strip()
 
     def _open_batch_output_directory(self):
         """打开批量处理的输出根目录"""

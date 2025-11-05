@@ -1,0 +1,20 @@
+{
+  "aliyun_oss": {
+    "access_key_id": "",
+    "access_key_secret": "",
+    "bucket_name": "",
+    "endpoint": "oss-cn-hangzhou.aliyuncs.com"
+  },
+  "upload_settings": {
+    "oss_root": "",
+    "file_extensions": [".fits", ".fit", ".png", ".jpg", ".txt"],
+    "max_workers": 4,
+    "retry_times": 3,
+    "timeout": 300
+  },
+  "path_settings": {
+    "use_date_path": true,
+    "date_format": "yyyy/yyyymmdd"
+  }
+}
+

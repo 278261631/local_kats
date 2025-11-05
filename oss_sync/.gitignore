@@ -1,0 +1,17 @@
+# 配置文件（包含敏感信息）
+oss_config.json
+
+# 日志文件
+*.log
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+venv/
+env/
+ENV/
+

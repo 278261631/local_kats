@@ -48,7 +48,8 @@ class FitsImageViewer:
                  get_diff_output_dir_callback: Optional[Callable] = None,
                  get_url_selections_callback: Optional[Callable] = None,
                  log_callback: Optional[Callable] = None,
-                 file_selection_frame: Optional[tk.Frame] = None):
+                 file_selection_frame: Optional[tk.Frame] = None,
+                 get_unqueried_export_dir_callback: Optional[Callable] = None):
         self.parent_frame = parent_frame
         self.file_selection_frame = file_selection_frame  # 文件选择框架，用于添加按钮
         self.config_manager = config_manager
@@ -64,6 +65,7 @@ class FitsImageViewer:
         self.get_diff_output_dir_callback = get_diff_output_dir_callback
         self.get_url_selections_callback = get_url_selections_callback
         self.log_callback = log_callback  # 日志回调函数，用于输出到日志标签页
+        self.get_unqueried_export_dir_callback = get_unqueried_export_dir_callback  # 未查询导出目录回调函数（也用于OSS上传）
 
         # 设置日志
         self.logger = logging.getLogger(__name__)
@@ -435,6 +437,11 @@ class FitsImageViewer:
         self.save_detection_button = ttk.Button(toolbar_frame6, text="保存检测结果",
                                                command=self._save_detection_result, state="disabled")
         self.save_detection_button.pack(side=tk.LEFT, padx=(10, 5))
+
+        # 上传到OSS按钮
+        self.upload_oss_button = ttk.Button(toolbar_frame6, text="上传到OSS",
+                                           command=self._upload_to_oss)
+        self.upload_oss_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # 如果ASTAP处理器不可用，禁用按钮
         if not self.astap_processor:
@@ -7412,6 +7419,151 @@ class FitsImageViewer:
 
         except Exception as e:
             error_msg = f"保存检测结果失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            messagebox.showerror("错误", error_msg)
+
+    def _upload_to_oss(self):
+        """上传文件到阿里云OSS"""
+        try:
+            # 从UI获取未查询导出目录（用于OSS上传）
+            unqueried_export_dir = None
+            if self.get_unqueried_export_dir_callback:
+                unqueried_export_dir = self.get_unqueried_export_dir_callback()
+
+            # 检查目录是否设置
+            if not unqueried_export_dir or not unqueried_export_dir.strip():
+                messagebox.showwarning(
+                    "警告",
+                    "未查询导出目录未设置\n\n"
+                    "请在下载设置中设置 未查询导出目录\n"
+                    "此目录将用于OSS上传"
+                )
+                return
+
+            unqueried_export_dir = unqueried_export_dir.strip()
+            if not os.path.exists(unqueried_export_dir):
+                messagebox.showwarning("警告", f"未查询导出目录不存在\n\n目录: {unqueried_export_dir}")
+                return
+
+            # 检查目录下是否有文件
+            has_files = False
+            for root, dirs, files in os.walk(unqueried_export_dir):
+                if files:
+                    has_files = True
+                    break
+
+            if not has_files:
+                messagebox.showwarning("警告", f"未查询导出目录为空\n\n目录: {unqueried_export_dir}")
+                return
+
+            # 确认上传
+            result = messagebox.askquestion(
+                "确认上传",
+                f"是否将文件上传到阿里云OSS？\n\n上传目录: {unqueried_export_dir}",
+                icon='question'
+            )
+
+            if result != 'yes':
+                return
+
+            # 获取oss_sync目录路径
+            current_dir = Path(__file__).parent
+            project_root = current_dir.parent
+            oss_sync_dir = project_root / "oss_sync"
+            oss_config_file = oss_sync_dir / "oss_config.json"
+
+            # 临时更新配置文件中的oss_root（UI触发时使用unqueried_export_directory覆盖）
+            try:
+                import json
+                if oss_config_file.exists():
+                    with open(oss_config_file, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                    config['upload_settings']['oss_root'] = unqueried_export_dir
+                    with open(oss_config_file, 'w', encoding='utf-8') as f:
+                        json.dump(config, f, indent=2, ensure_ascii=False)
+                    self.logger.info(f"已临时更新OSS配置文件中的oss_root: {unqueried_export_dir}")
+                    self.logger.info("注意: 此更新仅用于本次上传，直接运行oss_uploader.py时将使用配置文件中的原始oss_root")
+            except Exception as e:
+                self.logger.warning(f"更新OSS配置文件失败: {str(e)}")
+
+            # 调用OSS上传程序
+            self.logger.info("=" * 60)
+            self.logger.info("开始上传文件到OSS")
+            self.logger.info(f"上传目录: {unqueried_export_dir}")
+
+            # 检查上传程序是否存在
+            oss_uploader_script = oss_sync_dir / "oss_uploader.py"
+            if not oss_uploader_script.exists():
+                messagebox.showerror("错误", f"找不到OSS上传程序:\n{oss_uploader_script}")
+                self.logger.error(f"OSS上传程序不存在: {oss_uploader_script}")
+                return
+
+            # 在新线程中运行上传，避免阻塞UI
+            import threading
+
+            def run_upload():
+                try:
+                    # 使用subprocess运行上传程序
+                    import subprocess
+
+                    # 构建命令
+                    cmd = [sys.executable, str(oss_uploader_script)]
+
+                    self.logger.info(f"执行命令: {' '.join(cmd)}")
+
+                    # 运行上传程序
+                    process = subprocess.Popen(
+                        cmd,
+                        cwd=str(oss_sync_dir),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace'
+                    )
+
+                    # 实时读取输出
+                    for line in process.stdout:
+                        line = line.strip()
+                        if line:
+                            self.logger.info(f"[OSS] {line}")
+
+                    # 等待进程完成
+                    return_code = process.wait()
+
+                    if return_code == 0:
+                        self.logger.info("OSS上传完成")
+                        # 在主线程中显示消息
+                        self.parent_frame.after(0, lambda: messagebox.showinfo(
+                            "上传完成",
+                            "检测结果已成功上传到OSS\n\n详细日志请查看 oss_sync/oss_upload.log"
+                        ))
+                    else:
+                        stderr_output = process.stderr.read()
+                        self.logger.error(f"OSS上传失败，返回码: {return_code}")
+                        if stderr_output:
+                            self.logger.error(f"错误信息: {stderr_output}")
+                        # 在主线程中显示错误
+                        self.parent_frame.after(0, lambda: messagebox.showerror(
+                            "上传失败",
+                            f"OSS上传失败\n\n返回码: {return_code}\n\n详细日志请查看 oss_sync/oss_upload.log"
+                        ))
+
+                except Exception as e:
+                    error_msg = f"上传过程出错: {str(e)}"
+                    self.logger.error(error_msg, exc_info=True)
+                    # 在主线程中显示错误
+                    self.parent_frame.after(0, lambda: messagebox.showerror("错误", error_msg))
+
+            # 启动上传线程
+            upload_thread = threading.Thread(target=run_upload, daemon=True)
+            upload_thread.start()
+
+            # 显示提示
+            messagebox.showinfo("上传中", "OSS上传已开始，请查看日志了解进度")
+
+        except Exception as e:
+            error_msg = f"启动OSS上传失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
 
