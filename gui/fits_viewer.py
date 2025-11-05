@@ -7986,9 +7986,6 @@ class FitsImageViewer:
             upload_thread = threading.Thread(target=run_upload, daemon=True)
             upload_thread.start()
 
-            # 显示提示
-            messagebox.showinfo("上传中", "OSS上传已开始，请查看日志了解进度")
-
         except Exception as e:
             error_msg = f"启动OSS上传失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
