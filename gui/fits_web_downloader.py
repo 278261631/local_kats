@@ -252,7 +252,18 @@ class FitsWebDownloaderGUI:
         self.detected_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
 
         ttk.Button(detected_frame, text="选择保存目录", command=self._select_detected_dir).pack(side=tk.RIGHT)
-        
+
+        # 未查询导出目录选择
+        unqueried_export_frame = ttk.Frame(download_frame)
+        unqueried_export_frame.pack(fill=tk.X, pady=(5, 5))
+
+        ttk.Label(unqueried_export_frame, text="未查询导出目录:").pack(side=tk.LEFT)
+        self.unqueried_export_dir_var = tk.StringVar()
+        self.unqueried_export_dir_entry = ttk.Entry(unqueried_export_frame, textvariable=self.unqueried_export_dir_var, width=50)
+        self.unqueried_export_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+
+        ttk.Button(unqueried_export_frame, text="选择导出目录", command=self._select_unqueried_export_dir).pack(side=tk.RIGHT)
+
         # 下载参数
         params_frame = ttk.Frame(download_frame)
         params_frame.pack(fill=tk.X, pady=(0, 5))
@@ -587,6 +598,10 @@ class FitsWebDownloaderGUI:
             detected_dir = last_selected.get("detected_directory", "")
             if detected_dir:
                 self.detected_dir_var.set(detected_dir)
+
+            unqueried_export_dir = last_selected.get("unqueried_export_directory", "")
+            if unqueried_export_dir:
+                self.unqueried_export_dir_var.set(unqueried_export_dir)
             elif diff_output_dir:
                 # 如果没有设置detected目录，但有diff输出目录，自动设置为diff输出目录下的detected子目录
                 detected_dir = os.path.join(diff_output_dir, "detected")
@@ -981,7 +996,21 @@ class FitsWebDownloaderGUI:
             self.config_manager.update_last_selected(detected_directory=directory)
             self._log(f"detected保存目录已设置: {directory}")
             self._log(f"检测结果将保存到: {directory}/YYYYMMDD/saved_HHMMSS_NNN/")
-            
+
+    def _select_unqueried_export_dir(self):
+        """选择未查询导出目录"""
+        # 获取当前目录作为初始目录
+        current_dir = self.unqueried_export_dir_var.get()
+        initial_dir = current_dir if current_dir and os.path.exists(current_dir) else os.path.expanduser("~")
+
+        directory = filedialog.askdirectory(title="选择未查询导出目录", initialdir=initial_dir)
+        if directory:
+            self.unqueried_export_dir_var.set(directory)
+            # 保存到配置
+            self.config_manager.update_last_selected(unqueried_export_directory=directory)
+            self._log(f"未查询导出目录已设置: {directory}")
+            self._log(f"未查询检测结果将导出到: {directory}/系统名/日期/天区/文件名/detection_xxx/")
+
     def _get_selected_files(self):
         """获取选中的文件"""
         selected_files = []
@@ -2979,11 +3008,13 @@ Diff统计:
                 timeout=self.timeout_var.get()
             )
 
-            # 保存下载目录、模板目录和diff输出目录
+            # 保存下载目录、模板目录、diff输出目录和未查询导出目录
             download_dir = self.download_dir_var.get().strip()
             template_dir = self.template_dir_var.get().strip()
             diff_output_dir = self.diff_output_dir_var.get().strip()
-            if download_dir or template_dir or diff_output_dir:
+            detected_dir = self.detected_dir_var.get().strip()
+            unqueried_export_dir = self.unqueried_export_dir_var.get().strip()
+            if download_dir or template_dir or diff_output_dir or detected_dir or unqueried_export_dir:
                 update_data = {}
                 if download_dir:
                     update_data['download_directory'] = download_dir
@@ -2991,6 +3022,10 @@ Diff统计:
                     update_data['template_directory'] = template_dir
                 if diff_output_dir:
                     update_data['diff_output_directory'] = diff_output_dir
+                if detected_dir:
+                    update_data['detected_directory'] = detected_dir
+                if unqueried_export_dir:
+                    update_data['unqueried_export_directory'] = unqueried_export_dir
                 self.config_manager.update_last_selected(**update_data)
 
             self._log("配置已保存")

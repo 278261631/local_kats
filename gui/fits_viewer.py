@@ -3245,17 +3245,22 @@ class FitsImageViewer:
                 messagebox.showerror("错误", "配置管理器未初始化")
                 return
 
-            export_settings = self.config_manager.get_unqueried_export_settings()
-            output_dir = export_settings.get("output_directory", "")
+            last_selected = self.config_manager.get_last_selected()
+            output_dir = last_selected.get("unqueried_export_directory", "")
 
-            # 如果输出目录为空或不存在，提示用户选择
-            if not output_dir or not os.path.exists(output_dir):
-                from tkinter import filedialog
-                output_dir = filedialog.askdirectory(title="选择导出目录")
-                if not output_dir:
+            # 如果输出目录为空，提示用户设置
+            if not output_dir:
+                messagebox.showwarning("警告", "未设置未查询导出目录\n请在下载设置中设置未查询导出目录")
+                return
+
+            # 如果目录不存在，尝试创建
+            if not os.path.exists(output_dir):
+                try:
+                    os.makedirs(output_dir, exist_ok=True)
+                    self.logger.info(f"创建导出目录: {output_dir}")
+                except Exception as e:
+                    messagebox.showerror("错误", f"无法创建导出目录: {output_dir}\n{str(e)}")
                     return
-                # 保存到配置
-                self.config_manager.update_unqueried_export_settings(output_directory=output_dir)
 
             # 收集所有符合条件的检测结果（复用跳转未查询的逻辑）
             self.logger.info("=" * 60)
