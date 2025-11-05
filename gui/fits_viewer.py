@@ -3334,6 +3334,7 @@ class FitsImageViewer:
             import shutil
             exported_count = 0
             failed_count = 0
+            exported_items = []  # 用于收集导出的检测目标信息
 
             for i, (file_node, detection_index, file_path) in enumerate(all_candidates, 1):
                 try:
@@ -3447,6 +3448,33 @@ class FitsImageViewer:
                     if copied_files:
                         exported_count += 1
                         self.logger.info(f"  ✓ 导出成功，共复制 {len(copied_files)} 个文件")
+
+                        # 收集导出信息用于生成HTML
+                        item_info = {
+                            'index': exported_count,
+                            'system_name': system_name,
+                            'date_str': date_str,
+                            'region': region,
+                            'filename': filename_without_ext,
+                            'detection_num': detection_num,
+                            'reference_file': reference_files[0].name if reference_files else None,
+                            'aligned_file': aligned_files[0].name if aligned_files else None,
+                            'query_results_file': query_results_file.name if query_results_file.exists() else None,
+                            'relative_path': f"{system_name}/{date_str}/{region}/{filename_without_ext}/{detection_dir.name}"
+                        }
+
+                        # 读取query_results文件内容
+                        if query_results_file.exists():
+                            try:
+                                with open(query_results_file, 'r', encoding='utf-8') as f:
+                                    item_info['query_results_content'] = f.read()
+                            except Exception as e:
+                                self.logger.warning(f"    读取query_results文件失败: {e}")
+                                item_info['query_results_content'] = None
+                        else:
+                            item_info['query_results_content'] = None
+
+                        exported_items.append(item_info)
                     else:
                         failed_count += 1
                         self.logger.warning(f"  ✗ 没有文件被复制")
@@ -3454,6 +3482,14 @@ class FitsImageViewer:
                 except Exception as e:
                     self.logger.error(f"  导出失败: {str(e)}", exc_info=True)
                     failed_count += 1
+
+            # 生成HTML文件
+            if exported_count > 0:
+                try:
+                    html_file = self._generate_export_html(output_dir, exported_items)
+                    self.logger.info(f"已生成HTML文件: {html_file}")
+                except Exception as e:
+                    self.logger.error(f"生成HTML文件失败: {str(e)}", exc_info=True)
 
             # 显示结果
             result_msg = f"导出完成！\n\n成功: {exported_count}\n失败: {failed_count}\n总计: {len(all_candidates)}\n\n输出目录: {output_dir}"
@@ -3476,6 +3512,369 @@ class FitsImageViewer:
             error_msg = f"批量导出失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
+
+    def _generate_export_html(self, output_dir, exported_items):
+        """生成导出检测目标的HTML展示文件
+
+        Args:
+            output_dir: 导出根目录
+            exported_items: 导出的检测目标信息列表
+
+        Returns:
+            str: 生成的HTML文件路径
+        """
+        from datetime import datetime
+
+        html_file = os.path.join(output_dir, "detection_results.html")
+
+        # 生成HTML内容
+        html_content = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>检测结果汇总 - {len(exported_items)} 个目标</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+
+        body {{
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }}
+
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+        }}
+
+        .header {{
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            text-align: center;
+        }}
+
+        .header h1 {{
+            color: #1e3c72;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }}
+
+        .header .stats {{
+            color: #666;
+            font-size: 16px;
+            margin-top: 10px;
+        }}
+
+        .header .stats span {{
+            display: inline-block;
+            margin: 0 15px;
+            padding: 5px 15px;
+            background: #f0f0f0;
+            border-radius: 5px;
+        }}
+
+        .detection-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }}
+
+        .detection-card {{
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow: hidden;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }}
+
+        .detection-card:hover {{
+            transform: translateY(-5px);
+            box-shadow: 0 8px 12px rgba(0,0,0,0.2);
+        }}
+
+        .card-header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+        }}
+
+        .card-header h2 {{
+            font-size: 18px;
+            margin-bottom: 5px;
+        }}
+
+        .card-header .meta {{
+            font-size: 13px;
+            opacity: 0.9;
+        }}
+
+        .card-images {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            padding: 15px;
+            background: #f8f9fa;
+        }}
+
+        .image-container {{
+            position: relative;
+            background: #000;
+            border-radius: 5px;
+            overflow: hidden;
+        }}
+
+        .image-container img {{
+            width: 100%;
+            height: auto;
+            display: block;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }}
+
+        .image-container:hover img {{
+            transform: scale(1.05);
+        }}
+
+        .image-label {{
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+        }}
+
+        .card-info {{
+            padding: 15px 20px;
+        }}
+
+        .info-row {{
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+        }}
+
+        .info-row:last-child {{
+            border-bottom: none;
+        }}
+
+        .info-label {{
+            color: #666;
+            font-weight: 500;
+        }}
+
+        .info-value {{
+            color: #333;
+            font-weight: 600;
+        }}
+
+        .query-results {{
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }}
+
+        .query-results pre {{
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            margin: 0;
+            font-family: 'Courier New', monospace;
+            line-height: 1.4;
+        }}
+
+        .footer {{
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+        }}
+
+        /* 模态框样式 */
+        .modal {{
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.9);
+        }}
+
+        .modal-content {{
+            margin: auto;
+            display: block;
+            max-width: 90%;
+            max-height: 90%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }}
+
+        .close {{
+            position: absolute;
+            top: 20px;
+            right: 35px;
+            color: #f1f1f1;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+        }}
+
+        .close:hover {{
+            color: #bbb;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔭 检测结果汇总</h1>
+            <div class="stats">
+                <span>📊 总计: {len(exported_items)} 个检测目标</span>
+                <span>📅 生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</span>
+            </div>
+        </div>
+
+        <div class="detection-grid">
+"""
+
+        # 为每个检测目标生成卡片
+        for item in exported_items:
+            # 提取RA/DEC坐标
+            ra_dec_text = "N/A"
+            if item.get('query_results_content'):
+                import re
+                match = re.search(r'中心点坐标:\s*RA=([\d.NA]+)°,\s*DEC=([\d.NA-]+)°', item['query_results_content'])
+                if match:
+                    ra_dec_text = f"RA: {match.group(1)}°  DEC: {match.group(2)}°"
+
+            reference_path = f"{item['relative_path']}/{item['reference_file']}" if item['reference_file'] else ""
+            aligned_path = f"{item['relative_path']}/{item['aligned_file']}" if item['aligned_file'] else ""
+
+            html_content += f"""
+            <div class="detection-card">
+                <div class="card-header">
+                    <h2>检测结果 #{item['index']}</h2>
+                    <div class="meta">系统: {item['system_name']} | 天区: {item['region']} | 日期: {item['date_str']}</div>
+                </div>
+
+                <div class="card-images">
+"""
+
+            if item['reference_file']:
+                html_content += f"""
+                    <div class="image-container">
+                        <img src="{reference_path}" alt="Reference" onclick="openModal(this.src)">
+                        <div class="image-label">Reference</div>
+                    </div>
+"""
+
+            if item['aligned_file']:
+                html_content += f"""
+                    <div class="image-container">
+                        <img src="{aligned_path}" alt="Aligned" onclick="openModal(this.src)">
+                        <div class="image-label">Aligned</div>
+                    </div>
+"""
+
+            html_content += """
+                </div>
+
+                <div class="card-info">
+"""
+
+            html_content += f"""
+                    <div class="info-row">
+                        <span class="info-label">文件名:</span>
+                        <span class="info-value">{item['filename']}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">检测编号:</span>
+                        <span class="info-value">#{item['detection_num']:03d}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">坐标:</span>
+                        <span class="info-value">{ra_dec_text}</span>
+                    </div>
+"""
+
+            if item.get('query_results_content'):
+                html_content += f"""
+                    <div class="query-results">
+                        <pre>{item['query_results_content']}</pre>
+                    </div>
+"""
+
+            html_content += """
+                </div>
+            </div>
+"""
+
+        html_content += f"""
+        </div>
+
+        <div class="footer">
+            <p>生成于 {datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")}</p>
+            <p>导出目录: {output_dir}</p>
+        </div>
+    </div>
+
+    <!-- 模态框 -->
+    <div id="imageModal" class="modal" onclick="closeModal()">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <img class="modal-content" id="modalImage">
+    </div>
+
+    <script>
+        function openModal(src) {{
+            document.getElementById('imageModal').style.display = 'block';
+            document.getElementById('modalImage').src = src;
+        }}
+
+        function closeModal() {{
+            document.getElementById('imageModal').style.display = 'none';
+        }}
+
+        // ESC键关闭模态框
+        document.addEventListener('keydown', function(event) {{
+            if (event.key === 'Escape') {{
+                closeModal();
+            }}
+        }});
+    </script>
+</body>
+</html>
+"""
+
+        # 写入HTML文件
+        with open(html_file, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+
+        return html_file
 
     def _open_download_directory(self):
         """打开当前下载目录"""
