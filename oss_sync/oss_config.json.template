@@ -7,7 +7,7 @@
   },
   "upload_settings": {
     "oss_root": "",
-    "file_extensions": [".fits", ".fit", ".png", ".jpg", ".txt"],
+    "file_extensions": [".fits", ".fit", ".png", ".jpg", ".html", ".txt"],
     "max_workers": 4,
     "retry_times": 3,
     "timeout": 300
