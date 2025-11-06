@@ -8488,26 +8488,47 @@ class FitsImageViewer:
                         self.logger.info("=" * 60)
                         self.logger.info("OSS上传完成")
                         self.logger.info("=" * 60)
-                        # 在主线程中显示消息
-                        self.parent_frame.after(0, lambda: messagebox.showinfo(
-                            "上传完成",
-                            "检测结果已成功上传到OSS\n\n详细日志请查看 oss_sync/oss_upload.log"
-                        ))
+                        # 在主线程中显示消息（自动模式下静默）
+                        if not getattr(self, "_auto_silent_mode", False):
+                            self.parent_frame.after(0, lambda: messagebox.showinfo(
+                                "上传完成",
+                                "检测结果已成功上传到OSS\n\n详细日志请查看 oss_sync/oss_upload.log"
+                            ))
+                        # 恢复静默标志（若启用过）
+                        try:
+                            self._auto_silent_mode = False
+                        except Exception:
+                            pass
+
                     else:
                         self.logger.error("=" * 60)
                         self.logger.error(f"OSS上传失败，返回码: {return_code}")
                         self.logger.error("=" * 60)
-                        # 在主线程中显示错误
-                        self.parent_frame.after(0, lambda: messagebox.showerror(
-                            "上传失败",
-                            f"OSS上传失败\n\n返回码: {return_code}\n\n详细日志请查看 oss_sync/oss_upload.log"
-                        ))
+                        # 
+                        try:
+                            self._auto_silent_mode = False
+                        except Exception:
+                            pass
+
+                        # 在主线程中显示错误（自动模式下静默）
+                        if not getattr(self, "_auto_silent_mode", False):
+                            self.parent_frame.after(0, lambda: messagebox.showerror(
+                                "上传失败",
+                                f"OSS上传失败\n\n返回码: {return_code}\n\n详细日志请查看 oss_sync/oss_upload.log"
+                            ))
 
                 except Exception as e:
                     error_msg = f"上传过程出错: {str(e)}"
                     self.logger.error(error_msg, exc_info=True)
-                    # 在主线程中显示错误
-                    self.parent_frame.after(0, lambda: messagebox.showerror("错误", error_msg))
+                    # 在主线程中显示错误（自动模式下静默）
+                    if not getattr(self, "_auto_silent_mode", False):
+                        self.parent_frame.after(0, lambda: messagebox.showerror("错误", error_msg))
+
+                    # 结束时恢复静默标志（若启用过）
+                    try:
+                        self._auto_silent_mode = False
+                    except Exception:
+                        pass
 
             # 启动上传线程
             upload_thread = threading.Thread(target=run_upload, daemon=True)

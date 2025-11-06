@@ -1976,10 +1976,16 @@ Diff统计:
             self._log(error_msg)
             import traceback
             self._log(traceback.format_exc())
-            self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
+            self.root.after(0, lambda: (None if getattr(self, "_auto_silent_mode", False) else messagebox.showerror("错误", error_msg)))
         finally:
             # 重新启用按钮
             self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
+            # 
+            try:
+                self._auto_silent_mode = False
+            except Exception:
+                pass
+
             # 
             # 
             # 
@@ -2244,14 +2250,14 @@ Diff统计:
             self._log("=" * 60)
 
             # 显示完成消息
-            self.root.after(0, lambda: messagebox.showinfo("完成", "全天下载diff处理完成！"))
+            self.root.after(0, lambda: (None if getattr(self, "_auto_silent_mode", False) else messagebox.showinfo("完成", "全天下载diff处理完成！")))
 
         except Exception as e:
             error_msg = f"全天批量处理失败: {str(e)}"
             self._log(error_msg)
             import traceback
             self._log(traceback.format_exc())
-            self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
+            self.root.after(0, lambda: (None if getattr(self, "_auto_silent_mode", False) else messagebox.showerror("错误", error_msg)))
         finally:
             # 重新启用按钮
             self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
@@ -2262,6 +2268,12 @@ Diff统计:
             self.root.after(0, lambda: self.url_builder.set_pause_batch_button_state("disabled"))
             self.root.after(0, lambda: self.url_builder.set_stop_batch_button_state("disabled"))
             self.root.after(0, lambda: self.status_label.config(text="就绪"))
+            # 恢复静默模式标志（若启用过）
+            try:
+                self._auto_silent_mode = False
+            except Exception:
+                pass
+
 
     def _batch_process_region(self, selected_files, tel_name, date, k_number):
         """
@@ -3035,19 +3047,25 @@ Diff统计:
             self._log("=" * 60)
 
             # 显示完成消息
-            self.root.after(0, lambda: messagebox.showinfo("完成", f"全天全系统下载diff处理完成！\n总共处理了 {total_files_processed} 个文件"))
+            self.root.after(0, lambda: (None if getattr(self, "_auto_silent_mode", False) else messagebox.showinfo("完成", f"全天全系统下载diff处理完成！\n总共处理了 {total_files_processed} 个文件")))
 
         except Exception as e:
             error_msg = f"全天全系统批量处理失败: {str(e)}"
             self._log(error_msg)
             import traceback
             self._log(traceback.format_exc())
-            self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
+            self.root.after(0, lambda: (None if getattr(self, "_auto_silent_mode", False) else messagebox.showerror("错误", error_msg)))
         finally:
             # 重新启用按钮
             self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
             self.root.after(0, lambda: self.url_builder.set_full_day_batch_button_state("normal"))
             self.root.after(0, lambda: self.url_builder.set_full_day_all_systems_batch_button_state("normal"))
+            # 恢复静默标志（若启用过）
+            try:
+                self._auto_silent_mode = False
+            except Exception:
+                pass
+
             self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.download_button.config(state="normal"))
             # 禁用暂停和停止按钮
@@ -3176,7 +3194,8 @@ Diff统计:
             self._log(error_msg)
             import traceback
             self._log(traceback.format_exc())
-            messagebox.showerror("错误", error_msg)
+            if not getattr(self, "_auto_silent_mode", False):
+                messagebox.showerror("错误", error_msg)
 
     def _auto_select_all_and_batch(self):
         """自动执行：全选并批量处理"""
@@ -3184,7 +3203,8 @@ Diff统计:
             # 检查是否有文件
             if not self.fits_files_list:
                 self._log("未找到FITS文件，无法执行批量处理")
-                messagebox.showwarning("警告", "未找到FITS文件")
+                if not getattr(self, "_auto_silent_mode", False):
+                    messagebox.showwarning("警告", "未找到FITS文件")
                 return
 
             self._log(f"找到 {len(self.fits_files_list)} 个FITS文件")
@@ -3201,18 +3221,27 @@ Diff统计:
             self._log(error_msg)
             import traceback
             self._log(traceback.format_exc())
-            messagebox.showerror("错误", error_msg)
+            if not getattr(self, "_auto_silent_mode", False):
+                messagebox.showerror("错误", error_msg)
 
     def _auto_execute_batch(self):
-        """自动执行：批量下载并diff"""
+        """自动执行：批量下载并diff（全程静默，无弹窗打断）"""
         try:
             self._log("开始批量下载并diff...")
 
             # 标记后续需要自动执行 批量查询 和 批量导出未查询
             self._auto_chain_followups = True
 
-            # 执行批量处理
-            self._batch_process()
+            # 开启静默模式，避免任何弹窗阻塞（包含后续查询/导出/上传链）
+            setattr(self, "_auto_silent_mode", True)
+            try:
+                # 需要静默viewer里的导出/OSS上传弹窗
+                self.fits_viewer._auto_silent_mode = True
+            except Exception:
+                pass
+
+            # 静默执行批量处理（屏蔽确认/提示类弹窗）
+            self._run_without_messageboxes(self._batch_process)
 
         except Exception as e:
             error_msg = f"自动批量处理失败: {str(e)}"
@@ -3226,15 +3255,17 @@ Diff统计:
         try:
             self._log("开始全天下载diff...")
 
-            # 执行全天下载diff
-            self._full_day_batch_process()
+            # 静默执行全天下载diff（屏蔽确认对话框）
+            self._run_without_messageboxes(self._full_day_batch_process)
 
         except Exception as e:
             error_msg = f"自动全天下载diff失败: {str(e)}"
             self._log(error_msg)
             import traceback
             self._log(traceback.format_exc())
-            messagebox.showerror("错误", error_msg)
+            # 自动模式下也不弹框
+            if not getattr(self, "_auto_silent_mode", False):
+                messagebox.showerror("错误", error_msg)
 
     # ========================= 自动链：批量 → 批量查询 → 批量导出未查询 =========================
     def _normalize_path(self, p: str) -> str:
@@ -3383,8 +3414,16 @@ Diff统计:
                 self._log("[自动] 已启用自动链OSS上传，500ms后开始上传...")
                 self.root.after(500, self._auto_upload_to_oss)
             else:
-                # 关闭自动链
+                # 关闭自动链并恢复静默标志
                 self._auto_chain_followups = False
+                try:
+                    self._auto_silent_mode = False
+                except Exception:
+                    pass
+                try:
+                    self.fits_viewer._auto_silent_mode = False
+                except Exception:
+                    pass
 
 
     def _auto_upload_to_oss(self):
@@ -3403,23 +3442,31 @@ Diff统计:
             import traceback
             self._log(traceback.format_exc())
         finally:
-            # 关闭自动链
+            # 关闭自动链，并恢复下载器的静默标志（viewer会在上传线程结束时恢复）
             self._auto_chain_followups = False
+            try:
+                self._auto_silent_mode = False
+            except Exception:
+                pass
 
     def _auto_full_day_all_systems_batch(self):
         """自动执行：全天全系统diff"""
         try:
             self._log("开始全天全系统diff...")
 
-            # 执行全天全系统diff
-            self._full_day_all_systems_batch_process()
+            # 开启静默模式，避免任何弹窗阻塞
+            setattr(self, "_auto_silent_mode", True)
+            # 全天全系统流程不涉及viewer链条，这里无需设置 viewer 的静默标志
+            # 静默执行全天全系统diff（屏蔽确认对话框）
+            self._run_without_messageboxes(self._full_day_all_systems_batch_process)
 
         except Exception as e:
             error_msg = f"自动全天全系统diff失败: {str(e)}"
             self._log(error_msg)
             import traceback
             self._log(traceback.format_exc())
-            messagebox.showerror("错误", error_msg)
+            if not getattr(self, "_auto_silent_mode", False):
+                messagebox.showerror("错误", error_msg)
 
 
 def main():
