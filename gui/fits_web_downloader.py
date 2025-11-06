@@ -70,6 +70,9 @@ class FitsWebDownloaderGUI:
         self.batch_pause_event = threading.Event()  # 暂停事件
         self.batch_pause_event.set()  # 初始为非暂停状态
 
+        # 自动链：批量→查询→导出 控制开关
+        self._auto_chain_followups = False
+
         # 保存自动执行参数
         self.auto_date = auto_date
         self.auto_telescope = auto_telescope
@@ -84,7 +87,7 @@ class FitsWebDownloaderGUI:
         # 如果有自动执行参数，设置UI并执行相应操作
         if self.auto_date:
             self.root.after(1000, self._apply_auto_settings)
-        
+
     def _setup_logging(self):
         """设置日志"""
         logging.basicConfig(
@@ -92,13 +95,13 @@ class FitsWebDownloaderGUI:
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         self.logger = logging.getLogger(__name__)
-        
+
     def _create_widgets(self):
         """创建界面组件"""
         # 创建主框架
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
+
         # 创建笔记本控件（标签页）
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
@@ -129,7 +132,7 @@ class FitsWebDownloaderGUI:
         self._create_viewer_widgets()
         self._create_advanced_settings_widgets()
         self._create_log_widgets()
-        
+
     def _create_scan_widgets(self):
         """创建扫描和下载界面"""
         # URL构建器区域
@@ -148,33 +151,33 @@ class FitsWebDownloaderGUI:
         # 文件列表区域
         list_frame = ttk.LabelFrame(self.scan_frame, text="FITS文件列表", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
+
         # 创建Treeview显示文件列表
         columns = ("filename", "size", "url")
         self.file_tree = ttk.Treeview(list_frame, columns=columns, show="tree headings", height=15)
-        
+
         # 设置列标题
         self.file_tree.heading("#0", text="选择")
         self.file_tree.heading("filename", text="文件名")
         self.file_tree.heading("size", text="大小")
         self.file_tree.heading("url", text="URL")
-        
+
         # 设置列宽
         self.file_tree.column("#0", width=60)
         self.file_tree.column("filename", width=300)
         self.file_tree.column("size", width=100)
         self.file_tree.column("url", width=400)
-        
+
         # 添加滚动条
         tree_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.file_tree.yview)
         self.file_tree.configure(yscrollcommand=tree_scroll.set)
-        
+
         self.file_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         # 绑定点击事件
         self.file_tree.bind('<Button-1>', self._on_tree_click)
-        
+
         # 选择控制按钮
         select_frame = ttk.Frame(list_frame)
         select_frame.pack(fill=tk.X, pady=(5, 0))
@@ -204,11 +207,11 @@ class FitsWebDownloaderGUI:
                                command=lambda idx=region_index: self._select_by_region(idx))
                 btn.pack(side=tk.LEFT, padx=(0, 2))
                 self.region_buttons.append(btn)
-        
+
         # 下载控制区域
         download_frame = ttk.LabelFrame(self.scan_frame, text="下载设置", padding=10)
         download_frame.pack(fill=tk.X)
-        
+
         # 下载目录选择
         dir_frame = ttk.Frame(download_frame)
         dir_frame.pack(fill=tk.X, pady=(0, 5))
@@ -291,21 +294,21 @@ class FitsWebDownloaderGUI:
         if not ASTAPProcessor:
             astap_checkbox.config(state="disabled")
             ttk.Label(params_frame, text="(ASTAP处理器不可用)", foreground="gray").pack(side=tk.LEFT, padx=(5, 0))
-        
+
         # 下载按钮和进度条
         control_frame = ttk.Frame(download_frame)
         control_frame.pack(fill=tk.X)
-        
+
         self.download_button = ttk.Button(control_frame, text="开始下载", command=self._start_download)
         self.download_button.pack(side=tk.LEFT)
-        
+
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(control_frame, variable=self.progress_var, length=300)
         self.progress_bar.pack(side=tk.LEFT, padx=(10, 10), fill=tk.X, expand=True)
-        
+
         self.status_label = ttk.Label(control_frame, text="就绪")
         self.status_label.pack(side=tk.RIGHT)
-        
+
     def _create_viewer_widgets(self):
         """创建图像查看界面"""
         # 文件选择区域
@@ -529,7 +532,7 @@ class FitsWebDownloaderGUI:
         # 日志控制按钮
         log_control_frame = ttk.Frame(self.log_frame)
         log_control_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-        
+
         ttk.Button(log_control_frame, text="清除日志", command=self._clear_log).pack(side=tk.LEFT)
         ttk.Button(log_control_frame, text="保存日志", command=self._save_log).pack(side=tk.LEFT, padx=(10, 0))
 
@@ -622,7 +625,7 @@ class FitsWebDownloaderGUI:
         """URL变化事件处理"""
         self._log(f"URL已更新: {url}")
         # 可以在这里添加其他URL变化时的处理逻辑
-        
+
     def _start_scan(self):
         """开始扫描"""
         # 获取当前构建的URL
@@ -654,21 +657,21 @@ class FitsWebDownloaderGUI:
         thread = threading.Thread(target=self._scan_thread, args=(url,))
         thread.daemon = True
         thread.start()
-        
+
     def _scan_thread(self, url):
         """扫描线程"""
         try:
             self._log(f"开始扫描URL: {url}")
-            
+
             # 尝试目录扫描器
             try:
                 fits_files = self.directory_scanner.scan_directory_listing(url)
             except Exception as e:
                 self._log(f"目录扫描失败，尝试通用扫描器: {str(e)}")
                 fits_files = self.scanner.scan_fits_files(url)
-            
+
             self.fits_files_list = fits_files
-            
+
             # 更新界面
             self.root.after(0, self._update_file_list)
             self._log(f"扫描完成，找到 {len(fits_files)} 个FITS文件")
@@ -685,7 +688,7 @@ class FitsWebDownloaderGUI:
             # 重新启用扫描按钮
             self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.scan_status_label.config(text="就绪"))
-            
+
     def _update_file_list(self):
         """更新文件列表显示"""
         for filename, url, size in self.fits_files_list:
@@ -762,17 +765,17 @@ class FitsWebDownloaderGUI:
                 current_text = self.file_tree.item(item, "text")
                 new_text = "☑" if current_text == "☐" else "☐"
                 self.file_tree.item(item, text=new_text)
-            
+
     def _select_all(self):
         """全选"""
         for item in self.file_tree.get_children():
             self.file_tree.item(item, text="☑")
-            
+
     def _deselect_all(self):
         """全不选"""
         for item in self.file_tree.get_children():
             self.file_tree.item(item, text="☐")
-            
+
     def _invert_selection(self):
         """反选"""
         for item in self.file_tree.get_children():
@@ -1944,6 +1947,16 @@ Diff统计:
         finally:
             # 重新启用按钮
             self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
+            # 
+            # 
+            # 
+            # 
+            # 
+            # [Auto] [Chain] [Batch] []
+            if getattr(self, "_auto_chain_followups", False):
+                # [Note] :     GUI 
+                self.root.after(500, self._auto_batch_query)
+
             self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.download_button.config(state="normal"))
             # 禁用暂停和停止按钮
@@ -3162,6 +3175,9 @@ Diff统计:
         try:
             self._log("开始批量下载并diff...")
 
+            # 标记后续需要自动执行 批量查询 和 批量导出未查询
+            self._auto_chain_followups = True
+
             # 执行批量处理
             self._batch_process()
 
@@ -3186,6 +3202,142 @@ Diff统计:
             import traceback
             self._log(traceback.format_exc())
             messagebox.showerror("错误", error_msg)
+
+    # ========================= 自动链：批量 → 批量查询 → 批量导出未查询 =========================
+    def _normalize_path(self, p: str) -> str:
+        import os
+        return os.path.normcase(os.path.normpath(p)) if p else ""
+
+    def _find_viewer_tree_node_by_path(self, target_path: str):
+        """在 FitsImageViewer 的目录树中按绝对路径查找节点，返回 item id 或 None"""
+        tree = getattr(self.fits_viewer, "directory_tree", None)
+        if tree is None or not target_path:
+            return None
+        norm_target = self._normalize_path(target_path)
+
+        def dfs(parent_id):
+            for item in tree.get_children(parent_id):
+                vals = tree.item(item, "values")
+                node_path = self._normalize_path(vals[0]) if vals else ""
+                if node_path == norm_target:
+                    return item
+                found = dfs(item)
+                if found:
+                    return found
+            return None
+
+        return dfs("")
+
+    def _run_without_messageboxes(self, func):
+        """在一次调用期间临时屏蔽 messagebox 弹窗，自动同意确认并跳过“打开目录”。"""
+        from tkinter import messagebox as mb
+        saved = {}
+        for name in ("showinfo", "showwarning", "showerror", "askyesno", "askquestion"):
+            if hasattr(mb, name):
+                saved[name] = getattr(mb, name)
+
+        def _log_msg(kind, title, message=None):
+            msg = f"[自动静默][{kind}] {title}"
+            if message:
+                msg += f": {message}"
+            self._log(msg)
+
+        def _silent_showinfo(title, message=None, *args, **kwargs):
+            _log_msg("info", title, message)
+            return None
+
+        def _silent_showwarning(title, message=None, *args, **kwargs):
+            _log_msg("warning", title, message)
+            return None
+
+        def _silent_showerror(title, message=None, *args, **kwargs):
+            _log_msg("error", title, message)
+            return None
+
+        def _silent_ask(title, message=None, *args, **kwargs):
+            text = f"{title} {message}" if message is not None else str(title)
+            # 若包含“打开目录”，返回否；其他确认一律同意
+            if ("打开目录" in text) or ("open" in text.lower() and "dir" in text.lower()):
+                _log_msg("ask", title, message)
+                return False
+            _log_msg("ask", title, message)
+            return True
+
+        try:
+            if "showinfo" in saved:
+                mb.showinfo = _silent_showinfo
+            if "showwarning" in saved:
+                mb.showwarning = _silent_showwarning
+            if "showerror" in saved:
+                mb.showerror = _silent_showerror
+            if "askyesno" in saved:
+                mb.askyesno = _silent_ask
+            if "askquestion" in saved:
+                mb.askquestion = _silent_ask
+            return func()
+        finally:
+            for name, fn in saved.items():
+                setattr(mb, name, fn)
+
+    def _auto_batch_query(self):
+        """自动：在图像查看器中定位到当前天区目录并执行“批量查询(小行星/变星)”"""
+        import os
+        try:
+            self._log("[自动] 开始批量查询(小行星/变星)...")
+            # 切换到“FITS查看”页签
+            self.notebook.select(self.viewer_frame)
+
+            # 刷新目录树
+            self.fits_viewer._refresh_directory_tree()
+
+            # 依据当前选择构建天区下载目录路径：根/telescope/date/k_number
+            selections = self.url_builder.get_current_selections()
+            tel_name = selections.get('telescope_name', 'Unknown')
+            date = selections.get('date', 'Unknown')
+            k_number = selections.get('k_number', 'Unknown')
+            base_download_dir = self.download_dir_var.get().strip()
+            region_dir = os.path.join(base_download_dir, tel_name, date, k_number)
+
+            # 在目录树中定位并选中该天区节点
+            node = self._find_viewer_tree_node_by_path(region_dir)
+            if node:
+                tree = self.fits_viewer.directory_tree
+                tree.selection_set(node)
+                tree.focus(node)
+                tree.see(node)
+                self._log(f"[自动] 已选择天区目录: {region_dir}")
+            else:
+                self._log(f"[自动] 未找到天区目录节点: {region_dir}，将仍尝试执行批量查询")
+
+            # 静默执行批量查询，屏蔽可能的弹窗
+            self._run_without_messageboxes(self.fits_viewer._batch_query_asteroids_and_variables)
+
+            # 查询完成后，继续执行“批量导出未查询”
+            self.root.after(500, self._auto_batch_export_unqueried)
+        except Exception as e:
+            self._log(f"[自动] 批量查询失败: {e}")
+            import traceback
+            self._log(traceback.format_exc())
+
+    def _auto_batch_export_unqueried(self):
+        """自动：执行“批量导出未查询”并静默处理所有弹窗"""
+        try:
+            self._log("[自动] 开始批量导出未查询...")
+            # 确保停留在查看器页签并刷新目录树
+            self.notebook.select(self.viewer_frame)
+            self.fits_viewer._refresh_directory_tree()
+
+            # 静默执行导出（将自动确认导出，且不会弹出“打开目录”提示）
+            self._run_without_messageboxes(self.fits_viewer._batch_export_unqueried)
+
+            self._log("[自动] 批量导出未查询完成")
+        except Exception as e:
+            self._log(f"[自动] 批量导出未查询失败: {e}")
+            import traceback
+            self._log(traceback.format_exc())
+        finally:
+            # 关闭自动链
+            self._auto_chain_followups = False
 
     def _auto_full_day_all_systems_batch(self):
         """自动执行：全天全系统diff"""
