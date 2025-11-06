@@ -4045,6 +4045,7 @@ class FitsImageViewer:
                     <!-- 闪烁图像容器 -->
                     <div class="image-container blink-container" id="blink_{card_id}">
                         <img src="{reference_path}" alt="Blink" data-ref="{reference_path}" data-aligned="{aligned_path}">
+                        <canvas id="blink_canvas_{card_id}"></canvas>
                     </div>
 
                     <!-- 点击切换图像容器 -->
@@ -4059,8 +4060,9 @@ class FitsImageViewer:
                     </div>
 
                     <!-- Detection图像容器 -->
-                    <div class="image-container detection-container" onclick="openModal('{detection_path}')">
+                    <div class="image-container detection-container" id="detection_{card_id}" onclick="openModal('{detection_path}')">
                         <img src="{detection_path}" alt="Detection">
+                        <canvas id="detection_canvas_{card_id}"></canvas>
                     </div>
                 </div>
 
@@ -4128,17 +4130,69 @@ class FitsImageViewer:
             }}
         }});
 
+        // 绘制中心十字准星（通用函数）
+        function drawCenterCrosshair(canvas, img) {{
+            if (!img.complete) {{
+                img.onload = () => drawCenterCrosshair(canvas, img);
+                return;
+            }}
+
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 绘制图像中心的绿色空心十字准星
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const crossSize = 10;  // 十字臂长
+            const crossGap = 5;    // 中心空隙
+
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 1;
+
+            // 绘制水平线（左右两段）
+            ctx.beginPath();
+            ctx.moveTo(centerX - crossGap - crossSize, centerY);
+            ctx.lineTo(centerX - crossGap, centerY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(centerX + crossGap, centerY);
+            ctx.lineTo(centerX + crossGap + crossSize, centerY);
+            ctx.stroke();
+
+            // 绘制垂直线（上下两段）
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY - crossGap - crossSize);
+            ctx.lineTo(centerX, centerY - crossGap);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY + crossGap);
+            ctx.lineTo(centerX, centerY + crossGap + crossSize);
+            ctx.stroke();
+        }}
+
         // 闪烁动画功能
         function startBlinkAnimation() {{
-            const blinkContainers = document.querySelectorAll('.blink-container img');
-            blinkContainers.forEach(img => {{
+            const blinkContainers = document.querySelectorAll('.blink-container');
+            blinkContainers.forEach(container => {{
+                const img = container.querySelector('img');
+                const canvas = container.querySelector('canvas');
                 const refSrc = img.dataset.ref;
                 const alignedSrc = img.dataset.aligned;
                 let isRef = true;
 
+                // 初始绘制十字准星
+                drawCenterCrosshair(canvas, img);
+
                 setInterval(() => {{
                     img.src = isRef ? alignedSrc : refSrc;
                     isRef = !isRef;
+                    // 图像切换后重新绘制十字准星
+                    img.onload = () => drawCenterCrosshair(canvas, img);
                 }}, 500);
             }});
         }}
@@ -4228,6 +4282,37 @@ class FitsImageViewer:
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+            // 绘制图像中心的绿色空心十字准星
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const crossSize = 10;  // 十字臂长
+            const crossGap = 5;    // 中心空隙
+
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 1;
+
+            // 绘制水平线（左右两段）
+            ctx.beginPath();
+            ctx.moveTo(centerX - crossGap - crossSize, centerY);
+            ctx.lineTo(centerX - crossGap, centerY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(centerX + crossGap, centerY);
+            ctx.lineTo(centerX + crossGap + crossSize, centerY);
+            ctx.stroke();
+
+            // 绘制垂直线（上下两段）
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY - crossGap - crossSize);
+            ctx.lineTo(centerX, centerY - crossGap);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY + crossGap);
+            ctx.lineTo(centerX, centerY + crossGap + crossSize);
+            ctx.stroke();
+
             // 在所有图像上都绘制标注
             const currentIndex = parseInt(img.dataset.index);
             console.log('Current image index:', currentIndex);
@@ -4308,6 +4393,15 @@ class FitsImageViewer:
                 // container.id 格式是 "click_card_1"，我们需要提取 "card_1"
                 const cardId = container.id.replace('click_', '');
                 drawAnnotations(cardId);
+            }});
+
+            // 为所有detection容器绘制十字准星
+            document.querySelectorAll('.detection-container').forEach(container => {{
+                const img = container.querySelector('img');
+                const canvas = container.querySelector('canvas');
+                if (img && canvas) {{
+                    drawCenterCrosshair(canvas, img);
+                }}
             }});
         }});
     </script>
