@@ -196,7 +196,7 @@ class OSSUploader:
     def _get_oss_path(self, local_file: Path, oss_root: Path, batch_date: datetime) -> str:
         """
         根据文件路径生成 OSS 路径
-        格式: yyyy/yyyymmdd/原始相对路径(去除路径中的日期目录)
+        格式: yyyy/yyyymmdd/相对路径（原样保留，不再移除相对路径中的日期目录）
 
         Args:
             local_file: 本地文件路径
@@ -217,11 +217,8 @@ class OSSUploader:
         year = batch_date.strftime("%Y")
         date_str = batch_date.strftime("%Y%m%d")
 
-        # 从相对路径中移除日期目录(如果存在)
-        # 例如: GY5/20251102/K021/... -> GY5/K021/...
-        parts = list(relative_path.parts)
-        filtered_parts = [part for part in parts if not re.match(r'^\d{8}$', part)]
-        cleaned_relative_path = Path(*filtered_parts) if filtered_parts else Path(relative_path.name)
+        # 这里不再移除相对路径中的日期目录，保持导出目录结构：GY5/20251102/K021/...
+        cleaned_relative_path = relative_path
 
         oss_path = f"{year}/{date_str}/{cleaned_relative_path.as_posix()}"
 
