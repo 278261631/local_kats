@@ -3687,7 +3687,7 @@ class FitsImageViewer:
         date_str = exported_items[0]['date_str'] if exported_items else datetime.now().strftime("%Y%m%d")
         html_file = os.path.join(output_dir, f"detection_results_{date_str}.html")
 
-        # 生成HTML内容
+        # 生成HTML内容 - 紧凑版
         html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -3702,94 +3702,92 @@ class FitsImageViewer:
         }}
 
         body {{
-            font-family: 'Segoe UI', Arial, sans-serif;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            padding: 20px;
-            min-height: 100vh;
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 8px;
+            font-size: 12px;
         }}
 
         .container {{
-            max-width: 1400px;
+            max-width: 100%;
             margin: 0 auto;
         }}
 
         .header {{
             background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
+            padding: 8px 12px;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 8px;
             text-align: center;
         }}
 
         .header h1 {{
-            color: #1e3c72;
-            font-size: 32px;
-            margin-bottom: 10px;
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 4px;
         }}
 
         .header .stats {{
             color: #666;
-            font-size: 16px;
-            margin-top: 10px;
+            font-size: 11px;
+            margin-top: 4px;
         }}
 
         .header .stats span {{
             display: inline-block;
-            margin: 0 15px;
-            padding: 5px 15px;
+            margin: 0 8px;
+            padding: 2px 8px;
             background: #f0f0f0;
-            border-radius: 5px;
+            border-radius: 3px;
         }}
 
         .detection-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 8px;
+            margin-bottom: 8px;
         }}
 
         .detection-card {{
             background: white;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             overflow: hidden;
-            transition: transform 0.2s, box-shadow 0.2s;
         }}
 
         .detection-card:hover {{
-            transform: translateY(-5px);
-            box-shadow: 0 8px 12px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
         }}
 
         .card-header {{
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 15px 20px;
+            padding: 6px 10px;
         }}
 
         .card-header h2 {{
-            font-size: 18px;
-            margin-bottom: 5px;
+            font-size: 13px;
+            margin-bottom: 2px;
         }}
 
         .card-header .meta {{
-            font-size: 13px;
+            font-size: 10px;
             opacity: 0.9;
         }}
 
         .card-images {{
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
-            gap: 10px;
-            padding: 15px;
-            background: #f8f9fa;
+            gap: 4px;
+            padding: 6px;
+            background: #fafafa;
         }}
 
         .image-container {{
             position: relative;
             background: #000;
-            border-radius: 5px;
+            border-radius: 3px;
             overflow: hidden;
         }}
 
@@ -3811,13 +3809,13 @@ class FitsImageViewer:
 
         .image-label {{
             position: absolute;
-            top: 5px;
-            right: 5px;
+            top: 3px;
+            right: 3px;
             background: rgba(0,0,0,0.6);
             color: white;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 10px;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-size: 9px;
             font-weight: normal;
             z-index: 10;
             opacity: 0.8;
@@ -3849,15 +3847,15 @@ class FitsImageViewer:
         }}
 
         .card-info {{
-            padding: 15px 20px;
+            padding: 6px 10px;
         }}
 
         .info-row {{
             display: flex;
             justify-content: space-between;
-            padding: 8px 0;
+            padding: 3px 0;
             border-bottom: 1px solid #eee;
-            font-size: 14px;
+            font-size: 11px;
         }}
 
         .info-row:last-child {{
@@ -3875,12 +3873,12 @@ class FitsImageViewer:
         }}
 
         .query-results {{
-            margin-top: 10px;
-            padding: 10px;
+            margin-top: 4px;
+            padding: 4px;
             background: #f8f9fa;
-            border-radius: 5px;
-            font-size: 12px;
-            max-height: 200px;
+            border-radius: 3px;
+            font-size: 10px;
+            max-height: 120px;
             overflow-y: auto;
         }}
 
@@ -3889,17 +3887,17 @@ class FitsImageViewer:
             word-wrap: break-word;
             margin: 0;
             font-family: 'Courier New', monospace;
-            line-height: 1.4;
+            line-height: 1.3;
         }}
 
         .footer {{
             background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 6px 10px;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             text-align: center;
             color: #666;
-            font-size: 14px;
+            font-size: 10px;
         }}
 
         /* 模态框样式 */
