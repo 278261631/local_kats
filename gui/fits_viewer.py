@@ -3439,11 +3439,13 @@ class FitsImageViewer:
                     detection_num = detection_index + 1
                     reference_pattern = f"{detection_num:03d}_*_1_reference.png"
                     aligned_pattern = f"{detection_num:03d}_*_2_aligned.png"
+                    detection_pattern = f"{detection_num:03d}_*_3_detection.png"
                     query_results_file = cutouts_dir / f"query_results_{detection_num:03d}.txt"
 
                     # 查找文件
                     reference_files = list(cutouts_dir.glob(reference_pattern))
                     aligned_files = list(cutouts_dir.glob(aligned_pattern))
+                    detection_files = list(cutouts_dir.glob(detection_pattern))
 
                     # 检查aligned图像是否有过中心的直线（如果启用了直线检测过滤）
                     if self.enable_line_detection_filter_var.get() and aligned_files:
@@ -3475,6 +3477,16 @@ class FitsImageViewer:
                     else:
                         self.logger.warning(f"    文件不存在: {aligned_pattern}")
 
+                    # 复制detection.png
+                    if detection_files:
+                        src_file = detection_files[0]
+                        dst_file = export_subdir / src_file.name
+                        shutil.copy2(src_file, dst_file)
+                        copied_files.append(src_file.name)
+                        self.logger.info(f"    已复制: {src_file.name}")
+                    else:
+                        self.logger.warning(f"    文件不存在: {detection_pattern}")
+
                     # 复制query_results文件
                     if query_results_file.exists():
                         dst_file = export_subdir / query_results_file.name
@@ -3498,6 +3510,7 @@ class FitsImageViewer:
                             'detection_num': detection_num,
                             'reference_file': reference_files[0].name if reference_files else None,
                             'aligned_file': aligned_files[0].name if aligned_files else None,
+                            'detection_file': detection_files[0].name if detection_files else None,
                             'query_results_file': query_results_file.name if query_results_file.exists() else None,
                             'relative_path': f"{system_name}/{date_str}/{region}/{filename_without_ext}/{detection_dir.name}"
                         }
@@ -3652,6 +3665,7 @@ class FitsImageViewer:
         """
         from datetime import datetime
         import html
+        import json
 
         def escape_path(path):
             """转义路径用于HTML，使用URL编码处理特殊字符"""
@@ -3766,7 +3780,7 @@ class FitsImageViewer:
 
         .card-images {{
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 10px;
             padding: 15px;
             background: #f8f9fa;
@@ -3783,12 +3797,15 @@ class FitsImageViewer:
             width: 100%;
             height: auto;
             display: block;
-            cursor: pointer;
-            transition: transform 0.2s;
         }}
 
-        .image-container:hover img {{
-            transform: scale(1.05);
+        .image-container canvas {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
         }}
 
         .image-label {{
@@ -3801,6 +3818,28 @@ class FitsImageViewer:
             border-radius: 3px;
             font-size: 11px;
             font-weight: bold;
+            z-index: 10;
+        }}
+
+        .blink-container {{
+            cursor: default;
+        }}
+
+        .click-container {{
+            cursor: pointer;
+        }}
+
+        .click-container:hover img {{
+            opacity: 0.9;
+        }}
+
+        .detection-container {{
+            cursor: pointer;
+        }}
+
+        .detection-container:hover img {{
+            transform: scale(1.05);
+            transition: transform 0.2s;
         }}
 
         .card-info {{
@@ -3910,18 +3949,65 @@ class FitsImageViewer:
 
         # 为每个检测目标生成卡片
         for item in exported_items:
-            # 提取RA/DEC坐标
+            # 提取RA/DEC坐标和查询结果
             ra_dec_text = "N/A"
+            asteroids = []
+            variables = []
+
             if item.get('query_results_content'):
                 import re
+                # 提取坐标
                 match = re.search(r'中心点坐标:\s*RA=([\d.NA]+)°,\s*DEC=([\d.NA-]+)°', item['query_results_content'])
                 if match:
                     ra_dec_text = f"RA: {match.group(1)}°  DEC: {match.group(2)}°"
 
+                # 解析小行星列表
+                asteroid_section = re.search(r'小行星列表:(.*?)(?:变星列表:|$)', item['query_results_content'], re.DOTALL)
+                if asteroid_section:
+                    for line in asteroid_section.group(1).strip().split('\n'):
+                        if line.strip() and not line.startswith('-'):
+                            # 解析格式: RA=123.456, DEC=78.901, Name=...
+                            ra_match = re.search(r'RA=([\d.]+)', line)
+                            dec_match = re.search(r'DEC=([-\d.]+)', line)
+                            name_match = re.search(r'Name=([^,]+)', line)
+                            if ra_match and dec_match:
+                                asteroids.append({
+                                    'ra': float(ra_match.group(1)),
+                                    'dec': float(dec_match.group(1)),
+                                    'name': name_match.group(1).strip() if name_match else 'Unknown'
+                                })
+
+                # 解析变星列表
+                vsx_section = re.search(r'变星列表:(.*?)$', item['query_results_content'], re.DOTALL)
+                if vsx_section:
+                    for line in vsx_section.group(1).strip().split('\n'):
+                        if line.strip() and not line.startswith('-'):
+                            # 解析格式: RA=123.456, DEC=78.901, Name=...
+                            ra_match = re.search(r'RA=([\d.]+)', line)
+                            dec_match = re.search(r'DEC=([-\d.]+)', line)
+                            name_match = re.search(r'Name=([^,]+)', line)
+                            if ra_match and dec_match:
+                                variables.append({
+                                    'ra': float(ra_match.group(1)),
+                                    'dec': float(dec_match.group(1)),
+                                    'name': name_match.group(1).strip() if name_match else 'Unknown'
+                                })
+
             # 使用正斜杠作为路径分隔符，浏览器可以正确识别
-            # 不需要URL编码，直接使用原始路径
             reference_path = escape_path(f"{item['relative_path']}/{item['reference_file']}") if item['reference_file'] else ""
             aligned_path = escape_path(f"{item['relative_path']}/{item['aligned_file']}") if item['aligned_file'] else ""
+            detection_path = escape_path(f"{item['relative_path']}/{item['detection_file']}") if item['detection_file'] else ""
+
+            # 从aligned文件名中提取中心点坐标
+            center_ra = None
+            center_dec = None
+            if item['aligned_file']:
+                import re
+                # 尝试从文件名提取RA/DEC: 001_RA285.123456_DEC43.567890_...
+                ra_dec_match = re.search(r'RA([\d.]+)_DEC([-\d.]+)', item['aligned_file'])
+                if ra_dec_match:
+                    center_ra = float(ra_dec_match.group(1))
+                    center_dec = float(ra_dec_match.group(2))
 
             # 转义文本内容
             system_name_escaped = html.escape(item['system_name'])
@@ -3929,33 +4015,42 @@ class FitsImageViewer:
             date_str_escaped = html.escape(item['date_str'])
             filename_escaped = html.escape(item['filename'])
 
+            # 生成卡片ID
+            card_id = f"card_{item['index']}"
+
             html_content += f"""
-            <div class="detection-card">
+            <div class="detection-card" id="{card_id}">
                 <div class="card-header">
                     <h2>检测结果 #{item['index']}</h2>
                     <div class="meta">系统: {system_name_escaped} | 天区: {region_escaped} | 日期: {date_str_escaped}</div>
                 </div>
 
                 <div class="card-images">
-"""
-
-            if item['reference_file']:
-                html_content += f"""
-                    <div class="image-container">
-                        <img src="{reference_path}" alt="Reference" onclick="openModal(this.src)">
-                        <div class="image-label">Reference</div>
+                    <!-- 闪烁图像容器 -->
+                    <div class="image-container blink-container" id="blink_{card_id}">
+                        <img src="{reference_path}" alt="Blink" data-ref="{reference_path}" data-aligned="{aligned_path}">
+                        <div class="image-label">Reference ⇄ Aligned</div>
                     </div>
-"""
 
-            if item['aligned_file']:
-                html_content += f"""
-                    <div class="image-container">
-                        <img src="{aligned_path}" alt="Aligned" onclick="openModal(this.src)">
-                        <div class="image-label">Aligned</div>
+                    <!-- 点击切换图像容器 -->
+                    <div class="image-container click-container" id="click_{card_id}" onclick="toggleImage('{card_id}')">
+                        <img src="{aligned_path}" alt="Click Toggle"
+                             data-images='["{aligned_path}", "{reference_path}"]'
+                             data-names='["Aligned", "Reference"]'
+                             data-index="0"
+                             data-center-ra="{center_ra if center_ra else ''}"
+                             data-center-dec="{center_dec if center_dec else ''}"
+                             data-asteroids='{json.dumps(asteroids) if asteroids else "[]"}'
+                             data-variables='{json.dumps(variables) if variables else "[]"}'>
+                        <canvas id="canvas_{card_id}"></canvas>
+                        <div class="image-label" id="label_{card_id}">Aligned (1/2) - 点击切换</div>
                     </div>
-"""
 
-            html_content += """
+                    <!-- Detection图像容器 -->
+                    <div class="image-container detection-container" onclick="openModal('{detection_path}')">
+                        <img src="{detection_path}" alt="Detection">
+                        <div class="image-label">Detection</div>
+                    </div>
                 </div>
 
                 <div class="card-info">
@@ -4005,6 +4100,7 @@ class FitsImageViewer:
     </div>
 
     <script>
+        // 模态框功能
         function openModal(src) {{
             document.getElementById('imageModal').style.display = 'block';
             document.getElementById('modalImage').src = src;
@@ -4019,6 +4115,165 @@ class FitsImageViewer:
             if (event.key === 'Escape') {{
                 closeModal();
             }}
+        }});
+
+        // 闪烁动画功能
+        function startBlinkAnimation() {{
+            const blinkContainers = document.querySelectorAll('.blink-container img');
+            blinkContainers.forEach(img => {{
+                const refSrc = img.dataset.ref;
+                const alignedSrc = img.dataset.aligned;
+                let isRef = true;
+
+                setInterval(() => {{
+                    img.src = isRef ? alignedSrc : refSrc;
+                    isRef = !isRef;
+                }}, 500);
+            }});
+        }}
+
+        // 点击切换图像功能
+        function toggleImage(cardId) {{
+            const container = document.getElementById('click_' + cardId);
+            const img = container.querySelector('img');
+            const label = document.getElementById('label_' + cardId);
+            const canvas = document.getElementById('canvas_' + cardId);
+
+            const images = JSON.parse(img.dataset.images);
+            const names = JSON.parse(img.dataset.names);
+            let currentIndex = parseInt(img.dataset.index);
+
+            // 切换到下一张图像
+            currentIndex = (currentIndex + 1) % images.length;
+            img.dataset.index = currentIndex;
+            img.src = images[currentIndex];
+            label.textContent = names[currentIndex] + ' (' + (currentIndex + 1) + '/' + images.length + ') - 点击切换';
+
+            // 重新绘制标注
+            drawAnnotations(cardId);
+        }}
+
+        // 绘制四芒星标记
+        function drawFourPointedStar(ctx, x, y, color, size = 8, lineWidth = 1, gap = 2) {{
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lineWidth;
+
+            // 绘制十字（四条线段）
+            // 上方线段
+            ctx.beginPath();
+            ctx.moveTo(x, y - gap);
+            ctx.lineTo(x, y - gap - size);
+            ctx.stroke();
+
+            // 下方线段
+            ctx.beginPath();
+            ctx.moveTo(x, y + gap);
+            ctx.lineTo(x, y + gap + size);
+            ctx.stroke();
+
+            // 左方线段
+            ctx.beginPath();
+            ctx.moveTo(x - gap, y);
+            ctx.lineTo(x - gap - size, y);
+            ctx.stroke();
+
+            // 右方线段
+            ctx.beginPath();
+            ctx.moveTo(x + gap, y);
+            ctx.lineTo(x + gap + size, y);
+            ctx.stroke();
+        }}
+
+        // 简化的RA/DEC到像素坐标转换（假设cutout是100x100像素，使用线性近似）
+        function raDecToPixel(ra, dec, centerRa, centerDec, imageWidth, imageHeight) {{
+            // 假设cutout覆盖的天区大小约为0.05度（根据实际情况调整）
+            const fovDegrees = 0.05;
+            const pixelsPerDegree = imageWidth / fovDegrees;
+
+            // 计算相对偏移（度）
+            const deltaRa = (ra - centerRa) * Math.cos(centerDec * Math.PI / 180);
+            const deltaDec = dec - centerDec;
+
+            // 转换为像素偏移（注意Y轴方向相反）
+            const x = imageWidth / 2 + deltaRa * pixelsPerDegree;
+            const y = imageHeight / 2 - deltaDec * pixelsPerDegree;
+
+            return {{ x, y }};
+        }}
+
+        // 绘制标注（小行星和变星）
+        function drawAnnotations(cardId) {{
+            const container = document.getElementById('click_' + cardId);
+            const img = container.querySelector('img');
+            const canvas = document.getElementById('canvas_' + cardId);
+
+            // 等待图像加载完成
+            if (!img.complete) {{
+                img.onload = () => drawAnnotations(cardId);
+                return;
+            }}
+
+            // 设置canvas尺寸与图像一致
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 只在显示Aligned图像时绘制标注
+            const currentIndex = parseInt(img.dataset.index);
+            if (currentIndex !== 0) return;  // 0是Aligned图像
+
+            // 获取中心点坐标
+            const centerRa = parseFloat(img.dataset.centerRa);
+            const centerDec = parseFloat(img.dataset.centerDec);
+
+            if (!centerRa || !centerDec) {{
+                console.log('No center coordinates available');
+                return;
+            }}
+
+            try {{
+                // 绘制小行星标记（青色）
+                const asteroids = JSON.parse(img.dataset.asteroids || '[]');
+                asteroids.forEach(asteroid => {{
+                    const pos = raDecToPixel(asteroid.ra, asteroid.dec, centerRa, centerDec,
+                                            canvas.width, canvas.height);
+
+                    // 检查是否在图像范围内
+                    if (pos.x >= 0 && pos.x < canvas.width && pos.y >= 0 && pos.y < canvas.height) {{
+                        drawFourPointedStar(ctx, pos.x, pos.y, 'cyan', 8, 1, 2);
+                        console.log('Drew asteroid at', pos.x, pos.y, asteroid.name);
+                    }}
+                }});
+
+                // 绘制变星标记（橘黄色）
+                const variables = JSON.parse(img.dataset.variables || '[]');
+                variables.forEach(variable => {{
+                    const pos = raDecToPixel(variable.ra, variable.dec, centerRa, centerDec,
+                                            canvas.width, canvas.height);
+
+                    // 检查是否在图像范围内
+                    if (pos.x >= 0 && pos.x < canvas.width && pos.y >= 0 && pos.y < canvas.height) {{
+                        drawFourPointedStar(ctx, pos.x, pos.y, 'orange', 8, 1, 2);
+                        console.log('Drew variable star at', pos.x, pos.y, variable.name);
+                    }}
+                }});
+            }} catch (e) {{
+                console.error('Error drawing annotations:', e);
+            }}
+        }}
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {{
+            // 启动闪烁动画
+            startBlinkAnimation();
+
+            // 为所有点击切换容器绘制初始标注
+            document.querySelectorAll('.click-container').forEach(container => {{
+                const cardId = container.id.replace('click_card_', '');
+                drawAnnotations(cardId);
+            }});
         }});
     </script>
 </body>
