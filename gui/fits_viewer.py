@@ -3806,6 +3806,7 @@ class FitsImageViewer:
             width: 100%;
             height: 100%;
             pointer-events: none;
+            z-index: 5;
         }}
 
         .image-label {{
@@ -3961,53 +3962,54 @@ class FitsImageViewer:
                 if match:
                     ra_dec_text = f"RA: {match.group(1)}°  DEC: {match.group(2)}°"
 
-                # 解析小行星列表
+                # 解析小行星列表 - 提取像素位置
                 asteroid_section = re.search(r'小行星列表:(.*?)(?:变星列表:|$)', item['query_results_content'], re.DOTALL)
                 if asteroid_section:
-                    for line in asteroid_section.group(1).strip().split('\n'):
+                    section_text = asteroid_section.group(1).strip()
+                    self.logger.info(f"解析小行星列表，内容长度: {len(section_text)}")
+                    for line in section_text.split('\n'):
                         if line.strip() and not line.startswith('-'):
-                            # 解析格式: RA=123.456, DEC=78.901, Name=...
-                            ra_match = re.search(r'RA=([\d.]+)', line)
-                            dec_match = re.search(r'DEC=([-\d.]+)', line)
-                            name_match = re.search(r'Name=([^,]+)', line)
-                            if ra_match and dec_match:
-                                asteroids.append({
-                                    'ra': float(ra_match.group(1)),
-                                    'dec': float(dec_match.group(1)),
-                                    'name': name_match.group(1).strip() if name_match else 'Unknown'
-                                })
+                            self.logger.info(f"处理小行星行: {line[:100]}")
+                            if '像素位置' in line:
+                                # 解析格式: 名称=..., RA=..., DEC=..., 像素距离=...px, 像素位置=(x, y), ...
+                                name_match = re.search(r'名称=([^,]+)', line)
+                                pixel_pos_match = re.search(r'像素位置=\(([\d.]+),\s*([\d.]+)\)', line)
 
-                # 解析变星列表
-                vsx_section = re.search(r'变星列表:(.*?)$', item['query_results_content'], re.DOTALL)
+                                if pixel_pos_match:
+                                    asteroid = {
+                                        'x': float(pixel_pos_match.group(1)),
+                                        'y': float(pixel_pos_match.group(2)),
+                                        'name': name_match.group(1).strip() if name_match else 'Unknown'
+                                    }
+                                    asteroids.append(asteroid)
+                                    self.logger.info(f"添加小行星: {asteroid}")
+
+                # 解析变星列表 - 提取像素位置
+                vsx_section = re.search(r'变星列表:(.*?)(?:卫星列表:|$)', item['query_results_content'], re.DOTALL)
                 if vsx_section:
-                    for line in vsx_section.group(1).strip().split('\n'):
+                    section_text = vsx_section.group(1).strip()
+                    self.logger.info(f"解析变星列表，内容长度: {len(section_text)}")
+                    for line in section_text.split('\n'):
                         if line.strip() and not line.startswith('-'):
-                            # 解析格式: RA=123.456, DEC=78.901, Name=...
-                            ra_match = re.search(r'RA=([\d.]+)', line)
-                            dec_match = re.search(r'DEC=([-\d.]+)', line)
-                            name_match = re.search(r'Name=([^,]+)', line)
-                            if ra_match and dec_match:
-                                variables.append({
-                                    'ra': float(ra_match.group(1)),
-                                    'dec': float(dec_match.group(1)),
-                                    'name': name_match.group(1).strip() if name_match else 'Unknown'
-                                })
+                            self.logger.info(f"处理变星行: {line[:100]}")
+                            if '像素位置' in line:
+                                # 解析格式: 名称=..., 类型=..., RA=..., DEC=..., 像素距离=...px, 像素位置=(x, y), ...
+                                name_match = re.search(r'名称=([^,]+)', line)
+                                pixel_pos_match = re.search(r'像素位置=\(([\d.]+),\s*([\d.]+)\)', line)
+
+                                if pixel_pos_match:
+                                    variable = {
+                                        'x': float(pixel_pos_match.group(1)),
+                                        'y': float(pixel_pos_match.group(2)),
+                                        'name': name_match.group(1).strip() if name_match else 'Unknown'
+                                    }
+                                    variables.append(variable)
+                                    self.logger.info(f"添加变星: {variable}")
 
             # 使用正斜杠作为路径分隔符，浏览器可以正确识别
             reference_path = escape_path(f"{item['relative_path']}/{item['reference_file']}") if item['reference_file'] else ""
             aligned_path = escape_path(f"{item['relative_path']}/{item['aligned_file']}") if item['aligned_file'] else ""
             detection_path = escape_path(f"{item['relative_path']}/{item['detection_file']}") if item['detection_file'] else ""
-
-            # 从aligned文件名中提取中心点坐标
-            center_ra = None
-            center_dec = None
-            if item['aligned_file']:
-                import re
-                # 尝试从文件名提取RA/DEC: 001_RA285.123456_DEC43.567890_...
-                ra_dec_match = re.search(r'RA([\d.]+)_DEC([-\d.]+)', item['aligned_file'])
-                if ra_dec_match:
-                    center_ra = float(ra_dec_match.group(1))
-                    center_dec = float(ra_dec_match.group(2))
 
             # 转义文本内容
             system_name_escaped = html.escape(item['system_name'])
@@ -4038,8 +4040,6 @@ class FitsImageViewer:
                              data-images='["{aligned_path}", "{reference_path}"]'
                              data-names='["Aligned", "Reference"]'
                              data-index="0"
-                             data-center-ra="{center_ra if center_ra else ''}"
-                             data-center-dec="{center_dec if center_dec else ''}"
                              data-asteroids='{json.dumps(asteroids) if asteroids else "[]"}'
                              data-variables='{json.dumps(variables) if variables else "[]"}'>
                         <canvas id="canvas_{card_id}"></canvas>
@@ -4184,31 +4184,31 @@ class FitsImageViewer:
             ctx.stroke();
         }}
 
-        // 简化的RA/DEC到像素坐标转换（假设cutout是100x100像素，使用线性近似）
-        function raDecToPixel(ra, dec, centerRa, centerDec, imageWidth, imageHeight) {{
-            // 假设cutout覆盖的天区大小约为0.05度（根据实际情况调整）
-            const fovDegrees = 0.05;
-            const pixelsPerDegree = imageWidth / fovDegrees;
-
-            // 计算相对偏移（度）
-            const deltaRa = (ra - centerRa) * Math.cos(centerDec * Math.PI / 180);
-            const deltaDec = dec - centerDec;
-
-            // 转换为像素偏移（注意Y轴方向相反）
-            const x = imageWidth / 2 + deltaRa * pixelsPerDegree;
-            const y = imageHeight / 2 - deltaDec * pixelsPerDegree;
-
-            return {{ x, y }};
-        }}
-
-        // 绘制标注（小行星和变星）
+        // 绘制标注（小行星和变星）- 直接使用像素坐标
         function drawAnnotations(cardId) {{
-            const container = document.getElementById('click_' + cardId);
+            console.log('drawAnnotations called for cardId:', cardId);
+
+            const containerId = 'click_' + cardId;
+            const container = document.getElementById(containerId);
+
+            if (!container) {{
+                console.error('Container not found:', containerId);
+                return;
+            }}
+
             const img = container.querySelector('img');
             const canvas = document.getElementById('canvas_' + cardId);
 
+            if (!img || !canvas) {{
+                console.error('Image or canvas not found for', cardId);
+                return;
+            }}
+
+            console.log('Found container, img, and canvas for', cardId);
+
             // 等待图像加载完成
             if (!img.complete) {{
+                console.log('Image not loaded yet, waiting...');
                 img.onload = () => drawAnnotations(cardId);
                 return;
             }}
@@ -4216,49 +4216,69 @@ class FitsImageViewer:
             // 设置canvas尺寸与图像一致
             canvas.width = img.naturalWidth;
             canvas.height = img.naturalHeight;
+            console.log('Canvas size:', canvas.width, 'x', canvas.height);
 
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             // 只在显示Aligned图像时绘制标注
             const currentIndex = parseInt(img.dataset.index);
-            if (currentIndex !== 0) return;  // 0是Aligned图像
-
-            // 获取中心点坐标
-            const centerRa = parseFloat(img.dataset.centerRa);
-            const centerDec = parseFloat(img.dataset.centerDec);
-
-            if (!centerRa || !centerDec) {{
-                console.log('No center coordinates available');
-                return;
+            console.log('Current image index:', currentIndex);
+            if (currentIndex !== 0) {{
+                console.log('Not showing Aligned image, skipping annotations');
+                return;  // 0是Aligned图像
             }}
 
             try {{
                 // 绘制小行星标记（青色）
-                const asteroids = JSON.parse(img.dataset.asteroids || '[]');
-                asteroids.forEach(asteroid => {{
-                    const pos = raDecToPixel(asteroid.ra, asteroid.dec, centerRa, centerDec,
-                                            canvas.width, canvas.height);
+                const asteroidsData = img.dataset.asteroids || '[]';
+                console.log('Asteroids data:', asteroidsData);
+                const asteroids = JSON.parse(asteroidsData);
+                console.log('Parsed asteroids:', asteroids.length, asteroids);
+
+                asteroids.forEach((asteroid, idx) => {{
+                    // 直接使用像素坐标
+                    const x = asteroid.x;
+                    const y = asteroid.y;
+                    console.log('Drawing asteroid', idx, 'at', x, y, 'name:', asteroid.name);
 
                     // 检查是否在图像范围内
-                    if (pos.x >= 0 && pos.x < canvas.width && pos.y >= 0 && pos.y < canvas.height) {{
-                        drawFourPointedStar(ctx, pos.x, pos.y, 'cyan', 8, 1, 2);
-                        console.log('Drew asteroid at', pos.x, pos.y, asteroid.name);
+                    if (x >= 0 && x < canvas.width && y >= 0 && y < canvas.height) {{
+                        drawFourPointedStar(ctx, x, y, 'cyan', 10, 2, 2);
+                        console.log('Drew asteroid at', x, y, asteroid.name);
+                    }} else {{
+                        console.log('Asteroid out of bounds:', x, y);
                     }}
                 }});
 
                 // 绘制变星标记（橘黄色）
-                const variables = JSON.parse(img.dataset.variables || '[]');
-                variables.forEach(variable => {{
-                    const pos = raDecToPixel(variable.ra, variable.dec, centerRa, centerDec,
-                                            canvas.width, canvas.height);
+                const variablesData = img.dataset.variables || '[]';
+                console.log('Variables data:', variablesData);
+                const variables = JSON.parse(variablesData);
+                console.log('Parsed variables:', variables.length, variables);
+
+                variables.forEach((variable, idx) => {{
+                    // 直接使用像素坐标
+                    const x = variable.x;
+                    const y = variable.y;
+                    console.log('Drawing variable', idx, 'at', x, y, 'name:', variable.name);
 
                     // 检查是否在图像范围内
-                    if (pos.x >= 0 && pos.x < canvas.width && pos.y >= 0 && pos.y < canvas.height) {{
-                        drawFourPointedStar(ctx, pos.x, pos.y, 'orange', 8, 1, 2);
-                        console.log('Drew variable star at', pos.x, pos.y, variable.name);
+                    if (x >= 0 && x < canvas.width && y >= 0 && y < canvas.height) {{
+                        drawFourPointedStar(ctx, x, y, 'orange', 10, 2, 2);
+                        console.log('Drew variable star at', x, y, variable.name);
+                    }} else {{
+                        console.log('Variable star out of bounds:', x, y);
                     }}
                 }});
+
+                // 测试：在左上角绘制一个小矩形，验证Canvas是否可见
+                if (asteroids.length > 0 || variables.length > 0) {{
+                    ctx.strokeStyle = 'red';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(5, 5, 10, 10);
+                    console.log('Drew test rectangle at (5,5)');
+                }}
             }} catch (e) {{
                 console.error('Error drawing annotations:', e);
             }}
@@ -4271,7 +4291,9 @@ class FitsImageViewer:
 
             // 为所有点击切换容器绘制初始标注
             document.querySelectorAll('.click-container').forEach(container => {{
-                const cardId = container.id.replace('click_card_', '');
+                // container.id 格式是 "click_card_1"，我们需要提取 "card_1"
+                const cardId = container.id.replace('click_', '');
+                console.log('Initializing annotations for:', cardId, 'from container id:', container.id);
                 drawAnnotations(cardId);
             }});
         }});
