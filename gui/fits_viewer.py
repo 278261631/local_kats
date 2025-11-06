@@ -3812,14 +3812,19 @@ class FitsImageViewer:
         .image-label {{
             position: absolute;
             top: 5px;
-            left: 5px;
-            background: rgba(0,0,0,0.7);
+            right: 5px;
+            background: rgba(0,0,0,0.6);
             color: white;
-            padding: 3px 8px;
+            padding: 2px 6px;
             border-radius: 3px;
-            font-size: 11px;
-            font-weight: bold;
+            font-size: 10px;
+            font-weight: normal;
             z-index: 10;
+            opacity: 0.8;
+        }}
+
+        .image-label:hover {{
+            opacity: 1;
         }}
 
         .blink-container {{
@@ -4040,7 +4045,6 @@ class FitsImageViewer:
                     <!-- 闪烁图像容器 -->
                     <div class="image-container blink-container" id="blink_{card_id}">
                         <img src="{reference_path}" alt="Blink" data-ref="{reference_path}" data-aligned="{aligned_path}">
-                        <div class="image-label">Reference ⇄ Aligned</div>
                     </div>
 
                     <!-- 点击切换图像容器 -->
@@ -4052,13 +4056,11 @@ class FitsImageViewer:
                              data-asteroids='{html.escape(json.dumps(asteroids, ensure_ascii=False)) if asteroids else "[]"}'
                              data-variables='{html.escape(json.dumps(variables, ensure_ascii=False)) if variables else "[]"}'>
                         <canvas id="canvas_{card_id}"></canvas>
-                        <div class="image-label" id="label_{card_id}">Aligned (1/2) - 点击切换</div>
                     </div>
 
                     <!-- Detection图像容器 -->
                     <div class="image-container detection-container" onclick="openModal('{detection_path}')">
                         <img src="{detection_path}" alt="Detection">
-                        <div class="image-label">Detection</div>
                     </div>
                 </div>
 
@@ -4145,18 +4147,14 @@ class FitsImageViewer:
         function toggleImage(cardId) {{
             const container = document.getElementById('click_' + cardId);
             const img = container.querySelector('img');
-            const label = document.getElementById('label_' + cardId);
-            const canvas = document.getElementById('canvas_' + cardId);
 
             const images = JSON.parse(img.dataset.images);
-            const names = JSON.parse(img.dataset.names);
             let currentIndex = parseInt(img.dataset.index);
 
             // 切换到下一张图像
             currentIndex = (currentIndex + 1) % images.length;
             img.dataset.index = currentIndex;
             img.src = images[currentIndex];
-            label.textContent = names[currentIndex] + ' (' + (currentIndex + 1) + '/' + images.length + ') - 点击切换';
 
             // 重新绘制标注
             drawAnnotations(cardId);
