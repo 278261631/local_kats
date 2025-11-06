@@ -4228,13 +4228,9 @@ class FitsImageViewer:
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 只在显示Aligned图像时绘制标注
+            // 在所有图像上都绘制标注
             const currentIndex = parseInt(img.dataset.index);
             console.log('Current image index:', currentIndex);
-            if (currentIndex !== 0) {{
-                console.log('⊘ Not showing Aligned image, skipping annotations');
-                return;  // 0是Aligned图像
-            }}
 
             try {{
                 // HTML解码函数
