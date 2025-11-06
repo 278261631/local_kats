@@ -72,6 +72,10 @@ class FitsWebDownloaderGUI:
 
         # 自动链：批量→查询→导出 控制开关
         self._auto_chain_followups = False
+        # 自动链附加步骤：是否在自动链末尾上传到OSS（默认不启用）
+        self.auto_chain_oss_upload_var = tk.BooleanVar(value=False)
+
+
 
         # 保存自动执行参数
         self.auto_date = auto_date
@@ -510,6 +514,18 @@ class FitsWebDownloaderGUI:
             save_mpc_btn = ttk.Button(row5_frame, text="保存MPC",
                                      command=self.fits_viewer._save_mpc_settings)
             save_mpc_btn.grid(row=1, column=2, sticky=tk.W, padx=(10, 5), pady=(10, 0), columnspan=2)
+        # 第六行：自动链设置
+        auto_chain_frame = ttk.LabelFrame(settings_container, text="自动链设置", padding=10)
+        auto_chain_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 自动链结束后是否执行OSS上传（默认不启用）
+        auto_oss_check = ttk.Checkbutton(
+            auto_chain_frame,
+            text="自动链结束后执行OSS上传",
+            variable=self.auto_chain_oss_upload_var,
+            command=self._on_toggle_auto_chain_oss_upload
+        )
+        auto_oss_check.grid(row=0, column=0, sticky=tk.W)
 
         # 底部说明
         bottom_info = ttk.Label(main_container,
@@ -535,6 +551,15 @@ class FitsWebDownloaderGUI:
 
         ttk.Button(log_control_frame, text="清除日志", command=self._clear_log).pack(side=tk.LEFT)
         ttk.Button(log_control_frame, text="保存日志", command=self._save_log).pack(side=tk.LEFT, padx=(10, 0))
+
+    def _on_toggle_auto_chain_oss_upload(self):
+        """高级设置：切换自动链末尾OSS上传开关（立即保存到配置）"""
+        try:
+            enabled = bool(self.auto_chain_oss_upload_var.get())
+            self.config_manager.update_automation_settings(enable_auto_chain_oss_upload=enabled)
+            self._log(f"[设置] 自动链OSS上传: {'开启' if enabled else '关闭'}")
+        except Exception as e:
+            self._log(f"保存自动链OSS上传设置失败: {e}")
 
     def _create_batch_status_widgets(self):
         """创建批量处理状态界面"""
@@ -615,6 +640,14 @@ class FitsWebDownloaderGUI:
                 # 如果没有设置detected目录，但有diff输出目录，自动设置为diff输出目录下的detected子目录
                 detected_dir = os.path.join(diff_output_dir, "detected")
                 self.detected_dir_var.set(detected_dir)
+
+            # 加载自动链设置
+            try:
+                auto_settings = self.config_manager.get_automation_settings()
+                self.auto_chain_oss_upload_var.set(bool(auto_settings.get("enable_auto_chain_oss_upload", False)))
+            except Exception as _:
+                # 出现异常时保持默认 False
+                self.auto_chain_oss_upload_var.set(False)
 
             self._log("配置加载完成")
 
@@ -3228,7 +3261,7 @@ Diff统计:
 
         return dfs("")
 
-    def _run_without_messageboxes(self, func):
+    def _run_without_messageboxes(self, func, *args, **kwargs):
         """在一次调用期间临时屏蔽 messagebox 弹窗，自动同意确认并跳过“打开目录”。"""
         from tkinter import messagebox as mb
         saved = {}
@@ -3254,14 +3287,19 @@ Diff统计:
             _log_msg("error", title, message)
             return None
 
-        def _silent_ask(title, message=None, *args, **kwargs):
+        def _silent_ask_bool(title, message=None, *args, **kwargs):
             text = f"{title} {message}" if message is not None else str(title)
             # 若包含“打开目录”，返回否；其他确认一律同意
-            if ("打开目录" in text) or ("open" in text.lower() and "dir" in text.lower()):
-                _log_msg("ask", title, message)
-                return False
+            deny = ("打开目录" in text) or ("open" in text.lower() and "dir" in text.lower())
             _log_msg("ask", title, message)
-            return True
+            return False if deny else True
+
+        def _silent_ask_yn(title, message=None, *args, **kwargs):
+            text = f"{title} {message}" if message is not None else str(title)
+            # askquestion 需要返回 'yes'/'no'
+            deny = ("打开目录" in text) or ("open" in text.lower() and "dir" in text.lower())
+            _log_msg("ask", title, message)
+            return 'no' if deny else 'yes'
 
         try:
             if "showinfo" in saved:
@@ -3271,10 +3309,10 @@ Diff统计:
             if "showerror" in saved:
                 mb.showerror = _silent_showerror
             if "askyesno" in saved:
-                mb.askyesno = _silent_ask
+                mb.askyesno = _silent_ask_bool
             if "askquestion" in saved:
-                mb.askquestion = _silent_ask
-            return func()
+                mb.askquestion = _silent_ask_yn
+            return func(*args, **kwargs)
         finally:
             for name, fn in saved.items():
                 setattr(mb, name, fn)
@@ -3333,6 +3371,35 @@ Diff统计:
             self._log("[自动] 批量导出未查询完成")
         except Exception as e:
             self._log(f"[自动] 批量导出未查询失败: {e}")
+            import traceback
+            self._log(traceback.format_exc())
+        finally:
+            # 根据设置，决定是否继续执行OSS上传
+            try:
+                enabled = bool(self.auto_chain_oss_upload_var.get())
+            except Exception:
+                enabled = False
+            if enabled:
+                self._log("[自动] 已启用自动链OSS上传，500ms后开始上传...")
+                self.root.after(500, self._auto_upload_to_oss)
+            else:
+                # 关闭自动链
+                self._auto_chain_followups = False
+
+
+    def _auto_upload_to_oss(self):
+        """自动：执行OSS上传并静默处理所有弹窗"""
+        try:
+            self._log("[自动] 开始上传到OSS...")
+            # 确保停留在查看器页签并刷新目录树（上传实现依赖导出目录配置）
+            self.notebook.select(self.viewer_frame)
+            self.fits_viewer._refresh_directory_tree()
+            # 静默执行OSS上传：自动确认上传，屏蔽完成/错误弹窗
+            # 注意：_upload_to_oss 会在后台线程中执行实际上传，此处不等待完成
+            self._run_without_messageboxes(self.fits_viewer._upload_to_oss)
+            self._log("[自动] 已启动OSS上传（后台进行），详细进度见 oss_sync/oss_upload.log")
+        except Exception as e:
+            self._log(f"[自动] 启动OSS上传失败: {e}")
             import traceback
             self._log(traceback.format_exc())
         finally:

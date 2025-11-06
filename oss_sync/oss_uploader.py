@@ -11,7 +11,13 @@ import re
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
-import oss2
+try:
+    import oss2
+except Exception as e:
+    print("✗ 缺少依赖或导入 oss2 失败。请先安装依赖: pip install -r oss_sync/requirements.txt")
+    print(f"详细错误: {e}")
+    import sys
+    sys.exit(1)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 

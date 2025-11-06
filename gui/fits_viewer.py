@@ -141,7 +141,7 @@ class FitsImageViewer:
 
         # 延迟执行首次刷新（确保界面完全创建后）
         self.parent_frame.after(100, self._first_time_refresh)
-        
+
     def _create_widgets(self):
         """创建界面组件"""
         # 创建主框架
@@ -461,7 +461,7 @@ class FitsImageViewer:
 
         # 绑定全局快捷键
         self._bind_global_shortcuts()
-        
+
     def _bind_global_shortcuts(self):
         """绑定全局快捷键"""
         # 获取顶层窗口
@@ -1753,113 +1753,113 @@ class FitsImageViewer:
                 return f"{size_bytes:.1f} {unit}"
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} TB"
-        
+
     def load_fits_file(self, file_path: str) -> bool:
         """
         加载FITS文件
-        
+
         Args:
             file_path (str): FITS文件路径
-            
+
         Returns:
             bool: 是否加载成功
         """
         try:
             self.logger.info(f"加载FITS文件: {file_path}")
-            
+
             with fits.open(file_path) as hdul:
                 self.current_header = hdul[0].header
                 self.current_fits_data = hdul[0].data
-                
+
                 if self.current_fits_data is None:
                     raise ValueError("无法读取图像数据")
-                
+
                 # 转换数据类型
                 self.current_fits_data = self.current_fits_data.astype(np.float64)
-                
+
                 # 处理3D数据（取第一个切片）
                 if len(self.current_fits_data.shape) == 3:
                     self.current_fits_data = self.current_fits_data[0]
-                
+
                 self.current_file_path = file_path
-                
+
                 # 更新界面
                 self._update_file_info()
                 self._update_image_display()
-                
+
                 self.logger.info(f"FITS文件加载成功: {self.current_fits_data.shape}")
                 return True
-                
+
         except Exception as e:
             self.logger.error(f"加载FITS文件失败: {str(e)}")
             messagebox.showerror("错误", f"加载FITS文件失败:\n{str(e)}")
             return False
-    
+
     def _update_file_info(self):
         """更新文件信息显示"""
         if self.current_file_path:
             filename = os.path.basename(self.current_file_path)
             shape_str = f"{self.current_fits_data.shape[1]}×{self.current_fits_data.shape[0]}"
             self.file_info_label.config(text=f"文件: {filename} | 尺寸: {shape_str}")
-        
+
         # 更新统计信息
         if self.current_fits_data is not None:
             mean, median, std = sigma_clipped_stats(self.current_fits_data, sigma=3.0)
             min_val = np.min(self.current_fits_data)
             max_val = np.max(self.current_fits_data)
-            
+
             stats_text = f"均值: {mean:.2f} | 中位数: {median:.2f} | 标准差: {std:.2f} | 范围: [{min_val:.2f}, {max_val:.2f}]"
             self.stats_label.config(text=stats_text)
-    
+
     def _update_image_display(self):
         """更新图像显示"""
         if self.current_fits_data is None:
             return
-        
+
         try:
             # 清除之前的图像
             self.figure.clear()
-            
+
             # 创建子图
             ax = self.figure.add_subplot(111)
-            
+
             # 应用显示模式变换
             display_data = self._apply_display_transform(self.current_fits_data)
-            
+
             # 显示图像
             im = ax.imshow(display_data, cmap=self.colormap.get(), origin='lower')
-            
+
             # 添加颜色条
             self.figure.colorbar(im, ax=ax, shrink=0.8)
-            
+
             # 设置标题
             if self.current_file_path:
                 ax.set_title(os.path.basename(self.current_file_path))
-            
+
             # 设置坐标轴标签
             ax.set_xlabel('X (像素)')
             ax.set_ylabel('Y (像素)')
-            
+
             # 调整布局
             self.figure.tight_layout()
-            
+
             # 刷新画布
             self.canvas.draw()
-            
+
         except Exception as e:
             self.logger.error(f"更新图像显示失败: {str(e)}")
             messagebox.showerror("错误", f"更新图像显示失败:\n{str(e)}")
-    
+
     def _apply_display_transform(self, data: np.ndarray) -> np.ndarray:
         """应用显示变换"""
         mode = self.display_mode.get()
-        
+
         # 处理负值和零值
         data_min = np.min(data)
         if data_min <= 0 and mode in ['log', 'sqrt']:
             # 对于log和sqrt变换，需要处理负值
             data = data - data_min + 1e-10
-        
+
         if mode == "linear":
             return data
         elif mode == "log":
@@ -1870,28 +1870,28 @@ class FitsImageViewer:
             return np.arcsinh(data)
         else:
             return data
-    
+
     def _on_display_mode_change(self, event=None):
         """显示模式改变事件"""
         self._update_image_display()
-    
+
     def _on_colormap_change(self, event=None):
         """颜色映射改变事件"""
         self._update_image_display()
-    
+
     def _refresh_display(self):
         """刷新显示"""
         self._update_image_display()
-    
+
     def _save_image(self):
         """保存图像"""
         if self.current_fits_data is None:
             messagebox.showwarning("警告", "没有可保存的图像")
             return
-        
+
         try:
             from tkinter import filedialog
-            
+
             # 选择保存路径
             filename = filedialog.asksaveasfilename(
                 title="保存图像",
@@ -1903,15 +1903,15 @@ class FitsImageViewer:
                     ("All files", "*.*")
                 ]
             )
-            
+
             if filename:
                 self.figure.savefig(filename, dpi=150, bbox_inches='tight')
                 messagebox.showinfo("成功", f"图像已保存到:\n{filename}")
-                
+
         except Exception as e:
             self.logger.error(f"保存图像失败: {str(e)}")
             messagebox.showerror("错误", f"保存图像失败:\n{str(e)}")
-    
+
     def _on_tree_select(self, event):
         """目录树选择事件"""
         # 清除搜索根节点（用户手动选择新文件时重置查找范围）
@@ -4981,14 +4981,14 @@ class FitsImageViewer:
         """获取FITS头信息"""
         if self.current_header is None:
             return None
-        
+
         header_text = "FITS Header Information:\n"
         header_text += "=" * 50 + "\n"
-        
+
         for key, value in self.current_header.items():
             if key and value is not None:
                 header_text += f"{key:8} = {value}\n"
-        
+
         return header_text
 
     def _execute_astap(self):
@@ -8403,6 +8403,22 @@ class FitsImageViewer:
 
             if result != 'yes':
                 return
+
+
+            # 预检：检查依赖包是否可用（避免子进程静默失败）
+            try:
+                import importlib.util as _ilu
+                if _ilu.find_spec("oss2") is None:
+                    self.logger.error("未安装依赖包 oss2，请先安装 oss_sync/requirements.txt")
+                    messagebox.showerror(
+                        "错误",
+                        "未安装依赖包 oss2\n\n"
+                        "请先执行: pip install -r oss_sync/requirements.txt"
+                    )
+                    return
+            except Exception as _e:
+                # 预检异常不阻断，但记录日志
+                self.logger.warning(f"依赖预检出现异常: {_e}")
 
             # 获取oss_sync目录路径
             current_dir = Path(__file__).parent
