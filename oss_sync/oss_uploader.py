@@ -20,27 +20,30 @@ except Exception as e:
     sys.exit(1)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
+import subprocess
+import shutil
+
 
 
 class OSSUploader:
     """阿里云 OSS 上传器"""
-    
+
     def __init__(self, config_file: str = "oss_config.json"):
         """
         初始化上传器
-        
+
         Args:
             config_file: 配置文件路径
         """
         self.config_file = config_file
         self.config = self._load_config()
         self.logger = self._setup_logging()
-        
+
         # 初始化 OSS 客户端
         self.auth = None
         self.bucket = None
         self._init_oss_client()
-        
+
     def _load_config(self) -> Dict:
         """加载配置文件"""
         if not os.path.exists(self.config_file):
@@ -56,45 +59,45 @@ class OSSUploader:
                 sys.exit(1)
             else:
                 raise FileNotFoundError(f"配置文件不存在: {self.config_file}")
-        
+
         with open(self.config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
-        
+
         # 验证必要的配置项
         required_fields = ['access_key_id', 'access_key_secret', 'bucket_name']
         for field in required_fields:
             if not config['aliyun_oss'].get(field):
                 raise ValueError(f"配置文件中缺少必要字段: aliyun_oss.{field}")
-        
+
         if not config['upload_settings'].get('oss_root'):
             raise ValueError("配置文件中缺少必要字段: upload_settings.oss_root")
-        
+
         return config
-    
+
     def _setup_logging(self) -> logging.Logger:
         """设置日志"""
         logger = logging.getLogger('OSSUploader')
         logger.setLevel(logging.INFO)
-        
+
         # 控制台处理器
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
-        
+
         # 文件处理器
         log_file = Path(__file__).parent / 'oss_upload.log'
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
-        
+
         # 格式化
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         console_handler.setFormatter(formatter)
         file_handler.setFormatter(formatter)
-        
+
         logger.addHandler(console_handler)
         logger.addHandler(file_handler)
-        
+
         return logger
-    
+
     def _init_oss_client(self):
         """初始化 OSS 客户端"""
         try:
@@ -112,7 +115,7 @@ class OSSUploader:
         except Exception as e:
             self.logger.error(f"OSS 客户端初始化失败: {str(e)}")
             raise
-    
+
     def _get_file_md5(self, file_path: str) -> str:
         """计算文件 MD5"""
         md5_hash = hashlib.md5()
@@ -120,7 +123,7 @@ class OSSUploader:
             for chunk in iter(lambda: f.read(4096), b""):
                 md5_hash.update(chunk)
         return md5_hash.hexdigest()
-    
+
     def _extract_date_from_path(self, file_path: Path) -> Optional[datetime]:
         """
         从文件路径中提取日期
@@ -223,7 +226,78 @@ class OSSUploader:
         oss_path = f"{year}/{date_str}/{cleaned_relative_path.as_posix()}"
 
         return oss_path
-    
+
+    def _find_7z_executable(self) -> Optional[str]:
+        """查找 7z 可执行程序"""
+        try:
+            path = shutil.which("7z") or shutil.which("7z.exe")
+        except Exception:
+            path = None
+        if path:
+            return path
+        common = Path("C:/Program Files/7-Zip/7z.exe")
+        if common.exists():
+            return str(common)
+        return None
+
+    def _create_7z_archive(self, oss_root: Path, batch_date: datetime) -> Path:
+        """
+        将 oss_root 目录打包为 7z 压缩包，文件名: oss_root_yyyymmdd.7z，存放在其父目录
+        """
+        date_str = batch_date.strftime("%Y%m%d")
+        archive_name = f"{oss_root.name}_{date_str}.7z"
+        archive_path = oss_root.parent / archive_name
+
+        # 如果已存在则删除以便重建
+        try:
+            if archive_path.exists():
+                self.logger.info(f"目标压缩包已存在，删除后重新生成: {archive_path}")
+                archive_path.unlink()
+        except Exception as e:
+            self.logger.warning(f"无法删除已存在压缩包，将覆盖创建: {archive_path} - {e}")
+
+        self.logger.info("=" * 60)
+        self.logger.info(f"开始打包为 7z: {archive_path}")
+        self.logger.info(f"打包源目录: {oss_root}")
+
+        # 首选使用 py7zr
+        try:
+            import py7zr  # type: ignore
+            with py7zr.SevenZipFile(str(archive_path), 'w') as archive:
+                # 确保压缩包内包含顶层目录名 oss_root.name
+                archive.writeall(str(oss_root), arcname=oss_root.name)
+            self.logger.info(f"✓ 7z 打包完成 (py7zr): {archive_path}")
+        except Exception as py7zr_err:
+            self.logger.info(f"未能使用 py7zr 打包，将尝试系统 7z 命令行。原因: {py7zr_err}")
+            sevenz = self._find_7z_executable()
+            if not sevenz:
+                raise RuntimeError(
+                    "未找到 py7zr 或 7z 可执行程序。请安装任一其一后重试：\n"
+                    "  pip install py7zr\n"
+                    "或安装 7-Zip 并将 7z 加入 PATH"
+                ) from py7zr_err
+            # 在父目录下执行: 7z a -t7z archive.7z oss_root_name
+            cmd = [sevenz, 'a', '-t7z', str(archive_path), oss_root.name]
+            try:
+                completed = subprocess.run(
+                    cmd, cwd=str(oss_root.parent), capture_output=True, text=True
+                )
+                if completed.returncode != 0:
+                    raise RuntimeError(f"7z 命令执行失败: {completed.stderr or completed.stdout}")
+                self.logger.info(f" 7z 打包完成 (7z CLI): {archive_path}")
+            except Exception as cli_err:
+                raise RuntimeError(f"7z 打包失败: {cli_err}") from cli_err
+
+        # 日志记录打包后大小
+        try:
+            size_mb = archive_path.stat().st_size / (1024 * 1024)
+            self.logger.info(f"压缩包大小: {size_mb:.2f} MB")
+        except Exception:
+            pass
+
+        self.logger.info("=" * 60)
+        return archive_path
+
     def _upload_file(self, local_file: Path, oss_path: str, retry_times: int = 3) -> Dict:
         """
         上传单个文件到 OSS
@@ -288,7 +362,7 @@ class OSSUploader:
                     return result
 
         return result
-    
+
     def scan_files(self, root_dir: Path, extensions: List[str]) -> List[Path]:
         """
         扫描目录下的所有文件
@@ -331,7 +405,7 @@ class OSSUploader:
             self.logger.warning("=" * 60)
 
         return files
-    
+
     def upload_files(self, files: List[Path], oss_root: Path, max_workers: int = 4):
         """
         批量上传文件
@@ -404,7 +478,7 @@ class OSSUploader:
         self.logger.info(f"跳过(已存在): {skipped_count}")
         self.logger.info(f"失败: {failed_count}")
         self.logger.info("=" * 60)
-    
+
     def run(self):
         """运行上传任务"""
         try:
@@ -423,17 +497,17 @@ class OSSUploader:
                 self.logger.error(f"✗ OSS 根目录不存在: {oss_root}")
                 return
 
-            # 扫描文件
-            extensions = upload_settings.get('file_extensions', ['.fits', '.fit', '.png', '.jpg', '.txt'])
-            files = self.scan_files(oss_root, extensions)
-
-            if not files:
-                self.logger.warning("没有文件需要上传，任务结束")
+            # 统一确定批次日期用于归档和上传路径
+            batch_date = self._get_batch_date(oss_root)
+            if batch_date is None:
+                self.logger.error("✗ 无法从目录中提取批次日期，上传终止")
                 return
 
-            # 上传文件
-            max_workers = upload_settings.get('max_workers', 4)
-            self.upload_files(files, oss_root, max_workers)
+            # 先将目录打包成 7z 压缩包：oss_root_yyyymmdd.7z
+            archive_path = self._create_7z_archive(oss_root, batch_date)
+
+            # 上传压缩包（按 yyyy/yyyymmdd/oss_root_yyyymmdd.7z 存放）
+            self.upload_files([archive_path], oss_root, max_workers=1)
 
         except Exception as e:
             self.logger.error("=" * 60)
