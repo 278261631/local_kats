@@ -406,7 +406,7 @@ class OSSUploader:
 
         return files
 
-    def upload_files(self, files: List[Path], oss_root: Path, max_workers: int = 4):
+    def upload_files(self, files: List[Path], oss_root: Path, max_workers: int = 4, fixed_date: Optional[datetime] = None):
         """
         批量上传文件
 
@@ -419,14 +419,18 @@ class OSSUploader:
             self.logger.warning("没有文件需要上传")
             return
 
-        # 获取批次日期
-        batch_date = self._get_batch_date(oss_root)
-        if batch_date is None:
-            self.logger.error("✗ 无法从目录中提取批次日期，上传终止")
-            return
+        # 获取日期（优先使用固定“打包日期”，否则回退为目录批次日期）
+        if fixed_date is not None:
+            batch_date = fixed_date
+        else:
+            batch_date = self._get_batch_date(oss_root)
+            if batch_date is None:
+                self.logger.error("✗ 无法从目录中提取批次日期")
+                return
 
         self.logger.info("=" * 60)
-        self.logger.info(f"批次日期: {batch_date.strftime('%Y%m%d')}")
+        label = "打包日期" if fixed_date is not None else "批次日期"
+        self.logger.info(f"{label}: {batch_date.strftime('%Y%m%d')}")
         self.logger.info(f"开始上传 {len(files)} 个文件")
         self.logger.info(f"并发数: {max_workers}")
         self.logger.info("=" * 60)
@@ -497,17 +501,14 @@ class OSSUploader:
                 self.logger.error(f"✗ OSS 根目录不存在: {oss_root}")
                 return
 
-            # 统一确定批次日期用于归档和上传路径
-            batch_date = self._get_batch_date(oss_root)
-            if batch_date is None:
-                self.logger.error("✗ 无法从目录中提取批次日期，上传终止")
-                return
+            # 使用打包日期
+            pack_date = datetime.now()
 
             # 先将目录打包成 7z 压缩包：oss_root_yyyymmdd.7z
-            archive_path = self._create_7z_archive(oss_root, batch_date)
+            archive_path = self._create_7z_archive(oss_root, pack_date)
 
-            # 上传压缩包（按 yyyy/yyyymmdd/oss_root_yyyymmdd.7z 存放）
-            self.upload_files([archive_path], oss_root, max_workers=1)
+            # 上传压缩包（按 yyyy/yyyymmdd/oss_root_yyyymmdd.7z 存放），目录层也按打包日期
+            self.upload_files([archive_path], oss_root, max_workers=1, fixed_date=pack_date)
 
         except Exception as e:
             self.logger.error("=" * 60)
