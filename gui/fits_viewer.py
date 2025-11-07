@@ -10,6 +10,8 @@ import re
 import subprocess
 import platform
 import numpy as np
+import csv
+
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
@@ -67,6 +69,16 @@ class FitsImageViewer:
         self.get_url_selections_callback = get_url_selections_callback
         self.log_callback = log_callback  # 日志回调函数，用于输出到日志标签页
         self.get_unqueried_export_dir_callback = get_unqueried_export_dir_callback  # 未查询导出目录回调函数（也用于OSS上传）
+        # Local query override flag (used by batch-local button/auto-chain)
+        self._use_local_query_override = False
+
+        # 本地目录缓存，避免重复读取大文件
+        self._local_asteroid_cache = None  # (path, table)
+        self._local_vsx_cache = None  # (path, table)
+        # MPCORB缓存：存储(dataframe, ts, eph)以避免重复加载
+        self._mpcorb_cache = None  # (path, df, ts, eph)
+
+
 
         # 设置日志
         self.logger = logging.getLogger(__name__)
@@ -394,6 +406,14 @@ class FitsImageViewer:
         self.save_search_radius_button = ttk.Button(toolbar_frame6, text="保存半径",
                                                    command=self._save_query_settings)
         self.save_search_radius_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 批量本地查询按钮（离线）
+        self.batch_local_query_button = ttk.Button(
+            toolbar_frame6, text="批量本地查询(离线)",
+            command=self._batch_query_local_asteroids_and_variables,
+            state="disabled"
+        )
+        self.batch_local_query_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # 批量查询按钮
         self.batch_query_button = ttk.Button(toolbar_frame6, text="批量查询",
@@ -1926,6 +1946,8 @@ class FitsImageViewer:
             self.display_button.config(state="disabled")
             self.diff_button.config(state="disabled")
             self.batch_query_button.config(state="disabled")
+            if hasattr(self, 'batch_local_query_button'):
+                self.batch_local_query_button.config(state="disabled")
             if self.astap_processor:
                 self.astap_button.config(state="disabled")
             if self.wcs_checker:
@@ -1995,6 +2017,8 @@ class FitsImageViewer:
 
             # 启用批量查询按钮（单个文件也支持批量查询其所有检测目标）
             self.batch_query_button.config(state="normal")
+            if hasattr(self, 'batch_local_query_button'):
+                self.batch_local_query_button.config(state="normal")
             # 启用批量删除查询结果按钮
             self.batch_delete_query_button.config(state="normal")
         else:
@@ -2010,10 +2034,14 @@ class FitsImageViewer:
             # 检查是否选中了目录，如果是则启用批量查询按钮
             if values and any(tag in tags for tag in ["region", "date", "telescope"]):
                 self.batch_query_button.config(state="normal")
+                if hasattr(self, 'batch_local_query_button'):
+                    self.batch_local_query_button.config(state="normal")
                 self.batch_delete_query_button.config(state="normal")
                 self.file_info_label.config(text="已选择目录 [可批量查询]")
             else:
                 self.batch_query_button.config(state="disabled")
+                if hasattr(self, 'batch_local_query_button'):
+                    self.batch_local_query_button.config(state="disabled")
                 self.batch_delete_query_button.config(state="disabled")
                 self.file_info_label.config(text="未选择FITS文件")
 
@@ -7230,8 +7258,11 @@ class FitsImageViewer:
             self.skybot_result_label.config(text="查询中...", foreground="orange")
             self.skybot_result_label.update_idletasks()  # 强制刷新界面
 
-            # 执行Skybot查询
-            results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
+            # 执行Skybot查询（根据覆盖开关选择本地/在线）
+            if getattr(self, '_use_local_query_override', False):
+                results = self._perform_local_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
+            else:
+                results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
 
             if results is not None:
                 # 保存查询结果到当前cutout
@@ -7533,8 +7564,11 @@ class FitsImageViewer:
             self.vsx_result_label.config(text="查询中...", foreground="orange")
             self.vsx_result_label.update_idletasks()  # 强制刷新界面
 
-            # 执行VSX查询
-            results = self._perform_vsx_query(ra, dec, mag_limit, search_radius)
+            # 执行VSX查询（根据覆盖开关选择本地/在线）
+            if getattr(self, '_use_local_query_override', False):
+                results = self._perform_local_vsx_query(ra, dec, mag_limit, search_radius)
+            else:
+                results = self._perform_vsx_query(ra, dec, mag_limit, search_radius)
 
             if results is not None:
                 # 保存查询结果到当前cutout
@@ -7789,6 +7823,341 @@ class FitsImageViewer:
             if self.log_callback:
                 self.log_callback(exec_error_msg, "ERROR")
             return None
+    def _perform_local_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.01):
+        """使用本地小行星库进行圆锥搜索（离线）。返回Astropy Table。"""
+        try:
+            settings = self.config_manager.get_local_catalog_settings() if self.config_manager else {}
+            catalog_path = (settings or {}).get("asteroid_catalog_path", "")
+            if not catalog_path or not os.path.exists(catalog_path):
+                warn = "未配置本地小行星库或路径不存在，返回空结果"
+                self.logger.warning(warn)
+                if self.log_callback:
+                    self.log_callback(warn, "WARNING")
+                from astropy.table import Table
+                return Table()
+
+            from astropy.table import Table
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+            import numpy as np
+
+            target = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+
+            # 判断是否为MPCORB文件（.dat/.gz 或 文件名包含 mpcorb）
+            lower_name = os.path.basename(catalog_path).lower()
+            is_mpcorb = lower_name.endswith('.dat') or lower_name.endswith('.gz') or ('mpcorb' in lower_name)
+
+            if is_mpcorb:
+                # 使用Skyfield基于MPCORB离线计算当前位置
+                try:
+                    from skyfield.api import load, wgs84
+                    from skyfield.data import mpc
+                    from skyfield.constants import GM_SUN_Pitjeva_2005_km3_s2 as GM_SUN
+                    import pandas as pd
+                except Exception as e:
+                    err = f"未找到Skyfield依赖，无法解析MPCORB: {e}"
+                    self.logger.error(err)
+                    if self.log_callback:
+                        self.log_callback(err, "ERROR")
+                    from astropy.table import Table as ATable
+                    return ATable()
+
+                # 计算观测时刻与观测者（使用本地GPS，顶点观测）
+                ts = None
+                eph = None
+                df = None
+
+                # 缓存复用
+                if self._mpcorb_cache and self._mpcorb_cache[0] == catalog_path:
+                    _, df, ts, eph = self._mpcorb_cache
+                else:
+                    # 加载MPCORB为DataFrame
+                    # 注意：文件可能很大，建议用户提供摘录文件
+                    try:
+                        with open(catalog_path, 'rb') as f:
+                            df = mpc.load_mpcorb_dataframe(f)
+                    except Exception:
+                        # 尝试文本方式
+                        with open(catalog_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            df = mpc.load_mpcorb_dataframe(f)
+
+                    # 过滤非法轨道
+                    if 'semimajor_axis_au' in df.columns:
+                        df = df[~df['semimajor_axis_au'].isnull()]
+
+                    # 缓存时标与星历
+                    ts = load.timescale()
+
+                    # 获取星历文件路径（默认 gui/ephemeris/de421.bsp）
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    default_ephem = os.path.join(current_dir, 'ephemeris', 'de421.bsp')
+                    ephem_path = (settings or {}).get('ephemeris_file_path') or default_ephem
+                    if not os.path.exists(ephem_path):
+                        warn = f"未找到本地星历文件: {ephem_path}；无法进行MPCORB离线计算"
+                        self.logger.warning(warn)
+                        if self.log_callback:
+                            self.log_callback(warn, "WARNING")
+                        from astropy.table import Table as ATable
+                        return ATable()
+                    eph = load(ephem_path)
+
+                    # 缓存
+                    self._mpcorb_cache = (catalog_path, df, ts, eph)
+
+                # H上限过滤（默认20）
+                try:
+                    h_limit = float((settings or {}).get('mpc_h_limit', 20))
+                except Exception:
+                    h_limit = 20.0
+                if 'H' in df.columns:
+                    try:
+                        df = df[df['H'] <= h_limit]
+                    except Exception:
+                        pass
+
+                # 目标、观测者
+                earth = eph['earth']
+                observer = earth + wgs84.latlon(latitude, longitude)
+                t = ts.from_datetime(utc_time)
+
+                # 逐个预测并筛选（注意：大文件会较慢，建议提供摘录MPCORB）
+                rows = []
+                count = 0
+                for _, r in df.iterrows():
+                    try:
+                        body = eph['sun'] + mpc.mpcorb_orbit(r, ts, GM_SUN)
+                        ra_obj, dec_obj, _ = observer.at(t).observe(body).radec()
+                        ra_deg_obj = ra_obj.hours * 15.0
+                        dec_deg_obj = dec_obj.degrees
+                        # 圆锥过滤
+                        sep = SkyCoord(ra=ra_deg_obj * u.deg, dec=dec_deg_obj * u.deg).separation(target).deg
+                        if sep <= float(search_radius):
+                            name_val = str(r.get('designation', ''))
+                            number_val = None
+                            mv_val = float(r.get('H')) if 'H' in r and pd.notnull(r.get('H')) else None
+                            rows.append({
+                                'Name': name_val,
+                                'Number': number_val,
+                                'Type': 'Asteroid',
+                                'RA': ra_deg_obj,
+                                'DEC': dec_deg_obj,
+                                'Mv': mv_val,
+                            })
+                        count += 1
+                        # 可选：为了避免卡死，处理到一定数量就让UI有机会刷新
+                        if count % 2000 == 0:
+                            try:
+                                self.parent_frame.update_idletasks()
+                            except Exception:
+                                pass
+                    except Exception:
+                        continue
+
+                from astropy.table import Table as ATable
+                return ATable(rows=rows)
+
+            else:
+                # 旧逻辑：读取包含RA/DEC列的表格（CSV/TSV/FITS等）
+                # 使用缓存以避免重复读取
+                if self._local_asteroid_cache and self._local_asteroid_cache[0] == catalog_path:
+                    table = self._local_asteroid_cache[1]
+                else:
+                    table = Table.read(catalog_path)
+                    self._local_asteroid_cache = (catalog_path, table)
+
+                # 识别RA/DEC列
+                ra_candidates = ("RA", "ra", "RAJ2000", "raj2000", "_RA", "_RAJ2000")
+                dec_candidates = ("DEC", "dec", "DEJ2000", "dej2000", "_DE", "_DEJ2000", "_DEC", "_DECJ2000")
+                col_ra = next((c for c in ra_candidates if c in table.colnames), None)
+                col_dec = next((c for c in dec_candidates if c in table.colnames), None)
+                if not col_ra or not col_dec:
+                    warn = f"本地小行星库缺少RA/DEC列（需要列名之一: {ra_candidates} / {dec_candidates}），返回空结果"
+                    self.logger.warning(warn)
+                    if self.log_callback:
+                        self.log_callback(warn, "WARNING")
+                    return Table()
+
+                ra_vals = table[col_ra]
+                dec_vals = table[col_dec]
+                try:
+                    coords = SkyCoord(ra=ra_vals * u.deg, dec=dec_vals * u.deg, frame="icrs")
+                except Exception:
+                    # 尝试解析为时角/度格式字符串
+                    coords = SkyCoord(ra_vals, dec_vals, unit=(u.hourangle, u.deg), frame="icrs")
+
+                sep_deg = coords.separation(target).deg
+                mask = np.array(sep_deg) <= float(search_radius)
+                if not np.any(mask):
+                    from astropy.table import Table as ATable
+                    return ATable()
+
+                filtered = table[mask]
+                coords_f = coords[mask]
+                ra_deg = np.array(coords_f.ra.deg).tolist()
+                dec_deg = np.array(coords_f.dec.deg).tolist()
+
+                name_candidates = ("Name", "name", "Designation", "desig", "Object", "OBJECT")
+                mag_candidates = ("Mv", "Vmag", "mag", "Gmag", "Rmag", "Mag")
+                number_col = "Number" if "Number" in filtered.colnames else None
+                name_col = next((c for c in name_candidates if c in filtered.colnames), None)
+                mag_col = next((c for c in mag_candidates if c in filtered.colnames), None)
+
+                # 组装精简结果表，兼容日志展示
+                rows = []
+                for i, row in enumerate(filtered):
+                    name_val = str(row[name_col]) if name_col else ""
+                    number_val = row[number_col] if number_col else None
+                    mv_val = None
+                    if mag_col:
+                        try:
+                            mv_val = float(row[mag_col])
+                        except Exception:
+                            mv_val = row[mag_col]
+                    rows.append({
+                        "Name": name_val,
+                        "Number": number_val,
+                        "Type": "Asteroid",
+                        "RA": ra_deg[i],
+                        "DEC": dec_deg[i],
+                        "Mv": mv_val,
+                    })
+
+                from astropy.table import Table as ATable
+                return ATable(rows=rows)
+        except Exception as e:
+            err = f"本地小行星查询失败: {e}"
+            self.logger.error(err, exc_info=True)
+            if self.log_callback:
+                self.log_callback(err, "ERROR")
+            return None
+
+    def _perform_local_vsx_query(self, ra, dec, mag_limit=16.0, search_radius=0.01):
+        """使用本地VSX库进行圆锥搜索（离线）。返回Astropy Table。"""
+        try:
+            settings = self.config_manager.get_local_catalog_settings() if self.config_manager else {}
+            catalog_path = (settings or {}).get("vsx_catalog_path", "")
+            if not catalog_path or not os.path.exists(catalog_path):
+                warn = "未配置本地变星库或路径不存在，返回空结果"
+                self.logger.warning(warn)
+                if self.log_callback:
+                    self.log_callback(warn, "WARNING")
+                from astropy.table import Table
+                return Table()
+
+            from astropy.table import Table
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+            import numpy as np
+
+            target = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+            # 使用缓存以避免重复读取
+            if self._local_vsx_cache and self._local_vsx_cache[0] == catalog_path:
+                table = self._local_vsx_cache[1]
+            else:
+                table = Table.read(catalog_path)
+                self._local_vsx_cache = (catalog_path, table)
+
+            # 识别RA/DEC列（VSX常用RAJ2000/DEJ2000）
+            ra_candidates = ("RAJ2000", "RA", "ra", "_RAJ2000")
+            dec_candidates = ("DEJ2000", "DEC", "dec", "_DEJ2000")
+            col_ra = next((c for c in ra_candidates if c in table.colnames), None)
+            col_dec = next((c for c in dec_candidates if c in table.colnames), None)
+            if not col_ra or not col_dec:
+                warn = f"本地VSX库缺少RA/DEC列（需要列名之一: {ra_candidates} / {dec_candidates}），返回空结果"
+                self.logger.warning(warn)
+                if self.log_callback:
+                    self.log_callback(warn, "WARNING")
+                return Table()
+
+            ra_vals = table[col_ra]
+            dec_vals = table[col_dec]
+            try:
+                coords = SkyCoord(ra=ra_vals * u.deg, dec=dec_vals * u.deg, frame="icrs")
+            except Exception:
+                coords = SkyCoord(ra_vals, dec_vals, unit=(u.hourangle, u.deg), frame="icrs")
+
+            sep_deg = coords.separation(target).deg
+            mask_rad = np.array(sep_deg) <= float(search_radius)
+
+            # 星等过滤（优先使用VSX的max列）
+            vmag_candidates = ("max", "Vmag", "Mag", "vmag")
+            mag_col = next((c for c in vmag_candidates if c in table.colnames), None)
+            if mag_col is not None:
+                mag_mask = np.ones(len(table), dtype=bool)
+                for i, val in enumerate(table[mag_col]):
+                    try:
+                        if hasattr(val, 'mask') and val.mask:
+                            continue
+                        if float(val) > float(mag_limit):
+                            mag_mask[i] = False
+                    except Exception:
+                        # 无法解析的保留
+                        continue
+                mask = mask_rad & mag_mask
+            else:
+                mask = mask_rad
+
+            if not np.any(mask):
+                from astropy.table import Table as ATable
+                return ATable()
+
+            filtered = table[mask]
+            coords_f = coords[mask]
+            ra_deg = np.array(coords_f.ra.deg).tolist()
+            dec_deg = np.array(coords_f.dec.deg).tolist()
+
+            name_candidates = ("Name", "name", "VSName", "OID")
+            type_candidates = ("Type", "type", "VarType")
+            min_candidates = ("min", "Min")
+            per_candidates = ("Period", "Per", "P")
+            name_col = next((c for c in name_candidates if c in filtered.colnames), None)
+            type_col = next((c for c in type_candidates if c in filtered.colnames), None)
+            min_col = next((c for c in min_candidates if c in filtered.colnames), None)
+            per_col = next((c for c in per_candidates if c in filtered.colnames), None)
+            mag_col = next((c for c in vmag_candidates if c in filtered.colnames), None)
+
+            rows = []
+            for i, row in enumerate(filtered):
+                name_val = str(row[name_col]) if name_col else ""
+                type_val = str(row[type_col]) if type_col else ""
+                vmax_val = None
+                vmin_val = None
+                per_val = None
+                if mag_col is not None:
+                    try:
+                        vmax_val = float(row[mag_col])
+                    except Exception:
+                        vmax_val = row[mag_col]
+                if min_col is not None:
+                    try:
+                        vmin_val = float(row[min_col])
+                    except Exception:
+                        vmin_val = row[min_col]
+                if per_col is not None:
+                    try:
+                        per_val = float(row[per_col])
+                    except Exception:
+                        per_val = row[per_col]
+
+                rows.append({
+                    "Name": name_val,
+                    "Type": type_val,
+                    "RAJ2000": ra_deg[i],
+                    "DEJ2000": dec_deg[i],
+                    "max": vmax_val,
+                    "min": vmin_val,
+                    "Period": per_val,
+                })
+
+            from astropy.table import Table as ATable
+            return ATable(rows=rows)
+        except Exception as e:
+            err = f"本地VSX查询失败: {e}"
+            self.logger.error(err, exc_info=True)
+            if self.log_callback:
+                self.log_callback(err, "ERROR")
+            return None
+
 
     def _query_satellite(self):
         """使用Skyfield查询卫星数据"""
@@ -9198,6 +9567,17 @@ class FitsImageViewer:
             self.logger.error(f"删除目录查询结果失败: {str(e)}")
 
         return deleted_count
+    def _batch_query_local_asteroids_and_variables(self):
+        """   :   batch     
+           Local   
+        """
+        prev = getattr(self, "_use_local_query_override", False)
+        self._use_local_query_override = True
+        try:
+            return self._batch_query_asteroids_and_variables()
+        finally:
+            self._use_local_query_override = prev
+
 
     def _batch_query_asteroids_and_variables(self):
         """批量查询小行星和变星"""

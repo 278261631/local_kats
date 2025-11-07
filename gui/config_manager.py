@@ -89,6 +89,17 @@ class ConfigManager:
             "automation_settings": {
                 "enable_auto_chain_oss_upload": False
             },
+            "local_catalog_settings": {
+                "use_local_query": False,
+                "auto_chain_use_local_query": False,
+                "asteroid_catalog_path": "",
+                "vsx_catalog_path": "",
+                "last_asteroid_update": "",
+                "last_vsx_update": "",
+                "mpc_h_limit": 20,
+                "ephemeris_file_path": "",
+                "last_ephemeris_update": ""
+            },
             "url_template_type": "standard",  # "standard" 或 "with_year"
             # URL模板现在从独立的URL配置文件中读取
             "url_templates": url_config_manager.get_available_templates()
@@ -200,6 +211,21 @@ class ConfigManager:
             self.config["automation_settings"] = self.default_config.get("automation_settings", {}).copy()
             self.save_config()
         return self.config["automation_settings"]
+    def get_local_catalog_settings(self) -> Dict[str, Any]:
+        """获取本地目录查询设置"""
+        if "local_catalog_settings" not in self.config:
+            self.config["local_catalog_settings"] = self.default_config.get("local_catalog_settings", {}).copy()
+            self.save_config()
+        return self.config["local_catalog_settings"]
+
+    def update_local_catalog_settings(self, **kwargs):
+        """更新本地目录查询设置"""
+        if "local_catalog_settings" not in self.config:
+            self.config["local_catalog_settings"] = self.default_config.get("local_catalog_settings", {}).copy()
+        for key, value in kwargs.items():
+            self.config["local_catalog_settings"][key] = value
+        self.save_config()
+
 
     def update_automation_settings(self, **kwargs):
         """更新自动化相关设置"""

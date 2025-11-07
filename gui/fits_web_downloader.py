@@ -74,6 +74,9 @@ class FitsWebDownloaderGUI:
         self._auto_chain_followups = False
         # 自动链附加步骤：是否在自动链末尾上传到OSS（默认不启用）
         self.auto_chain_oss_upload_var = tk.BooleanVar(value=False)
+        # 自动链：是否使用本地离线查询
+        self.auto_chain_use_local_query_var = tk.BooleanVar(value=False)
+
 
 
 
@@ -527,6 +530,54 @@ class FitsWebDownloaderGUI:
         )
         auto_oss_check.grid(row=0, column=0, sticky=tk.W)
 
+        # 自动链：是否使用本地离线查询
+        auto_local_chk = ttk.Checkbutton(
+            auto_chain_frame,
+            text="自动链使用本地查询(离线)",
+            variable=self.auto_chain_use_local_query_var,
+            command=self._on_toggle_auto_chain_use_local_query
+        )
+        auto_local_chk.grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+
+        # 本地查询资源设置
+        local_catalog_frame = ttk.LabelFrame(settings_container, text="本地查询资源", padding=10)
+        local_catalog_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 更新/选择 本地小行星库
+        ttk.Button(local_catalog_frame, text="选择/更新本地小行星库", command=self._update_local_asteroid_catalog).grid(row=0, column=0, sticky=tk.W)
+        self.local_asteroid_status_label = ttk.Label(local_catalog_frame, text="小行星库: 未设置")
+        self.local_asteroid_status_label.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+
+        # 更新/选择 本地变星库
+        ttk.Button(local_catalog_frame, text="选择/更新本地变星库", command=self._update_local_vsx_catalog).grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        self.local_vsx_status_label = ttk.Label(local_catalog_frame, text="变星库: 未设置")
+        self.local_vsx_status_label.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+        # 小行星H上限设置
+        try:
+            local_settings = self.config_manager.get_local_catalog_settings()
+            current_h = str(local_settings.get("mpc_h_limit", 20))
+        except Exception:
+            current_h = "20"
+        self.mpc_h_limit_var = tk.StringVar(value=current_h)
+        ttk.Label(local_catalog_frame, text="小行星H上限:").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        h_entry = ttk.Entry(local_catalog_frame, textvariable=self.mpc_h_limit_var, width=8)
+        h_entry.grid(row=2, column=1, sticky=tk.W, padx=(5, 5), pady=(5, 0))
+        ttk.Button(local_catalog_frame, text="保存H上限", command=self._save_mpc_h_limit).grid(row=2, column=2, sticky=tk.W, pady=(5, 0))
+        self.mpc_h_status_label = ttk.Label(local_catalog_frame, text=f"当前H上限: {current_h}")
+        self.mpc_h_status_label.grid(row=2, column=3, sticky=tk.W, padx=(10, 0), pady=(5, 0))
+
+        # 星历文件选择
+        ttk.Button(local_catalog_frame, text="选择星历文件(.bsp)", command=self._update_ephemeris_file).grid(row=3, column=0, sticky=tk.W, pady=(5, 0))
+        self.ephemeris_status_label = ttk.Label(local_catalog_frame, text="星历: 未设置")
+        self.ephemeris_status_label.grid(row=3, column=1, sticky=tk.W, padx=(10, 0), pady=(5, 0))
+
+
+        # 初始化状态显示
+        try:
+            self._refresh_local_catalog_status_labels()
+        except Exception:
+            pass
+
         # 底部说明
         bottom_info = ttk.Label(main_container,
                                text="提示：所有设置修改会自动保存，并在下次启动时生效。",
@@ -561,7 +612,147 @@ class FitsWebDownloaderGUI:
         except Exception as e:
             self._log(f"保存自动链OSS上传设置失败: {e}")
 
+
+    def _on_toggle_auto_chain_use_local_query(self):
+        """高级设置：切换自动链是否使用本地查询（立即保存到配置）"""
+        try:
+            enabled = bool(self.auto_chain_use_local_query_var.get())
+            self.config_manager.update_local_catalog_settings(auto_chain_use_local_query=enabled)
+            self._log(f"[设置] 自动链本地查询: {'开启' if enabled else '关闭'}")
+        except Exception as e:
+            self._log(f"保存自动链本地查询设置失败: {e}")
+        # 同步H上限与星历状态
+        try:
+            settings_local = self.config_manager.get_local_catalog_settings()
+        except Exception:
+            settings_local = {}
+        try:
+            h_val = self.mpc_h_limit_var.get() if hasattr(self, 'mpc_h_limit_var') else str(settings_local.get('mpc_h_limit', 20))
+            if hasattr(self, 'mpc_h_status_label'):
+                self.mpc_h_status_label.config(text=f"当前H上限: {h_val}")
+        except Exception:
+            pass
+        ephem_path = settings_local.get("ephemeris_file_path", "") or ""
+        if hasattr(self, 'ephemeris_status_label'):
+            ephem_name = Path(ephem_path).name if ephem_path else "未设置"
+            self.ephemeris_status_label.config(text=f"星历: {ephem_name}")
+
+
+    def _refresh_local_catalog_status_labels(self):
+        """刷新本地库状态标签"""
+        try:
+            settings = self.config_manager.get_local_catalog_settings()
+        except Exception:
+            settings = {}
+        ast_path = settings.get("asteroid_catalog_path", "") or ""
+        vsx_path = settings.get("vsx_catalog_path", "") or ""
+        ast_ts = settings.get("last_asteroid_update", "") or ""
+        vsx_ts = settings.get("last_vsx_update", "") or ""
+        if hasattr(self, 'local_asteroid_status_label'):
+            name = Path(ast_path).name if ast_path else "未设置"
+            ts = ast_ts or "未知"
+            self.local_asteroid_status_label.config(text=f"小行星库: {name} | 更新时间: {ts}")
+        if hasattr(self, 'local_vsx_status_label'):
+            name = Path(vsx_path).name if vsx_path else "未设置"
+            ts = vsx_ts or "未知"
+            self.local_vsx_status_label.config(text=f"变星库: {name} | 更新时间: {ts}")
+
+    def _update_local_asteroid_catalog(self):
+        """选择/更新本地小行星库文件（本地CSV/TSV/自定义分隔文本）"""
+        try:
+            # 默认使用run_gui.py同级(gui)目录下的mpcorb子目录
+            gui_dir = os.path.dirname(os.path.abspath(__file__))
+            default_mpc_dir = os.path.join(gui_dir, 'mpcorb')
+            os.makedirs(default_mpc_dir, exist_ok=True)
+            initialdir = self.download_dir_var.get() or default_mpc_dir
+            file_path = filedialog.askopenfilename(
+                title="选择本地小行星库文件",
+                initialdir=initialdir,
+                filetypes=[
+                    ("MPCORB files", "*.dat *.DAT *.gz *.GZ"),
+                    ("Catalog files", "*.csv *.tsv *.txt *.fits *.fit *.fts"),
+                    ("All files", "*.*")
+                ]
+            )
+            if not file_path:
+                return
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.config_manager.update_local_catalog_settings(
+                asteroid_catalog_path=file_path,
+                last_asteroid_update=ts
+            )
+            self._refresh_local_catalog_status_labels()
+            self._log(f"[设置] 已更新本地小行星库: {file_path}")
+        except Exception as e:
+            self._log(f"更新本地小行星库失败: {e}")
+
+    def _save_mpc_h_limit(self):
+        """保存MPC H上限到配置"""
+        try:
+            val_str = self.mpc_h_limit_var.get().strip()
+            h_val = float(val_str)
+            self.config_manager.update_local_catalog_settings(mpc_h_limit=h_val)
+            if hasattr(self, 'mpc_h_status_label'):
+                self.mpc_h_status_label.config(text=f"当前H上限: {val_str}")
+            self._log(f"[设置] 已保存小行星H上限: {val_str}")
+        except Exception as e:
+            self._log(f"保存H上限失败: {e}")
+
+    def _update_ephemeris_file(self):
+        """选择/更新本地星历文件(.bsp)"""
+        try:
+            gui_dir = os.path.dirname(os.path.abspath(__file__))
+            default_dir = os.path.join(gui_dir, 'ephemeris')
+            os.makedirs(default_dir, exist_ok=True)
+            file_path = filedialog.askopenfilename(
+                title="选择星历文件(.bsp)",
+                initialdir=default_dir,
+                filetypes=[("JPL Ephemeris", "*.bsp"), ("All files", "*.*")]
+            )
+            if not file_path:
+                return
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.config_manager.update_local_catalog_settings(
+                ephemeris_file_path=file_path,
+                last_ephemeris_update=ts
+            )
+            self._refresh_local_catalog_status_labels()
+            self._log(f"[设置] 已更新星历文件: {file_path}")
+        except Exception as e:
+            self._log(f"更新星历文件失败: {e}")
+
+                # 出现异常时保持默认 False
+
+    def _update_local_vsx_catalog(self):
+        """选择/更新本地变星库文件（本地CSV/TSV/自定义分隔文本）"""
+        try:
+            # 默认使用run_gui.py同级(gui)目录下的vsx子目录
+            gui_dir = os.path.dirname(os.path.abspath(__file__))
+            default_vsx_dir = os.path.join(gui_dir, 'vsx')
+            os.makedirs(default_vsx_dir, exist_ok=True)
+            initialdir = self.download_dir_var.get() or default_vsx_dir
+            file_path = filedialog.askopenfilename(
+                title="选择本地变星库文件",
+                initialdir=initialdir,
+                filetypes=[
+                    ("Catalog files", "*.csv *.tsv *.txt *.fits *.fit *.fts"),
+                    ("All files", "*.*")
+                ]
+            )
+            if not file_path:
+                return
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.config_manager.update_local_catalog_settings(
+                vsx_catalog_path=file_path,
+                last_vsx_update=ts
+            )
+            self._refresh_local_catalog_status_labels()
+            self._log(f"[设置] 已更新本地变星库: {file_path}")
+        except Exception as e:
+            self._log(f"更新本地变星库失败: {e}")
+
     def _create_batch_status_widgets(self):
+
         """创建批量处理状态界面"""
         # 标题和说明
         title_frame = ttk.Frame(self.batch_status_frame)
@@ -3379,7 +3570,16 @@ Diff统计:
                 self._log(f"[自动] 未找到天区目录节点: {region_dir}，将仍尝试执行批量查询")
 
             # 静默执行批量查询，屏蔽可能的弹窗
-            self._run_without_messageboxes(self.fits_viewer._batch_query_asteroids_and_variables)
+            use_local = False
+            try:
+                settings = self.config_manager.get_local_catalog_settings()
+                use_local = bool(settings.get("auto_chain_use_local_query", False))
+            except Exception:
+                use_local = False
+            if use_local and hasattr(self.fits_viewer, "_batch_query_local_asteroids_and_variables"):
+                self._run_without_messageboxes(self.fits_viewer._batch_query_local_asteroids_and_variables)
+            else:
+                self._run_without_messageboxes(self.fits_viewer._batch_query_asteroids_and_variables)
 
             # 查询完成后，继续执行“批量导出未查询”
             self.root.after(500, self._auto_batch_export_unqueried)
