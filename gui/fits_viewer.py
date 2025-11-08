@@ -7180,6 +7180,9 @@ class FitsImageViewer:
             # 立即重置结果标签，确保用户能看到查询状态变化
             self.skybot_result_label.config(text="准备中...", foreground="gray")
             self.skybot_result_label.update_idletasks()  # 强制刷新界面
+            # 标记当前查询来源，默认在线Skybot；后续根据use_local更新
+            source = "Skybot"
+
 
             # 检查是否有当前显示的cutout
             if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
@@ -7258,11 +7261,27 @@ class FitsImageViewer:
             self.skybot_result_label.config(text="查询中...", foreground="orange")
             self.skybot_result_label.update_idletasks()  # 强制刷新界面
 
-            # 执行Skybot查询（根据覆盖开关选择本地/在线）
-            if getattr(self, '_use_local_query_override', False):
+            # 执行Skybot查询（根据设置/覆盖开关选择本地/在线）
+            use_local = getattr(self, '_use_local_query_override', False)
+            if (not use_local) and self.config_manager:
+                try:
+                    _ls = self.config_manager.get_local_catalog_settings()
+                    if bool((_ls or {}).get("buttons_use_local_query", False)):
+                        use_local = True
+                except Exception:
+                    pass
+            # 依据设置决定查询模式，并输出模式日志
+            source = "离线MPCORB" if use_local else "Skybot"
+            mode_msg = f"查询模式: {source}"
+            self.logger.info(mode_msg)
+            if self.log_callback:
+                self.log_callback(mode_msg, "INFO")
+
+            if use_local:
                 results = self._perform_local_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
             else:
                 results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
+
 
             if results is not None:
                 # 保存查询结果到当前cutout
@@ -7278,14 +7297,14 @@ class FitsImageViewer:
                 if count > 0:
 
                     self.skybot_result_label.config(text=f"找到 {count} 个", foreground="green")
-                    success_msg = f"Skybot查询成功，找到 {count} 个小行星"
+                    success_msg = f"{source}查询成功，找到 {count} 个小行星"
                     self.logger.info(success_msg)
                     if self.log_callback:
                         self.log_callback(success_msg, "INFO")
 
                     # 输出详细结果到日志
                     separator = "=" * 80
-                    header = "Skybot查询结果详情:"
+                    header = f"{source}查询结果详情:"
                     self.logger.info(separator)
                     self.logger.info(header)
                     self.logger.info(separator)
@@ -7381,7 +7400,7 @@ class FitsImageViewer:
                     self._skybot_query_results = None  # 兼容旧代码
 
                     self.skybot_result_label.config(text="未找到", foreground="blue")
-                    not_found_msg = "Skybot查询完成，未找到小行星"
+                    not_found_msg = f"{source}查询完成，未找到小行星"
                     self.logger.info(not_found_msg)
                     if self.log_callback:
                         self.log_callback(not_found_msg, "INFO")
@@ -7399,13 +7418,13 @@ class FitsImageViewer:
                 self._skybot_query_results = None  # 兼容旧代码
 
                 self.skybot_result_label.config(text="查询失败", foreground="red")
-                error_msg = "Skybot查询失败"
+                error_msg = f"{source}查询失败"
                 self.logger.error(error_msg)
                 if self.log_callback:
                     self.log_callback(error_msg, "ERROR")
 
         except Exception as e:
-            exception_msg = f"Skybot查询失败: {str(e)}"
+            exception_msg = f"{source}查询失败: {str(e)}"
             self.logger.error(exception_msg, exc_info=True)
             if self.log_callback:
                 self.log_callback(exception_msg, "ERROR")
@@ -7433,7 +7452,10 @@ class FitsImageViewer:
             from astropy.coordinates import SkyCoord
             import astropy.units as u
 
-            # 转换时间格式
+            # 转换时间格式（统一为UTC且带时区）
+            from datetime import timezone
+            if getattr(utc_time, 'tzinfo', None) is None:
+                utc_time = utc_time.replace(tzinfo=timezone.utc)
             obs_time = Time(utc_time)
 
             # 创建坐标对象
@@ -7564,8 +7586,16 @@ class FitsImageViewer:
             self.vsx_result_label.config(text="查询中...", foreground="orange")
             self.vsx_result_label.update_idletasks()  # 强制刷新界面
 
-            # 执行VSX查询（根据覆盖开关选择本地/在线）
-            if getattr(self, '_use_local_query_override', False):
+            # 执行VSX查询（根据设置/覆盖开关选择本地/在线）
+            use_local = getattr(self, '_use_local_query_override', False)
+            if (not use_local) and self.config_manager:
+                try:
+                    _ls = self.config_manager.get_local_catalog_settings()
+                    if bool((_ls or {}).get("buttons_use_local_query", False)):
+                        use_local = True
+                except Exception:
+                    pass
+            if use_local:
                 results = self._perform_local_vsx_query(ra, dec, mag_limit, search_radius)
             else:
                 results = self._perform_vsx_query(ra, dec, mag_limit, search_radius)
@@ -7829,12 +7859,17 @@ class FitsImageViewer:
             settings = self.config_manager.get_local_catalog_settings() if self.config_manager else {}
             catalog_path = (settings or {}).get("asteroid_catalog_path", "")
             if not catalog_path or not os.path.exists(catalog_path):
-                warn = "未配置本地小行星库或路径不存在，返回空结果"
-                self.logger.warning(warn)
-                if self.log_callback:
-                    self.log_callback(warn, "WARNING")
-                from astropy.table import Table
-                return Table()
+                # 尝试使用默认 gui/mpc_variables/MPCORB.DAT
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                default_ast = os.path.join(current_dir, 'mpc_variables', 'MPCORB.DAT')
+                if os.path.exists(default_ast):
+                    catalog_path = default_ast
+                else:
+                    err = "未配置本地小行星库或路径不存在，请在高级设置中配置 MPCORB.DAT"
+                    self.logger.error(err)
+                    if self.log_callback:
+                        self.log_callback(err, 'ERROR')
+                    return None
 
             from astropy.table import Table
             from astropy.coordinates import SkyCoord
@@ -7850,7 +7885,7 @@ class FitsImageViewer:
             if is_mpcorb:
                 # 使用Skyfield基于MPCORB离线计算当前位置
                 try:
-                    from skyfield.api import load, wgs84
+                    from skyfield.api import load, wgs84, utc
                     from skyfield.data import mpc
                     from skyfield.constants import GM_SUN_Pitjeva_2005_km3_s2 as GM_SUN
                     import pandas as pd
@@ -7859,8 +7894,7 @@ class FitsImageViewer:
                     self.logger.error(err)
                     if self.log_callback:
                         self.log_callback(err, "ERROR")
-                    from astropy.table import Table as ATable
-                    return ATable()
+                    return None
 
                 # 计算观测时刻与观测者（使用本地GPS，顶点观测）
                 ts = None
@@ -7881,6 +7915,50 @@ class FitsImageViewer:
                         with open(catalog_path, 'r', encoding='utf-8', errors='ignore') as f:
                             df = mpc.load_mpcorb_dataframe(f)
 
+                    # 统计原始条目数（统一放在读取后，避免只在异常分支统计）
+                    try:
+                        raw_count = len(df)
+                    except Exception:
+                        raw_count = None
+
+                    # 将关键轨道要素列转换为数值（Skyfield需要浮点）
+                    try:
+                        numeric_cols = [
+                            'magnitude_H','magnitude_G','mean_anomaly_degrees',
+                            'argument_of_perihelion_degrees','longitude_of_ascending_node_degrees',
+                            'inclination_degrees','eccentricity','mean_daily_motion_degrees',
+                            'semimajor_axis_au'
+                        ]
+                        import pandas as pd
+                        for c in numeric_cols:
+                            if c in df.columns:
+                                df[c] = pd.to_numeric(df[c], errors='coerce')
+                    except Exception:
+                        pass
+
+                        # 统计原始条目数
+                        try:
+                            raw_count = len(df)
+                        except Exception:
+                            raw_count = None
+
+
+                        # 将关键轨道要素列转换为数值（Skyfield需要浮点）
+                        try:
+                            numeric_cols = [
+                                'magnitude_H','magnitude_G','mean_anomaly_degrees',
+                                'argument_of_perihelion_degrees','longitude_of_ascending_node_degrees',
+                                'inclination_degrees','eccentricity','mean_daily_motion_degrees',
+                                'semimajor_axis_au'
+                            ]
+                            import pandas as pd
+                            for c in numeric_cols:
+                                if c in df.columns:
+                                    df[c] = pd.to_numeric(df[c], errors='coerce')
+                        except Exception:
+                            pass
+
+
                     # 过滤非法轨道
                     if 'semimajor_axis_au' in df.columns:
                         df = df[~df['semimajor_axis_au'].isnull()]
@@ -7893,14 +7971,232 @@ class FitsImageViewer:
                     default_ephem = os.path.join(current_dir, 'ephemeris', 'de421.bsp')
                     ephem_path = (settings or {}).get('ephemeris_file_path') or default_ephem
                     if not os.path.exists(ephem_path):
-                        warn = f"未找到本地星历文件: {ephem_path}；无法进行MPCORB离线计算"
-                        self.logger.warning(warn)
+                        err = f"未找到本地星历文件: {ephem_path}，请在高级设置中配置 de421.bsp"
+                        self.logger.error(err)
                         if self.log_callback:
-                            self.log_callback(warn, "WARNING")
-                        from astropy.table import Table as ATable
-                        return ATable()
-                    eph = load(ephem_path)
+                            self.log_callback(err, 'ERROR')
+                        return None
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                    eph = load(ephem_path)
                     # 缓存
                     self._mpcorb_cache = (catalog_path, df, ts, eph)
 
@@ -7909,19 +8205,54 @@ class FitsImageViewer:
                     h_limit = float((settings or {}).get('mpc_h_limit', 20))
                 except Exception:
                     h_limit = 20.0
-                if 'H' in df.columns:
+                # 统一按可用的H列过滤（优先 magnitude_H）
+                col_H = None
+                if 'magnitude_H' in df.columns:
+                    col_H = 'magnitude_H'
+                elif 'H' in df.columns:
+                    col_H = 'H'
+                if col_H is not None:
                     try:
-                        df = df[df['H'] <= h_limit]
+                        df = df[df[col_H] <= h_limit]
                     except Exception:
                         pass
 
+                # 统计H筛选后的条目数，并输出诊断
+                try:
+                    filtered_count = len(df)
+                except Exception:
+                    filtered_count = None
+                try:
+                    msg = f"MPCORB载入: 原始 {raw_count} 条, H<= {h_limit} 后 {filtered_count} 条"
+                    self.logger.info(msg)
+                    if self.log_callback:
+                        self.log_callback(msg, "INFO")
+                except Exception:
+                    pass
+
+
                 # 目标、观测者
                 earth = eph['earth']
+                err_count = 0
+                first_err = None
+
                 observer = earth + wgs84.latlon(latitude, longitude)
+                # Skyfield 需要带时区的UTC时间
+                if getattr(utc_time, 'tzinfo', None) is None:
+                    try:
+                        utc_time = utc_time.replace(tzinfo=utc)
+                    except Exception:
+                        from datetime import timezone
+                        utc_time = utc_time.replace(tzinfo=timezone.utc)
+
                 t = ts.from_datetime(utc_time)
 
                 # 逐个预测并筛选（注意：大文件会较慢，建议提供摘录MPCORB）
                 rows = []
+                # 诊断：记录全表的最小角距
+                min_sep = None
+                min_info = None
+
                 count = 0
                 for _, r in df.iterrows():
                     try:
@@ -7931,10 +8262,26 @@ class FitsImageViewer:
                         dec_deg_obj = dec_obj.degrees
                         # 圆锥过滤
                         sep = SkyCoord(ra=ra_deg_obj * u.deg, dec=dec_deg_obj * u.deg).separation(target).deg
+                        # 诊断：记录最小角距及其对象
+                        try:
+                            if (min_sep is None) or (sep < min_sep):
+                                min_sep = sep
+                                name_dbg = str(r.get('designation', ''))
+                                min_info = f"{name_dbg} @ RA={ra_deg_obj:.6f},Dec={dec_deg_obj:.6f}, sep={sep*3600:.3f}"  # arcsec
+                        except Exception:
+                            pass
+
                         if sep <= float(search_radius):
                             name_val = str(r.get('designation', ''))
                             number_val = None
-                            mv_val = float(r.get('H')) if 'H' in r and pd.notnull(r.get('H')) else None
+                            mv_val = None
+                            try:
+                                for k in ('magnitude_H', 'H'):
+                                    if (k in r) and pd.notnull(r.get(k)):
+                                        mv_val = float(r.get(k))
+                                        break
+                            except Exception:
+                                pass
                             rows.append({
                                 'Name': name_val,
                                 'Number': number_val,
@@ -7950,8 +8297,44 @@ class FitsImageViewer:
                                 self.parent_frame.update_idletasks()
                             except Exception:
                                 pass
-                    except Exception:
+                    except Exception as e:
+                        try:
+                            err_count += 1
+                            if first_err is None:
+                                first_err = str(e)
+                        except Exception:
+                            pass
                         continue
+
+                # 
+
+
+
+
+
+
+
+                        continue
+
+
+                try:
+                    if err_count > 0:
+                        dbg = f"离线MPCORB计算异常条目: {err_count}, 示例: {first_err}"
+                        self.logger.info(dbg)
+                        if self.log_callback:
+                            self.log_callback(dbg, "INFO")
+                except Exception:
+                    pass
+
+                if not rows:
+                    try:
+                        if (min_sep is not None) and (min_info is not None):
+                            dbg = f"离线MPCORB最小角距(非命中): {min_sep*3600:.3f} arcsec, 候选: {min_info}"
+                            self.logger.info(dbg)
+                            if self.log_callback:
+                                self.log_callback(dbg, "INFO")
+                    except Exception:
+                        pass
 
                 from astropy.table import Table as ATable
                 return ATable(rows=rows)
@@ -8037,12 +8420,18 @@ class FitsImageViewer:
             settings = self.config_manager.get_local_catalog_settings() if self.config_manager else {}
             catalog_path = (settings or {}).get("vsx_catalog_path", "")
             if not catalog_path or not os.path.exists(catalog_path):
-                warn = "未配置本地变星库或路径不存在，返回空结果"
-                self.logger.warning(warn)
-                if self.log_callback:
-                    self.log_callback(warn, "WARNING")
-                from astropy.table import Table
-                return Table()
+                # 尝试使用默认 gui/mpc_variables/catalog_gaia_variables.dat
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                default_vsx = os.path.join(current_dir, 'mpc_variables', 'catalog_gaia_variables.dat')
+                if os.path.exists(default_vsx):
+                    catalog_path = default_vsx
+                else:
+                    warn = "未配置本地变星库或路径不存在，返回空结果"
+                    self.logger.warning(warn)
+                    if self.log_callback:
+                        self.log_callback(warn, "WARNING")
+                    from astropy.table import Table
+                    return Table()
 
             from astropy.table import Table
             from astropy.coordinates import SkyCoord
@@ -8050,20 +8439,131 @@ class FitsImageViewer:
             import numpy as np
 
             target = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+            # 针对 Gaia DR3 vclassre.dat 的快速本地圆锥搜索（流式解析，避免整表载入内存）
+            try:
+                import os
+                base_name = os.path.basename(catalog_path).lower()
+                if 'vclassre.dat' in base_name:
+                    import gzip
+                    rows = []
+                    # 目标与包围盒（先做粗筛，减少精确分离计算次数）
+                    target_ra = float(ra)
+                    target_dec = float(dec)
+                    search_deg = float(search_radius)
+                    # 基于cos(dec)的RA包围盒（处理极区时做下限保护）
+                    cos_dec = max(np.cos(np.deg2rad(target_dec)), 1e-6)
+                    ra_pad = search_deg / cos_dec
+                    ra_min = (target_ra - ra_pad) % 360.0
+                    ra_max = (target_ra + ra_pad) % 360.0
+                    dec_min = target_dec - search_deg
+                    dec_max = target_dec + search_deg
+
+                    def ra_in_box(r):
+                        return (ra_min <= ra_max and (r >= ra_min and r <= ra_max)) or \
+                               (ra_min > ra_max and (r >= ra_min or r <= ra_max))
+
+                    # vclassre.dat 列位（1-based: RAdeg 94-114, DEdeg 116-137；Source 1-19；Class 53-78）
+                    # 转为Python slice（0-based, end-exclusive）
+                    SL_RA = slice(93, 114)
+                    SL_DEC = slice(115, 137)
+                    SL_SRC = slice(0, 19)
+                    SL_CLS = slice(52, 78)
+
+                    # 逐行扫描（限制最大扫描行数，避免长时间阻塞）
+                    max_scan = 1000000  # 安全上限
+                    max_results = 200   # 返回最多200条
+                    scanned = 0
+
+                    opener = gzip.open if base_name.endswith('.gz') else open
+                    with opener(catalog_path, 'rt', encoding='utf-8', errors='ignore') as f:
+                        for line in f:
+                            scanned += 1
+                            if scanned > max_scan:
+                                break
+                            if len(line) < 137:
+                                continue
+                            try:
+                                ra_str = line[SL_RA].strip()
+                                dec_str = line[SL_DEC].strip()
+                                if not ra_str or not dec_str:
+                                    continue
+                                ra_v = float(ra_str)
+                                dec_v = float(dec_str)
+                            except Exception:
+                                continue
+
+                            if dec_v < dec_min or dec_v > dec_max or not ra_in_box(ra_v):
+                                continue
+
+                            # 精确角距
+                            obj = SkyCoord(ra=ra_v*u.deg, dec=dec_v*u.deg, frame='icrs')
+                            if obj.separation(target).deg <= search_deg:
+                                src = line[SL_SRC].strip()
+                                cls = line[SL_CLS].strip()
+                                name = f"GaiaDR3 {src}" if src else "GaiaDR3"
+                                rows.append({
+                                    'Name': name,
+                                    'Type': cls,
+                                    'RAJ2000': ra_v,
+                                    'DEJ2000': dec_v,
+                                    'Source': src,
+                                })
+                                if len(rows) >= max_results:
+                                    break
+
+                    from astropy.table import Table as ATable
+                    return ATable(rows=rows)
+            except Exception as e:
+                self.logger.warning(f"vclassre快速路径失败，将回退通用读取: {e}")
+
             # 使用缓存以避免重复读取
             if self._local_vsx_cache and self._local_vsx_cache[0] == catalog_path:
                 table = self._local_vsx_cache[1]
             else:
-                table = Table.read(catalog_path)
+                try:
+                    table = Table.read(catalog_path)
+                except Exception:
+                    # 回退尝试 CSV/ASCII 以及 VizieR CDS 格式（需 ReadMe 同目录）
+                    read_exc = None
+                    try:
+                        table = Table.read(catalog_path, format='ascii.csv')
+                    except Exception as e_csv:
+                        read_exc = e_csv
+                        try:
+                            table = Table.read(catalog_path, format='ascii')
+                        except Exception as e_ascii:
+                            read_exc = e_ascii
+                            try:
+                                import os
+                                readme_path = os.path.join(os.path.dirname(catalog_path), 'ReadMe')
+                                # 优先通过 ReadMe + table 名称读取，以便兼容 .gz 文件
+                                try:
+                                    import os
+                                    from astropy.io import ascii as ascii_io
+                                    base = os.path.basename(catalog_path)
+                                    table_name = base[:-3] if base.endswith('.gz') else base
+                                    reader = ascii_io.Cds(readme=readme_path)
+                                    table = reader.read(table_name)
+                                except Exception:
+                                    # 回退：直接以文件路径 + readme 读取（某些 astropy 版本可直接解析）
+                                    table = Table.read(catalog_path, format='ascii.cds', readme=readme_path)
+                            except Exception as e_cds:
+                                read_exc = e_cds
+                                from astropy.table import Table as ATable
+                                warn = f"无法读取本地变星库: {read_exc}"
+                                self.logger.warning(warn)
+                                if self.log_callback:
+                                    self.log_callback(warn, "WARNING")
+                                return ATable()
                 self._local_vsx_cache = (catalog_path, table)
 
-            # 识别RA/DEC列（VSX常用RAJ2000/DEJ2000）
-            ra_candidates = ("RAJ2000", "RA", "ra", "_RAJ2000")
-            dec_candidates = ("DEJ2000", "DEC", "dec", "_DEJ2000")
+            # 识别RA/DEC列（兼容 Gaia/VizieR 列名）
+            ra_candidates = ("RA_ICRS", "RAJ2000", "RAdeg", "RA", "ra", "_RAJ2000")
+            dec_candidates = ("DE_ICRS", "DEJ2000", "DEdeg", "DEC", "dec", "_DEJ2000")
             col_ra = next((c for c in ra_candidates if c in table.colnames), None)
             col_dec = next((c for c in dec_candidates if c in table.colnames), None)
             if not col_ra or not col_dec:
-                warn = f"本地VSX库缺少RA/DEC列（需要列名之一: {ra_candidates} / {dec_candidates}），返回空结果"
+                warn = f"本地变星库缺少RA/DEC列（需要列名之一: {ra_candidates} / {dec_candidates}），返回空结果"
                 self.logger.warning(warn)
                 if self.log_callback:
                     self.log_callback(warn, "WARNING")
@@ -8079,8 +8579,14 @@ class FitsImageViewer:
             sep_deg = coords.separation(target).deg
             mask_rad = np.array(sep_deg) <= float(search_radius)
 
-            # 星等过滤（优先使用VSX的max列）
-            vmag_candidates = ("max", "Vmag", "Mag", "vmag")
+            # 星等过滤（Gaia/VSX常见列；若不存在则跳过过滤）
+            vmag_candidates = (
+                "max", "Gmag", "phot_g_mean_mag", "Vmag", "Mag", "vmag", "G", "gmag",
+                # Gaia DR3 变星常见统计列
+                "Gmagmean", "Gmagmed", "Gmagmax", "intaverageg",
+                # vari_summary中的字段名（根据ReadMe说明）
+                "meanmagg_fov", "medianmagg_fov", "maxmagg_fov"
+            )
             mag_col = next((c for c in vmag_candidates if c in table.colnames), None)
             if mag_col is not None:
                 mag_mask = np.ones(len(table), dtype=bool)
@@ -8106,10 +8612,10 @@ class FitsImageViewer:
             ra_deg = np.array(coords_f.ra.deg).tolist()
             dec_deg = np.array(coords_f.dec.deg).tolist()
 
-            name_candidates = ("Name", "name", "VSName", "OID")
-            type_candidates = ("Type", "type", "VarType")
+            name_candidates = ("Name", "name", "VSName", "OID", "source_id", "Source", "GaiaDR3Name")
+            type_candidates = ("Type", "type", "VarType", "class", "Class", "class_name", "best_class_name", "bestclassname")
             min_candidates = ("min", "Min")
-            per_candidates = ("Period", "Per", "P")
+            per_candidates = ("Period", "Per", "P", "period")
             name_col = next((c for c in name_candidates if c in filtered.colnames), None)
             type_col = next((c for c in type_candidates if c in filtered.colnames), None)
             min_col = next((c for c in min_candidates if c in filtered.colnames), None)

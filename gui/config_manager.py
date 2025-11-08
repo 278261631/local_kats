@@ -23,6 +23,27 @@ class ConfigManager:
         self.config_file = config_file
         self.logger = logging.getLogger(__name__)
 
+        # 预计算本地库默认路径（gui/mpc_variables）
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        mpc_variables_dir = os.path.join(current_dir, 'mpc_variables')
+        default_asteroid_path = os.path.join(mpc_variables_dir, 'MPCORB.DAT')
+        if not os.path.exists(default_asteroid_path):
+            default_asteroid_path = ""
+        # 变星库候选（优先顺序）：catalog_gaia_variables.dat -> .dat.gz -> .csv -> vclassre.dat.gz
+        vsx_candidates = [
+            os.path.join(mpc_variables_dir, 'catalog_gaia_variables.dat'),
+            os.path.join(mpc_variables_dir, 'catalog_gaia_variables.dat.gz'),
+            os.path.join(mpc_variables_dir, 'catalog_gaia_variables.csv'),
+            os.path.join(mpc_variables_dir, 'vclassre.dat.gz'),
+        ]
+        default_vsx_path = ""
+        for p in vsx_candidates:
+            if os.path.exists(p):
+                default_vsx_path = p
+                break
+        self._default_asteroid_catalog_path = default_asteroid_path
+        self._default_vsx_catalog_path = default_vsx_path
+
         # 默认配置
         self.default_config = {
             "telescope_names": ["GY1", "GY2", "GY3", "GY4", "GY5", "GY6"],
@@ -92,8 +113,9 @@ class ConfigManager:
             "local_catalog_settings": {
                 "use_local_query": False,
                 "auto_chain_use_local_query": False,
-                "asteroid_catalog_path": "",
-                "vsx_catalog_path": "",
+                "buttons_use_local_query": False,
+                "asteroid_catalog_path": self._default_asteroid_catalog_path,
+                "vsx_catalog_path": self._default_vsx_catalog_path,
                 "last_asteroid_update": "",
                 "last_vsx_update": "",
                 "mpc_h_limit": 20,
@@ -216,7 +238,25 @@ class ConfigManager:
         if "local_catalog_settings" not in self.config:
             self.config["local_catalog_settings"] = self.default_config.get("local_catalog_settings", {}).copy()
             self.save_config()
-        return self.config["local_catalog_settings"]
+        settings = self.config["local_catalog_settings"]
+        # 自动填充默认路径（如果未设置或路径不存在）
+        changed = False
+        try:
+            asteroid_path = settings.get("asteroid_catalog_path", "")
+            if (not asteroid_path or not os.path.exists(asteroid_path)) and getattr(self, "_default_asteroid_catalog_path", ""):
+                if os.path.exists(self._default_asteroid_catalog_path):
+                    settings["asteroid_catalog_path"] = self._default_asteroid_catalog_path
+                    changed = True
+            vsx_path = settings.get("vsx_catalog_path", "")
+            if (not vsx_path or not os.path.exists(vsx_path)) and getattr(self, "_default_vsx_catalog_path", ""):
+                if os.path.exists(self._default_vsx_catalog_path):
+                    settings["vsx_catalog_path"] = self._default_vsx_catalog_path
+                    changed = True
+        except Exception:
+            pass
+        if changed:
+            self.save_config()
+        return settings
 
     def update_local_catalog_settings(self, **kwargs):
         """更新本地目录查询设置"""

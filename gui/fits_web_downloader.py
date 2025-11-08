@@ -74,8 +74,21 @@ class FitsWebDownloaderGUI:
         self._auto_chain_followups = False
         # 自动链附加步骤：是否在自动链末尾上传到OSS（默认不启用）
         self.auto_chain_oss_upload_var = tk.BooleanVar(value=False)
-        # 自动链：是否使用本地离线查询
-        self.auto_chain_use_local_query_var = tk.BooleanVar(value=False)
+        # 自动链：是否使用本地离线查询（初始化为配置中的值）
+        try:
+            _local_settings = self.config_manager.get_local_catalog_settings()
+            _auto_local_default = bool(_local_settings.get("auto_chain_use_local_query", False))
+        except Exception:
+            _auto_local_default = False
+        self.auto_chain_use_local_query_var = tk.BooleanVar(value=_auto_local_default)
+
+        # 手动查询按钮：是否使用本地离线查询（初始化为配置中的值）
+        try:
+            _local_settings = self.config_manager.get_local_catalog_settings()
+            _btn_local_default = bool(_local_settings.get("buttons_use_local_query", False))
+        except Exception:
+            _btn_local_default = False
+        self.buttons_use_local_query_var = tk.BooleanVar(value=_btn_local_default)
 
 
 
@@ -530,6 +543,15 @@ class FitsWebDownloaderGUI:
         )
         auto_oss_check.grid(row=0, column=0, sticky=tk.W)
 
+        # 手动查询按钮：是否使用本地离线查询
+        btn_local_chk = ttk.Checkbutton(
+            auto_chain_frame,
+            text="手动查询按钮使用本地查询(离线)",
+            variable=self.buttons_use_local_query_var,
+            command=self._on_toggle_buttons_use_local_query
+        )
+        btn_local_chk.grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+
         # 自动链：是否使用本地离线查询
         auto_local_chk = ttk.Checkbutton(
             auto_chain_frame,
@@ -637,6 +659,15 @@ class FitsWebDownloaderGUI:
             ephem_name = Path(ephem_path).name if ephem_path else "未设置"
             self.ephemeris_status_label.config(text=f"星历: {ephem_name}")
 
+    def _on_toggle_buttons_use_local_query(self):
+        """高级设置：切换手动查询按钮是否使用本地查询（立即保存到配置）"""
+        try:
+            enabled = bool(self.buttons_use_local_query_var.get())
+            self.config_manager.update_local_catalog_settings(buttons_use_local_query=enabled)
+            self._log(f"[设置] 手动按钮本地查询: {'开启' if enabled else '关闭'}")
+        except Exception as e:
+            self._log(f"保存手动按钮本地查询设置失败: {e}")
+
 
     def _refresh_local_catalog_status_labels(self):
         """刷新本地库状态标签"""
@@ -660,9 +691,9 @@ class FitsWebDownloaderGUI:
     def _update_local_asteroid_catalog(self):
         """选择/更新本地小行星库文件（本地CSV/TSV/自定义分隔文本）"""
         try:
-            # 默认使用run_gui.py同级(gui)目录下的mpcorb子目录
+            # 默认使用run_gui.py同级(gui)目录下的mpc_variables子目录
             gui_dir = os.path.dirname(os.path.abspath(__file__))
-            default_mpc_dir = os.path.join(gui_dir, 'mpcorb')
+            default_mpc_dir = os.path.join(gui_dir, 'mpc_variables')
             os.makedirs(default_mpc_dir, exist_ok=True)
             initialdir = self.download_dir_var.get() or default_mpc_dir
             file_path = filedialog.askopenfilename(
@@ -726,9 +757,9 @@ class FitsWebDownloaderGUI:
     def _update_local_vsx_catalog(self):
         """选择/更新本地变星库文件（本地CSV/TSV/自定义分隔文本）"""
         try:
-            # 默认使用run_gui.py同级(gui)目录下的vsx子目录
+            # 默认使用run_gui.py同级(gui)目录下的mpc_variables子目录
             gui_dir = os.path.dirname(os.path.abspath(__file__))
-            default_vsx_dir = os.path.join(gui_dir, 'vsx')
+            default_vsx_dir = os.path.join(gui_dir, 'mpc_variables')
             os.makedirs(default_vsx_dir, exist_ok=True)
             initialdir = self.download_dir_var.get() or default_vsx_dir
             file_path = filedialog.askopenfilename(
