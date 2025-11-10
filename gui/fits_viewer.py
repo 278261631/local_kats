@@ -268,6 +268,12 @@ class FitsImageViewer:
                                      command=self._execute_astap, state="disabled")
         self.astap_button.pack(side=tk.LEFT, padx=(10, 0))
 
+        # 保存检测结果按钮（移动至ASTAP右侧）
+        self.save_detection_button = ttk.Button(toolbar_frame2, text="保存检测结果",
+                                               command=self._save_detection_result, state="disabled")
+        self.save_detection_button.pack(side=tk.LEFT, padx=(10, 0))
+
+
         # diff进度标签（放在第二行右侧）
         self.diff_progress_label = ttk.Label(toolbar_frame2, text="", foreground="blue", font=("Arial", 9))
         self.diff_progress_label.pack(side=tk.RIGHT, padx=(10, 0))
@@ -282,29 +288,9 @@ class FitsImageViewer:
                                                   variable=self.fast_mode_var)
         self.fast_mode_checkbox.pack(side=tk.LEFT, padx=(0, 0))
 
-        # 拉伸方法选择
-        ttk.Label(toolbar_frame3, text="拉伸方法:").pack(side=tk.LEFT, padx=(20, 2))
-
+        # 拉伸方法变量（控件移至“高级设置”标签页）
         self.stretch_method_var = tk.StringVar(value="percentile")  # 默认百分位数拉伸
-        stretch_methods = [
-            ("峰值", "peak"),
-            ("百分位数", "percentile")
-        ]
-        for text, value in stretch_methods:
-            rb = ttk.Radiobutton(toolbar_frame3, text=text,
-                               variable=self.stretch_method_var, value=value)
-            rb.pack(side=tk.LEFT, padx=(5, 0))
-
-        # 百分位数输入框
-        percentile_label = ttk.Label(toolbar_frame3, text="百分位:")
-        percentile_label.pack(side=tk.LEFT, padx=(10, 2))
-
         self.percentile_var = tk.StringVar(value="99.95")  # 默认99.95%
-        self.percentile_entry = ttk.Entry(toolbar_frame3, textvariable=self.percentile_var, width=6)
-        self.percentile_entry.pack(side=tk.LEFT, padx=(0, 2))
-
-        percentile_unit = ttk.Label(toolbar_frame3, text="%")
-        percentile_unit.pack(side=tk.LEFT, padx=(0, 5))
 
         # 检测结果导航按钮
         ttk.Label(toolbar_frame3, text="  |  ").pack(side=tk.LEFT, padx=(10, 5))
@@ -396,16 +382,16 @@ class FitsImageViewer:
         toolbar_frame6 = ttk.Frame(toolbar_container)
         toolbar_frame6.pack(fill=tk.X, pady=2)
 
-        # 搜索半径设置
-        ttk.Label(toolbar_frame6, text="搜索半径(°):").pack(side=tk.LEFT, padx=(5, 2))
+        # 搜索半径变量（控件移至“高级设置”标签页）
         self.search_radius_var = tk.StringVar(value="0.01")
-        self.search_radius_entry = ttk.Entry(toolbar_frame6, textvariable=self.search_radius_var, width=6)
-        self.search_radius_entry.pack(side=tk.LEFT, padx=(0, 5))
 
-        # 保存搜索半径按钮
-        self.save_search_radius_button = ttk.Button(toolbar_frame6, text="保存半径",
-                                                   command=self._save_query_settings)
-        self.save_search_radius_button.pack(side=tk.LEFT, padx=(0, 10))
+        # 批量检测对齐按钮（移动至此，位于“批量本地查询(离线)”左侧）
+        self.batch_alignment_button = ttk.Button(
+            toolbar_frame6, text="批量检测对齐",
+            command=self._batch_evaluate_alignment_quality,
+            state="disabled"
+        )
+        self.batch_alignment_button.pack(side=tk.LEFT, padx=(5, 5))
 
         # 批量本地查询按钮（离线）
         self.batch_local_query_button = ttk.Button(
@@ -455,10 +441,6 @@ class FitsImageViewer:
         self.vsx_result_label = ttk.Label(toolbar_frame6, text="未查询", foreground="gray")
         self.vsx_result_label.pack(side=tk.LEFT, padx=(0, 5))
 
-        # 保存检测结果按钮
-        self.save_detection_button = ttk.Button(toolbar_frame6, text="保存检测结果",
-                                               command=self._save_detection_result, state="disabled")
-        self.save_detection_button.pack(side=tk.LEFT, padx=(10, 5))
 
         # 上传到OSS按钮
         self.upload_oss_button = ttk.Button(toolbar_frame6, text="上传到OSS",
@@ -514,8 +496,6 @@ class FitsImageViewer:
         ttk.Button(refresh_frame, text="刷新目录", command=self._refresh_directory_tree).pack(side=tk.LEFT)
         ttk.Button(refresh_frame, text="跳转未查询 (g)", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="批量导出未查询", command=self._batch_export_unqueried).pack(side=tk.LEFT, padx=(5, 0))
-        self.batch_alignment_button = ttk.Button(refresh_frame, text="批量检测对齐", command=self._batch_evaluate_alignment_quality)
-        self.batch_alignment_button.pack(side=tk.LEFT, padx=(5, 0))
 
 
         # 创建目录树

@@ -425,6 +425,28 @@ class FitsWebDownloaderGUI:
                 rb.grid(row=0, column=i+1, sticky=tk.W, padx=5)
 
         # 第三行：检测参数
+        # 显示/查询设置
+        display_row = ttk.LabelFrame(settings_container, text="显示/查询设置", padding=10)
+        display_row.pack(fill=tk.X, pady=(0, 10))
+
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            # 拉伸方法
+            ttk.Label(display_row, text="拉伸方法:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+            rb_peak = ttk.Radiobutton(display_row, text="峰值", variable=self.fits_viewer.stretch_method_var, value="peak")
+            rb_peak.grid(row=0, column=1, sticky=tk.W, padx=(5, 5))
+            rb_pct = ttk.Radiobutton(display_row, text="百分位数", variable=self.fits_viewer.stretch_method_var, value="percentile")
+            rb_pct.grid(row=0, column=2, sticky=tk.W, padx=(5, 15))
+            ttk.Label(display_row, text="百分位:").grid(row=0, column=3, sticky=tk.W, padx=(0, 5))
+            pct_entry = ttk.Entry(display_row, textvariable=self.fits_viewer.percentile_var, width=6)
+            pct_entry.grid(row=0, column=4, sticky=tk.W, padx=(0, 2))
+            ttk.Label(display_row, text="%").grid(row=0, column=5, sticky=tk.W, padx=(0, 10))
+
+            # 搜索半径
+            ttk.Label(display_row, text="搜索半径(°):").grid(row=1, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+            sr_entry = ttk.Entry(display_row, textvariable=self.fits_viewer.search_radius_var, width=8)
+            sr_entry.grid(row=1, column=1, sticky=tk.W, padx=(0, 5), pady=(10, 0))
+            ttk.Button(display_row, text="保存半径", command=self.fits_viewer._save_query_settings).grid(row=1, column=2, sticky=tk.W, padx=(5, 0), pady=(10, 0))
+
         row3_frame = ttk.LabelFrame(settings_container, text="检测参数", padding=10)
         row3_frame.pack(fill=tk.X, pady=(0, 10))
 
