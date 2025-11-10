@@ -13,6 +13,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+import time
+
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -2587,7 +2589,8 @@ Diff统计:
             'diff_completed': 0,
             'diff_success': 0,
             'diff_failed': 0,
-            'total_files': len(selected_files)
+            'total_files': len(selected_files),
+            'current_speed_mb_s': 0.0,
         }
 
         # 停止标志
@@ -2806,6 +2809,11 @@ Diff统计:
             self._log(f"[下载] [{idx}/{len(selected_files)}] {filename}")
             self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
                 f, BatchStatusWidget.STATUS_DOWNLOADING))
+            # 标记下载开始时间并在“批量处理状态/处理进度”显示当前下载中文件
+            start_time = time.time()
+            self.root.after(0, lambda i=idx, t=len(selected_files), f=filename:
+                            self.batch_progress_label.config(text=f"下载中 ({i}/{t}): {f}"))
+
 
             file_path = os.path.join(download_dir, filename)
 
@@ -2830,8 +2838,12 @@ Diff统计:
                         astap_queue.put(file_path)
                 except:
                     astap_queue.put(file_path)
+                # 已存在则更新处理进度提示（无速度）
+                self.root.after(0, lambda i=idx, t=len(selected_files), f=filename:
+                                self.batch_progress_label.config(text=f"跳过下载(已存在) ({i}/{t}): {f}"))
 
                 with stats_lock:
+                    stats['current_speed_mb_s'] = 0.0
                     stats['download_completed'] += 1
                 continue
 
@@ -2855,6 +2867,20 @@ Diff统计:
                     self._log(f"[下载] ✓ 成功: {filename}")
                     self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
                         f, BatchStatusWidget.STATUS_DOWNLOAD_SUCCESS))
+                    # 计算并显示当前下载速度（MB/s）
+                    try:
+                        elapsed = max(time.time() - start_time, 1e-3)
+                        size_bytes = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                        speed_mb_s = (size_bytes / (1024.0 * 1024.0)) / elapsed
+                    except Exception:
+                        speed_mb_s = 0.0
+                    self.root.after(0, lambda i=idx, t=len(selected_files), f=filename, s=speed_mb_s:
+
+                                    self.batch_progress_label.config(text=f"下载完成 ({i}/{t}): {f} | 速度: {s:.2f} MB/s"))
+
+
+                    with stats_lock:
+                        stats['current_speed_mb_s'] = speed_mb_s
 
                     # 检查是否已有WCS
                     try:
@@ -2874,16 +2900,28 @@ Diff统计:
                 else:
                     with stats_lock:
                         stats['download_failed'] += 1
+                        stats['current_speed_mb_s'] = 0.0
                     self._log(f"[下载] ✗ 失败: {filename}")
                     self.root.after(0, lambda f=filename: self.batch_status_widget.update_status(
                         f, BatchStatusWidget.STATUS_DOWNLOAD_FAILED, "下载失败"))
+                    self.root.after(0, lambda i=idx, t=len(selected_files), f=filename:
+                                    self.batch_progress_label.config(text=f"下载失败 ({i}/{t}): {f}"))
+
+
+
+
 
             except Exception as e:
                 with stats_lock:
                     stats['download_failed'] += 1
+                    stats['current_speed_mb_s'] = 0.0
                 self._log(f"[下载] ✗ 异常: {filename} - {str(e)}")
                 self.root.after(0, lambda f=filename, err=str(e): self.batch_status_widget.update_status(
                     f, BatchStatusWidget.STATUS_DOWNLOAD_FAILED, err))
+
+                self.root.after(0, lambda i=idx, t=len(selected_files), f=filename, err=str(e):
+                                self.batch_progress_label.config(text=f"下载异常 ({i}/{t}): {f} | {err}"))
+
 
             # 更新统计
             self._update_pipeline_stats(stats)
@@ -2919,9 +2957,11 @@ Diff统计:
 
     def _update_pipeline_stats(self, stats):
         """更新流水线统计信息显示"""
+        speed = stats.get('current_speed_mb_s', 0.0)
         stats_text = (f"下载: {stats['download_completed']}/{stats['total_files']} | "
-                     f"ASTAP: {stats['astap_success']}/{stats['astap_completed']} | "
-                     f"Diff: {stats['diff_success']}/{stats['diff_completed']}")
+                      f"速度: {speed:.2f} MB/s | "
+                      f"ASTAP: {stats['astap_success']}/{stats['astap_completed']} | "
+                      f"Diff: {stats['diff_success']}/{stats['diff_completed']}")
         self.root.after(0, lambda t=stats_text: self.batch_stats_label.config(text=t))
 
     def _execute_diff_for_files(self, files_with_wcs, thread_count):
