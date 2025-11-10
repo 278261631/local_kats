@@ -514,6 +514,9 @@ class FitsImageViewer:
         ttk.Button(refresh_frame, text="刷新目录", command=self._refresh_directory_tree).pack(side=tk.LEFT)
         ttk.Button(refresh_frame, text="跳转未查询 (g)", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="批量导出未查询", command=self._batch_export_unqueried).pack(side=tk.LEFT, padx=(5, 0))
+        self.batch_alignment_button = ttk.Button(refresh_frame, text="批量检测对齐", command=self._batch_evaluate_alignment_quality)
+        self.batch_alignment_button.pack(side=tk.LEFT, padx=(5, 0))
+
 
         # 创建目录树
         tree_frame = ttk.Frame(left_frame)
@@ -1948,6 +1951,8 @@ class FitsImageViewer:
             self.batch_query_button.config(state="disabled")
             if hasattr(self, 'batch_local_query_button'):
                 self.batch_local_query_button.config(state="disabled")
+            if hasattr(self, 'batch_alignment_button'):
+                self.batch_alignment_button.config(state="disabled")
             if self.astap_processor:
                 self.astap_button.config(state="disabled")
             if self.wcs_checker:
@@ -2019,6 +2024,8 @@ class FitsImageViewer:
             self.batch_query_button.config(state="normal")
             if hasattr(self, 'batch_local_query_button'):
                 self.batch_local_query_button.config(state="normal")
+            if hasattr(self, 'batch_alignment_button'):
+                self.batch_alignment_button.config(state="normal")
             # 启用批量删除查询结果按钮
             self.batch_delete_query_button.config(state="normal")
         else:
@@ -2036,12 +2043,16 @@ class FitsImageViewer:
                 self.batch_query_button.config(state="normal")
                 if hasattr(self, 'batch_local_query_button'):
                     self.batch_local_query_button.config(state="normal")
+                if hasattr(self, 'batch_alignment_button'):
+                    self.batch_alignment_button.config(state="normal")
                 self.batch_delete_query_button.config(state="normal")
                 self.file_info_label.config(text="已选择目录 [可批量查询]")
             else:
                 self.batch_query_button.config(state="disabled")
                 if hasattr(self, 'batch_local_query_button'):
                     self.batch_local_query_button.config(state="disabled")
+                if hasattr(self, 'batch_alignment_button'):
+                    self.batch_alignment_button.config(state="disabled")
                 self.batch_delete_query_button.config(state="disabled")
                 self.file_info_label.config(text="未选择FITS文件")
 
@@ -10514,3 +10525,345 @@ class FitsImageViewer:
             return False
 
 
+
+
+    def _batch_evaluate_alignment_quality(self):
+        """
+        批量评估所选目录/文件下所有"高分"检测目标的对齐程度（Rigid），并把“对齐误差(像素)”列追加/更新到现有 analysis.txt 文件中（不再另建 alignment_quality_rigid_* 文件）。
+        - 对齐程度以像素数表示：使用 ORB+RANSAC 估计刚体(相似)仿射的内点重投影平均误差；特征不足时回退相位相关平移量。
+        - 仅统计 analysis.txt 中判定为高分的目标（遵循当前批量设置阈值与排序逻辑）。
+        - 使用每个目标的 cutouts 中的 "*_1_reference.png" 与 "*_2_aligned.png" 进行评估。
+        输出列（顺序）：对齐误差(像素) 序号 综合得分 面积 圆度 锯齿比 Hull顶点 Poly顶点 X坐标 Y坐标 SNR 最大SNR 平均信号 最大信号 Aligned中心7x7SNR
+        """
+        try:
+            selection = self.directory_tree.selection()
+            if not selection:
+                messagebox.showwarning("警告", "请先在左侧目录树选择一个目录或文件")
+                return
+
+            item = selection[0]
+            values = self.directory_tree.item(item, "values")
+            tags = self.directory_tree.item(item, "tags")
+            if not values:
+                messagebox.showwarning("警告", "请选择一个目录或文件")
+                return
+
+            # 读取阈值与排序方式（与_high_score_count逻辑保持一致）
+            score_threshold = 3.0
+            aligned_snr_threshold = 1.1
+            sort_by = 'aligned_snr'
+            if self.config_manager:
+                try:
+                    bs = self.config_manager.get_batch_process_settings()
+                    score_threshold = bs.get('score_threshold', 3.0)
+                    aligned_snr_threshold = bs.get('aligned_snr_threshold', 1.1)
+                    sort_by = bs.get('sort_by', 'aligned_snr')
+                except Exception:
+                    pass
+
+            # 工具函数：解析 analysis.txt，返回高分行的字典列表（包含字段和序号）
+            def parse_high_score_rows(analysis_path):
+                try:
+                    with open(analysis_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    lines = content.split('\n')
+                    data_started = False
+                    rows = []
+                    for line in lines:
+                        s = line.strip()
+                        if s.startswith('-' * 10):
+                            data_started = True
+                            continue
+                        if ('综合得分' in s) or ('序号' in s):
+                            continue
+                        if not data_started or not s:
+                            continue
+                        parts = s.split()
+                        if len(parts) < 14:
+                            continue
+                        try:
+                            seq = int(parts[0])
+                            score = float(parts[1])
+                            area = float(parts[2])
+                            circularity = float(parts[3])
+                            jag = float(parts[4])
+                            hull_v = int(parts[5])
+                            poly_v = int(parts[6])
+                            x = float(parts[7])
+                            y = float(parts[8])
+                            snr = float(parts[9])
+                            max_snr = float(parts[10])
+                            mean_sig = float(parts[11])
+                            max_sig = float(parts[12])
+                            aligned_snr_str = parts[13]
+                            aligned_snr = None if aligned_snr_str == 'N/A' else float(aligned_snr_str)
+                        except Exception:
+                            continue
+                        is_high = False
+                        if sort_by == 'aligned_snr':
+                            if aligned_snr is not None and aligned_snr > aligned_snr_threshold:
+                                is_high = True
+                        else:
+                            if score > score_threshold and (aligned_snr is not None and aligned_snr > aligned_snr_threshold):
+                                is_high = True
+                        if is_high:
+                            rows.append({
+                                'seq': seq,
+                                'score': score,
+                                'area': area,
+                                'circularity': circularity,
+                                'jag': jag,
+                                'hull_v': hull_v,
+                                'poly_v': poly_v,
+                                'x': x,
+                                'y': y,
+                                'snr': snr,
+                                'max_snr': max_snr,
+                                'mean_sig': mean_sig,
+                                'max_sig': max_sig,
+                                'aligned_snr': aligned_snr_str
+                            })
+                    return rows
+                except Exception:
+                    return []
+
+            # 工具函数：基于两张cutout图片计算刚体对齐误差（像素）
+            def rigid_error_px(ref_png, aligned_png):
+                img1 = cv2.imread(str(ref_png), cv2.IMREAD_GRAYSCALE)
+                img2 = cv2.imread(str(aligned_png), cv2.IMREAD_GRAYSCALE)
+                if img1 is None or img2 is None:
+                    return None
+                # 轻度预处理
+                img1b = cv2.GaussianBlur(img1, (3, 3), 0)
+                img2b = cv2.GaussianBlur(img2, (3, 3), 0)
+                orb = cv2.ORB_create(nfeatures=400, scaleFactor=1.2, nlevels=8)
+                k1, d1 = orb.detectAndCompute(img1b, None)
+                k2, d2 = orb.detectAndCompute(img2b, None)
+                if d1 is None or d2 is None or len(k1) < 6 or len(k2) < 6:
+                    # 回退：相位相关仅估计平移
+                    try:
+                        shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
+                        return float(np.hypot(shift[0], shift[1]))
+                    except Exception:
+                        return None
+                bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+                matches = bf.match(d1, d2)
+                if not matches:
+                    try:
+                        shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
+                        return float(np.hypot(shift[0], shift[1]))
+                    except Exception:
+                        return None
+                matches = sorted(matches, key=lambda m: m.distance)[:80]
+                if len(matches) < 6:
+                    try:
+                        shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
+                        return float(np.hypot(shift[0], shift[1]))
+                    except Exception:
+                        return None
+                pts1 = np.float32([k1[m.queryIdx].pt for m in matches])
+                pts2 = np.float32([k2[m.trainIdx].pt for m in matches])
+                M, inliers = cv2.estimateAffinePartial2D(pts2, pts1, method=cv2.RANSAC,
+                                                         ransacReprojThreshold=3.0, maxIters=2000, confidence=0.99)
+                if M is None or inliers is None:
+                    try:
+                        shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
+                        return float(np.hypot(shift[0], shift[1]))
+                    except Exception:
+                        return None
+                mask = inliers.ravel().astype(bool)
+                if mask.sum() < 3:
+                    try:
+                        shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
+                        return float(np.hypot(shift[0], shift[1]))
+                    except Exception:
+                        return None
+                p2 = pts2[mask]
+                p1 = pts1[mask]
+                p2t = (p2 @ M[:2, :2].T) + M[:2, 2]
+                errs = np.sqrt(((p2t - p1) ** 2).sum(axis=1))
+                return float(np.mean(errs)) if errs.size > 0 else 0.0
+
+            # 收集要处理的文件
+            files_to_process = []
+            saving_root_output_dir = None
+            if "fits_file" in tags:
+                fp = values[0]
+                files_to_process.append({'file_path': fp, 'region_dir': os.path.dirname(fp)})
+                saving_root_output_dir = None  # 每文件各自决策
+            else:
+                # 目录：递归收集
+                directory = values[0]
+                # 计算对应输出根目录用于汇总文件保存
+                saving_root_output_dir = self._get_output_directory_from_download_directory(directory)
+                for root, _, files in os.walk(directory):
+                    for fname in files:
+                        if fname.lower().endswith(('.fits', '.fit', '.fts')):
+                            fpath = os.path.join(root, fname)
+                            info = self._check_file_diff_result(fpath, root)
+                            if info and info.get('has_result') and info.get('high_score_count', 0) > 0:
+                                files_to_process.append({'file_path': fpath, 'region_dir': root})
+
+            if not files_to_process:
+                messagebox.showinfo("提示", "未找到可评估的高分检测目标")
+                return
+
+            # 逐个 detection 目录，计算高分序号的误差并把新列写回现有 analysis 文件
+            updated_files = 0
+            updated_rows_total = 0
+
+            for item in files_to_process:
+                file_path = item['file_path']
+                region_dir = item['region_dir']
+                filename = os.path.basename(file_path)
+
+                base_output_dir = self.get_diff_output_dir_callback() if self.get_diff_output_dir_callback else None
+                download_dir = self.get_download_dir_callback() if self.get_download_dir_callback else None
+                if not base_output_dir or not download_dir:
+                    self.logger.warning("输出目录或下载目录未配置，跳过: %s", filename)
+                    continue
+                try:
+                    rel = os.path.relpath(os.path.normpath(region_dir), os.path.normpath(download_dir))
+                except ValueError:
+                    continue
+                output_region_dir = os.path.join(base_output_dir, rel)
+                file_base = os.path.splitext(os.path.basename(file_path))[0]
+                potential_output_dir = os.path.join(output_region_dir, file_base)
+                if not os.path.isdir(potential_output_dir):
+                    continue
+
+                # detection目录（取首个 detection_*）
+                detection_dir_path = None
+                try:
+                    for nm in os.listdir(potential_output_dir):
+                        if nm.startswith('detection_'):
+                            detection_dir_path = os.path.join(potential_output_dir, nm)
+                            break
+                except Exception:
+                    detection_dir_path = None
+                if not detection_dir_path:
+                    continue
+
+                # analysis文件
+                analysis_files = [f for f in os.listdir(detection_dir_path) if '_analysis' in f and f.endswith('.txt')]
+                if not analysis_files:
+                    continue
+                analysis_path = os.path.join(detection_dir_path, analysis_files[0])
+
+                # 解析高分行
+                high_rows = parse_high_score_rows(analysis_path)
+                if not high_rows:
+                    continue
+
+                # 计算各序号的对齐误差
+                cutouts_dir = Path(detection_dir_path) / 'cutouts'
+                ref_imgs = sorted(cutouts_dir.glob('*_1_reference.png'))
+                ali_imgs = sorted(cutouts_dir.glob('*_2_aligned.png'))
+                if not ref_imgs or not ali_imgs:
+                    continue
+                seq_err_map = {}
+                for row in high_rows:
+                    idx = row['seq'] - 1
+                    if idx < 0 or idx >= min(len(ref_imgs), len(ali_imgs)):
+                        continue
+                    err = rigid_error_px(ref_imgs[idx], ali_imgs[idx])
+                    seq_err_map[row['seq']] = f"{err:.3f}" if isinstance(err, float) else "N/A"
+
+                if not seq_err_map:
+                    continue
+
+                # 读取原文件，追加/更新新列
+                try:
+                    with open(analysis_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+
+                    # 找到表头与分隔线
+                    header_idx = None
+                    sep_idx = None
+                    for i, l in enumerate(lines):
+                        if ('综合得分' in l) and ('序号' in l):
+                            header_idx = i
+                            # 下一行是分隔线
+                            if i + 1 < len(lines):
+                                nxt = lines[i+1].strip()
+                                if nxt and set(nxt) <= {'-'}:
+                                    sep_idx = i + 1
+                            break
+                    if header_idx is None:
+                        # 找不到表头则跳过
+                        continue
+
+                    header_has_alignment = '对齐误差(像素)' in lines[header_idx]
+
+                    # 若无该列，则在表头与分隔线上追加该列
+                    if not header_has_alignment:
+                        header_line = lines[header_idx].rstrip('\n')
+                        lines[header_idx] = header_line + f" {'对齐误差(像素)'.ljust(14)}\n"
+                        if sep_idx is None:
+                            # 尝试定位分隔线
+                            if header_idx + 1 < len(lines) and set(lines[header_idx+1].strip()) <= {'-'}:
+                                sep_idx = header_idx + 1
+                        if sep_idx is not None:
+                            sep_line = lines[sep_idx].rstrip('\n')
+                            lines[sep_idx] = sep_line + f" {'-'*14}\n"
+
+                    # 数据区起始行
+                    data_start = (sep_idx + 1) if sep_idx is not None else (header_idx + 1)
+
+                    # 宽度定义（原14列+新增列）
+                    widths = [6, 12, 12, 12, 12, 10, 10, 12, 12, 12, 12, 14, 14, 18, 14]
+
+                    def pack_line(tokens, err_val):
+                        # 用已有token重排为固定宽度，并在末尾放对齐误差
+                        fields = []
+                        for idx_w in range(14):
+                            fields.append(tokens[idx_w] if idx_w < len(tokens) else '')
+                        fields.append(err_val)
+                        return (
+                            f"{fields[0]:<6} {fields[1]:<12} {fields[2]:<12} {fields[3]:<12} "
+                            f"{fields[4]:<12} {fields[5]:<10} {fields[6]:<10} {fields[7]:<12} {fields[8]:<12} "
+                            f"{fields[9]:<12} {fields[10]:<12} {fields[11]:<14} {fields[12]:<14} {fields[13]:<18} {fields[14]:<14}\n"
+                        )
+
+                    # 遍历数据行，填充/更新误差
+                    updated_rows = 0
+                    for i in range(data_start, len(lines)):
+                        s = lines[i].rstrip('\n')
+                        if not s.strip():
+                            continue
+                        parts = s.split()
+                        if not parts:
+                            continue
+                        # 首列应为序号
+                        try:
+                            seq = int(parts[0])
+                        except Exception:
+                            # 非数据行
+                            continue
+                        err_val = seq_err_map.get(seq, 'N/A')
+                        if header_has_alignment:
+                            # 已有该列：重排整行，覆盖末列
+                            lines[i] = pack_line(parts, err_val)
+                        else:
+                            # 尚无该列：在原行尾部直接追加固定宽度的字段
+                            lines[i] = s + f" {err_val:<14}\n"
+                        if seq in seq_err_map:
+                            updated_rows += 1
+
+                    if updated_rows > 0:
+                        with open(analysis_path, 'w', encoding='utf-8') as f:
+                            f.writelines(lines)
+                        updated_files += 1
+                        updated_rows_total += updated_rows
+                        self.logger.info("已更新对齐误差列: %s (+%d行)", analysis_path, updated_rows)
+                except Exception as e:
+                    self.logger.error("更新分析文件失败 %s: %s", analysis_path, str(e))
+                    continue
+
+            if updated_files == 0:
+                messagebox.showinfo("提示", "没有找到可更新的 analysis 文件或高分目标")
+                return
+            messagebox.showinfo("完成", f"已更新 {updated_files} 个 analysis 文件，共填充 {updated_rows_total} 行")
+        except Exception as e:
+            self.logger.error("批量对齐评估失败: %s", str(e), exc_info=True)
+            messagebox.showerror("错误", f"批量对齐评估失败:\n{str(e)}")
