@@ -11,6 +11,8 @@ import subprocess
 import platform
 import numpy as np
 import csv
+import time
+
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -69,6 +71,9 @@ class FitsImageViewer:
         self.get_url_selections_callback = get_url_selections_callback
         self.log_callback = log_callback  # 日志回调函数，用于输出到日志标签页
         self.get_unqueried_export_dir_callback = get_unqueried_export_dir_callback  # 未查询导出目录回调函数（也用于OSS上传）
+        # 强制在线查询开关（临时搁置本地库时置为True）
+        self._force_online_query = True
+
         # Local query override flag (used by batch-local button/auto-chain)
         self._use_local_query_override = False
 
@@ -7273,8 +7278,11 @@ class FitsImageViewer:
             self.skybot_result_label.update_idletasks()  # 强制刷新界面
 
             # 执行Skybot查询（根据设置/覆盖开关选择本地/在线）
+            force_online = getattr(self, '_force_online_query', False)
             use_local = getattr(self, '_use_local_query_override', False)
-            if (not use_local) and self.config_manager:
+            if force_online:
+                use_local = False
+            elif (not use_local) and self.config_manager:
                 try:
                     _ls = self.config_manager.get_local_catalog_settings()
                     if bool((_ls or {}).get("buttons_use_local_query", False)):
@@ -7497,6 +7505,23 @@ class FitsImageViewer:
                 self.log_callback(param_gps, "INFO")
                 self.log_callback(param_radius, "INFO")
 
+            # 在线查询短延时，降低请求频率
+            try:
+                delay = 0.5
+                if self.config_manager:
+                    qs = self.config_manager.get_query_settings()
+                    delay = float((qs or {}).get('online_query_delay', 0.5))
+                if delay > 0:
+                    try:
+                        self.logger.info(f"在线查询延时: {delay}s")
+                        if self.log_callback:
+                            self.log_callback(f"在线查询延时: {delay}s", "INFO")
+                    except Exception:
+                        pass
+                    time.sleep(delay)
+            except Exception:
+                pass
+
             # 执行查询，使用MPC观测站代码
             try:
                 results = Skybot.cone_search(coord, search_radius_u, obs_time, location=mpc_code)
@@ -7598,8 +7623,11 @@ class FitsImageViewer:
             self.vsx_result_label.update_idletasks()  # 强制刷新界面
 
             # 执行VSX查询（根据设置/覆盖开关选择本地/在线）
+            force_online = getattr(self, '_force_online_query', False)
             use_local = getattr(self, '_use_local_query_override', False)
-            if (not use_local) and self.config_manager:
+            if force_online:
+                use_local = False
+            elif (not use_local) and self.config_manager:
                 try:
                     _ls = self.config_manager.get_local_catalog_settings()
                     if bool((_ls or {}).get("buttons_use_local_query", False)):
@@ -7769,6 +7797,23 @@ class FitsImageViewer:
         try:
             from astroquery.vizier import Vizier
             from astropy.coordinates import SkyCoord
+            # 在线查询短延时，降低请求频率
+            try:
+                delay = 0.5
+                if self.config_manager:
+                    qs = self.config_manager.get_query_settings()
+                    delay = float((qs or {}).get('online_query_delay', 0.5))
+                if delay > 0:
+                    try:
+                        self.logger.info(f"在线查询延时: {delay}s")
+                        if self.log_callback:
+                            self.log_callback(f"在线查询延时: {delay}s", "INFO")
+                    except Exception:
+                        pass
+                    time.sleep(delay)
+            except Exception:
+                pass
+
             import astropy.units as u
             import numpy as np
 
