@@ -2814,6 +2814,29 @@ Diff统计:
             self.root.after(0, lambda i=idx, t=len(selected_files), f=filename:
                             self.batch_progress_label.config(text=f"下载中 ({i}/{t}): {f}"))
 
+            # 初始化下载进度状态（用于滚动显示速度）
+            progress_state = {'last_time': start_time, 'last_bytes': 0, 'last_ui': start_time}
+
+            def progress_callback(downloaded_bytes, total_bytes, fn=filename, i=idx, t=len(selected_files)):
+                now = time.time()
+                delta_t = max(now - progress_state['last_time'], 1e-3)
+                delta_bytes = max(downloaded_bytes - progress_state['last_bytes'], 0)
+                inst_speed_mb_s = (delta_bytes / (1024.0 * 1024.0)) / delta_t
+                downloaded_mb = downloaded_bytes / (1024.0 * 1024.0)
+                total_mb = (total_bytes / (1024.0 * 1024.0)) if total_bytes else None
+                # 节流更新频率，避免UI过于频繁刷新
+                if now - progress_state['last_ui'] >= 0.2:
+                    if total_mb is not None:
+                        text = f"下载中 ({i}/{t}): {fn} | {downloaded_mb:.2f}/{total_mb:.2f} MB | 速度: {inst_speed_mb_s:.2f} MB/s"
+                    else:
+                        text = f"下载中 ({i}/{t}): {fn} | {downloaded_mb:.2f}/未知 MB | 速度: {inst_speed_mb_s:.2f} MB/s"
+                    self.root.after(0, lambda txt=text: self.batch_progress_label.config(text=txt))
+                    with stats_lock:
+                        stats['current_speed_mb_s'] = inst_speed_mb_s
+                    progress_state['last_ui'] = now
+                progress_state['last_time'] = now
+                progress_state['last_bytes'] = downloaded_bytes
+
 
             file_path = os.path.join(download_dir, filename)
 
@@ -2859,7 +2882,7 @@ Diff统计:
                         astap_config_path="config/url_config.json"
                     )
 
-                result = self.downloader.download_single_file(url, download_dir)
+                result = self.downloader.download_single_file(url, download_dir, progress_callback)
 
                 if "成功" in result:
                     with stats_lock:
