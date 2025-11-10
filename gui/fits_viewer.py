@@ -10548,16 +10548,25 @@ class FitsImageViewer:
                 messagebox.showwarning("警告", "请选择一个目录或文件")
                 return
 
-            # 读取阈值与排序方式（与_high_score_count逻辑保持一致）
+            # 读取阈值与排序方式（与_high_score_count逻辑保持一致），以及对齐清理相关配置
             score_threshold = 3.0
             aligned_snr_threshold = 1.1
             sort_by = 'aligned_snr'
+            # 新增的对齐清理配置（默认值）
+            prune_non_high = True  # 清除非高分记录与文件
+            err_px_threshold = 3.0  # 误差阈值（像素）
+            ratio_threshold = 0.5   # 占比阈值（超过则清空本文件）
+            cleanup_on_ratio = True # 是否执行清空
             if self.config_manager:
                 try:
                     bs = self.config_manager.get_batch_process_settings()
                     score_threshold = bs.get('score_threshold', 3.0)
                     aligned_snr_threshold = bs.get('aligned_snr_threshold', 1.1)
                     sort_by = bs.get('sort_by', 'aligned_snr')
+                    prune_non_high = bs.get('alignment_prune_non_high', True)
+                    err_px_threshold = bs.get('alignment_error_px_threshold', 3.0)
+                    ratio_threshold = bs.get('alignment_error_ratio_threshold', 0.5)
+                    cleanup_on_ratio = bs.get('alignment_cleanup_on_ratio_exceed', True)
                 except Exception:
                     pass
 
@@ -10711,6 +10720,9 @@ class FitsImageViewer:
             # 逐个 detection 目录，计算高分序号的误差并把新列写回现有 analysis 文件
             updated_files = 0
             updated_rows_total = 0
+            cleared_files = 0
+            pruned_rows_total = 0
+            deleted_cutouts_total = 0
 
             for item in files_to_process:
                 file_path = item['file_path']
@@ -10792,6 +10804,69 @@ class FitsImageViewer:
                     if header_idx is None:
                         # 找不到表头则跳过
                         continue
+                    if True:
+
+
+
+                        # 若高分目标中 对齐误差>阈值 的占比超过阈值，则清空本文件记录与cutouts
+                        valid_errs = []
+                        for v in seq_err_map.values():
+                            try:
+                                valid_errs.append(float(v))
+                            except Exception:
+                                pass
+                        bad_cnt = sum(1 for ev in valid_errs if ev > err_px_threshold)
+                        total_cnt = len(valid_errs)
+                        ratio_exceeded = (total_cnt > 0 and (bad_cnt / total_cnt) > ratio_threshold)
+
+                        """
+
+	                        # 统计日志：便于确认是否达到阈值
+	                        try:
+	                            self.logger.info(
+	                                "高分对齐误差占比统计: file=%s, 高分条目=%d, 可计算=%d, >阈值=%d (阈值=%.2fpx), 占比=%.1f%%, 触发清空=%s",
+	                                analysis_path,
+	                                len(high_rows),
+	                                total_cnt,
+	                                bad_cnt,
+	                                err_px_threshold,
+	                                (100.0 * bad_cnt / max(total_cnt, 1)),
+	                                "是" if (cleanup_on_ratio and ratio_exceeded) else "否"
+	                            )
+
+
+                        try:
+                            pass
+
+	                        except Exception:
+	                            pass
+                        """
+
+
+                        if cleanup_on_ratio and ratio_exceeded:
+                            # 删除 cutouts 下所有 png
+                            deleted_count = 0
+                            try:
+                                for p in (Path(detection_dir_path) / 'cutouts').glob('*.png'):
+                                    try:
+                                        p.unlink()
+                                        deleted_count += 1
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                            # 清空数据区（保留表头与分隔线）
+                            data_start_tmp = (sep_idx + 1) if sep_idx is not None else (header_idx + 1)
+                            new_lines_tmp = lines[:data_start_tmp]
+                            with open(analysis_path, 'w', encoding='utf-8') as f:
+                                f.writelines(new_lines_tmp)
+                            cleared_files += 1
+                            deleted_cutouts_total += deleted_count
+                            self.logger.info(
+                                "清空分析文件（高分误差>%.2f 占比%.1f%%>阈值%.1f%%）: %s，删除cutouts=%d",
+                                err_px_threshold, (100.0 * bad_cnt / max(total_cnt, 1)), (100.0 * ratio_threshold), analysis_path, deleted_count
+                            )
+                            continue
 
                     header_has_alignment = '对齐误差(像素)' in lines[header_idx]
 
@@ -10809,6 +10884,42 @@ class FitsImageViewer:
 
                     # 数据区起始行
                     data_start = (sep_idx + 1) if sep_idx is not None else (header_idx + 1)
+
+                    if True:
+
+
+                        #  
+                        removed_rows = 0
+                        high_seq_set = {r['seq'] for r in high_rows}
+                        if prune_non_high:
+                            #  
+                            for j in range(data_start, len(lines)):
+                                sj = lines[j].rstrip('\n')
+                                if not sj.strip():
+                                    continue
+                                parts_j = sj.split()
+                                if not parts_j:
+                                    continue
+                                try:
+                                    seqj = int(parts_j[0])
+                                except Exception:
+                                    continue
+                                if seqj not in high_seq_set:
+                                    #  cutouts
+                                    del_cnt_j = 0
+                                    try:
+                                        for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
+                                            try:
+                                                p.unlink()
+                                                del_cnt_j += 1
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+                                    if del_cnt_j:
+                                        deleted_cutouts_total += del_cnt_j
+                                    lines[j] = ''  # 
+                                    removed_rows += 1
 
                     # 宽度定义（原14列+新增列）
                     widths = [6, 12, 12, 12, 12, 10, 10, 12, 12, 12, 12, 14, 14, 18, 14]
@@ -10850,12 +10961,15 @@ class FitsImageViewer:
                         if seq in seq_err_map:
                             updated_rows += 1
 
-                    if updated_rows > 0:
+                    if (updated_rows > 0) or (prune_non_high and removed_rows > 0):
+                        # 过滤已标记删除的行（空字符串）
+                        lines_to_write = [ln for ln in lines if ln != ""]
                         with open(analysis_path, 'w', encoding='utf-8') as f:
-                            f.writelines(lines)
+                            f.writelines(lines_to_write)
                         updated_files += 1
                         updated_rows_total += updated_rows
-                        self.logger.info("已更新对齐误差列: %s (+%d行)", analysis_path, updated_rows)
+                        pruned_rows_total += removed_rows
+                        self.logger.info("已更新对齐误差列: %s (+%d行), 移除非高分行:%d", analysis_path, updated_rows, removed_rows)
                 except Exception as e:
                     self.logger.error("更新分析文件失败 %s: %s", analysis_path, str(e))
                     continue
@@ -10863,7 +10977,7 @@ class FitsImageViewer:
             if updated_files == 0:
                 messagebox.showinfo("提示", "没有找到可更新的 analysis 文件或高分目标")
                 return
-            messagebox.showinfo("完成", f"已更新 {updated_files} 个 analysis 文件，共填充 {updated_rows_total} 行")
+            messagebox.showinfo("完成", f"已更新 {updated_files} 个 analysis 文件，共填充 {updated_rows_total} 行；清空 {cleared_files} 个文件；移除非高分行 {pruned_rows_total} 行；删除cutouts {deleted_cutouts_total} 个")
         except Exception as e:
             self.logger.error("批量对齐评估失败: %s", str(e), exc_info=True)
             messagebox.showerror("错误", f"批量对齐评估失败:\n{str(e)}")
