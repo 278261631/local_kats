@@ -84,9 +84,10 @@ class ConfigManager:
                 "enable_line_detection_filter": True,  # 批量导出时是否启用直线检测过滤（GUI默认值：True，启用）
                 # Alignment quality batch cleanup settings
                 "alignment_prune_non_high": True,  # 批量检测对齐时，清除“不是高分目标”的记录与检测结果文件（默认清除）
-                "alignment_error_px_threshold": 3.0,  # 判定“高分目标对齐误差过大”的像素阈值（默认3像素）
+                "alignment_error_px_threshold": 2.0,  # 判定“高分目标对齐误差过大”的像素阈值（默认2像素）
                 "alignment_error_ratio_threshold": 0.5,  # 若高分目标中误差>阈值的占比超过此比例则清空本文件（默认50%）
-                "alignment_cleanup_on_ratio_exceed": True  # 占比超过阈值时是否执行清空（默认清除）
+                "alignment_cleanup_on_ratio_exceed": True,  # 占比超过阈值时是否执行清空（默认清除）
+                "alignment_delete_exceeding_when_ratio_below_threshold": True  # 占比未超过阈值时，删除超标的高分条目（默认清除）
             },
             "dss_flip_settings": {
                 "flip_vertical": True,  # 上下翻转DSS（默认值：True）

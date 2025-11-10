@@ -10554,9 +10554,10 @@ class FitsImageViewer:
             sort_by = 'aligned_snr'
             # 新增的对齐清理配置（默认值）
             prune_non_high = True  # 清除非高分记录与文件
-            err_px_threshold = 3.0  # 误差阈值（像素）
+            err_px_threshold = 2.0  # 误差阈值（像素）（默认2）
             ratio_threshold = 0.5   # 占比阈值（超过则清空本文件）
             cleanup_on_ratio = True # 是否执行清空
+            delete_bad_when_ratio_below = True  # 占比未超阈时，是否删除超标条目（默认删除）
             if self.config_manager:
                 try:
                     bs = self.config_manager.get_batch_process_settings()
@@ -10564,9 +10565,10 @@ class FitsImageViewer:
                     aligned_snr_threshold = bs.get('aligned_snr_threshold', 1.1)
                     sort_by = bs.get('sort_by', 'aligned_snr')
                     prune_non_high = bs.get('alignment_prune_non_high', True)
-                    err_px_threshold = bs.get('alignment_error_px_threshold', 3.0)
+                    err_px_threshold = bs.get('alignment_error_px_threshold', 2.0)
                     ratio_threshold = bs.get('alignment_error_ratio_threshold', 0.5)
                     cleanup_on_ratio = bs.get('alignment_cleanup_on_ratio_exceed', True)
+                    delete_bad_when_ratio_below = bs.get('alignment_delete_exceeding_when_ratio_below_threshold', True)
                 except Exception:
                     pass
 
@@ -10873,7 +10875,51 @@ class FitsImageViewer:
                     # 若无该列，则在表头与分隔线上追加该列
                     if not header_has_alignment:
                         header_line = lines[header_idx].rstrip('\n')
+
+                            # 若未触发整文件清空，且占比低于阈值，则删除超标的高分条目与其 cutouts
+                        """
+
+                            if (not ratio_exceeded) and delete_bad_when_ratio_below and total_cnt > 0 and (bad_cnt / total_cnt) < ratio_threshold and len(bad_seq_set) > 0:
+                                removed_rows_bad = 0
+                                for j in range(data_start, len(lines)):
+                                    sj = lines[j].rstrip('\n')
+                                    if not sj.strip():
+                                        continue
+                                    parts_j = sj.split()
+                                    if not parts_j:
+                                        continue
+                                    try:
+                                        seqj = int(parts_j[0])
+                                    except Exception:
+                                        continue
+                                    if seqj in bad_seq_set:
+                                        # 删除该序号的 cutouts
+                                        del_cnt_j = 0
+                                        try:
+                                            for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
+                                                try:
+                                                    p.unlink()
+                                                    del_cnt_j += 1
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+                                        if del_cnt_j:
+                                            deleted_cutouts_total += del_cnt_j
+                                        lines[j] = ''  # 标记删除该数据行
+                                        removed_rows_bad += 1
+                                # 合并到后续写回统计所用的 removed_rows
+                                try:
+                                    removed_rows += removed_rows_bad
+                                except Exception:
+                                    # 若 removed_rows 尚未定义，则临时记录并在写回前使用
+
+                                    removed_rows = removed_rows_bad
+                                self.logger.info("删除对齐误差超标行: %d (阈值=%.2fpx，占比=%.1f%%，阈值=%.1f%%)", removed_rows_bad, err_px_threshold, (100.0 * bad_cnt / max(total_cnt, 1)), (100.0 * ratio_threshold))
+                        """
+
                         lines[header_idx] = header_line + f" {'对齐误差(像素)'.ljust(14)}\n"
+
                         if sep_idx is None:
                             # 尝试定位分隔线
                             if header_idx + 1 < len(lines) and set(lines[header_idx+1].strip()) <= {'-'}:
@@ -10920,6 +10966,57 @@ class FitsImageViewer:
                                         deleted_cutouts_total += del_cnt_j
                                     lines[j] = ''  # 
                                     removed_rows += 1
+
+
+                        # 若未触发整文件清空，且占比低于阈值，则删除超标的高分条目与其 cutouts（按配置）
+                        try:
+                            if (not ratio_exceeded) and delete_bad_when_ratio_below and total_cnt > 0 and (bad_cnt / total_cnt) < ratio_threshold:
+                                # 计算对齐误差超标的序号集合（仅限高分）
+                                bad_seq_set = set()
+                                for _seq, _v in seq_err_map.items():
+                                    try:
+                                        if float(_v) > err_px_threshold:
+                                            bad_seq_set.add(_seq)
+                                    except Exception:
+                                        pass
+                                if bad_seq_set:
+                                    removed_rows_bad = 0
+                                    for j in range(data_start, len(lines)):
+                                        sj = lines[j].rstrip('\n')
+                                        if not sj.strip():
+                                            continue
+                                        parts_j = sj.split()
+                                        if not parts_j:
+                                            continue
+                                        try:
+                                            seqj = int(parts_j[0])
+                                        except Exception:
+                                            continue
+                                        if seqj in bad_seq_set:
+                                            # 删除该序号的 cutouts
+                                            del_cnt_j = 0
+                                            try:
+                                                for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
+                                                    try:
+                                                        p.unlink()
+                                                        del_cnt_j += 1
+                                                    except Exception:
+                                                        pass
+                                            except Exception:
+                                                pass
+                                            if del_cnt_j:
+                                                deleted_cutouts_total += del_cnt_j
+                                            lines[j] = ''  # 标记删除该数据行
+                                            removed_rows_bad += 1
+                                    removed_rows += removed_rows_bad
+                                    self.logger.info(
+                                        "删除对齐误差超标行: %d (阈值=%.2fpx，占比=%.1f%%，占比阈值=%.1f%%)",
+                                        removed_rows_bad, err_px_threshold,
+                                        (100.0 * bad_cnt / max(total_cnt, 1)),
+                                        (100.0 * ratio_threshold)
+                                    )
+                        except Exception:
+                            pass
 
                     # 宽度定义（原14列+新增列）
                     widths = [6, 12, 12, 12, 12, 10, 10, 12, 12, 12, 12, 14, 14, 18, 14]
