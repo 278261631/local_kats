@@ -1944,6 +1944,11 @@ class FitsImageViewer:
             if self.wcs_checker:
                 self.wcs_check_button.config(state="disabled")
             self.file_info_label.config(text="未选择文件")
+            # 无选择时清空右侧显示，避免残留上一张图
+            try:
+                self._clear_diff_display()
+            except Exception:
+                pass
             return
 
         item = selection[0]
@@ -2005,6 +2010,12 @@ class FitsImageViewer:
             # 如果是下载目录的文件，自动检查并加载diff结果
             if is_download_file:
                 self._auto_load_diff_results(file_path)
+            else:
+                # 模板文件或非下载文件：不应显示上一文件的检测结果，清空显示
+                try:
+                    self._clear_diff_display()
+                except Exception:
+                    pass
 
             # 启用批量查询按钮（单个文件也支持批量查询其所有检测目标）
             self.batch_query_button.config(state="normal")
@@ -2015,7 +2026,11 @@ class FitsImageViewer:
             # 启用批量删除查询结果按钮
             self.batch_delete_query_button.config(state="normal")
         else:
-            # 选中的不是FITS文件（可能是目录）
+            # 选中的不是FITS文件（可能是目录），清空右侧显示
+            try:
+                self._clear_diff_display()
+            except Exception:
+                pass
             self.selected_file_path = None
             self.display_button.config(state="disabled")
             self.diff_button.config(state="disabled")
@@ -4963,7 +4978,18 @@ class FitsImageViewer:
                 self.diff_progress_label.config(text="已加载diff结果", foreground="green")
             else:
                 self.logger.info("未找到cutout图片")
-                self.diff_progress_label.config(text="已有diff结果（无cutout）", foreground="blue")
+                # 清空图像显示，避免保留上一个文件的画面；但保留输出目录按钮可用
+                try:
+                    self._clear_diff_display()
+                except Exception:
+                    pass
+                # 恢复输出目录信息与按钮，使用户仍可打开输出目录查看
+                self.last_output_dir = output_dir
+                if hasattr(self, 'open_output_dir_btn'):
+                    self.open_output_dir_btn.config(state="normal")
+                # 提示状态
+                if hasattr(self, 'diff_progress_label'):
+                    self.diff_progress_label.config(text="已有diff结果（无cutout）", foreground="blue")
 
             self.logger.info(f"输出目录: {output_dir} (点击'打开输出目录'按钮查看)")
 
