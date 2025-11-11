@@ -2448,48 +2448,25 @@ Diff统计:
             for filename, url, k_number in all_files_to_process:
                 self.root.after(0, lambda f=filename: self.batch_status_widget.add_file(f))
 
-            # 按天区分组处理
-            from collections import defaultdict
-            files_by_region = defaultdict(list)
+            # 直接跨天区流水线处理：不按天区分批
+            self._log("\n使用跨天区流水线：下载 → ASTAP → Diff（不按天区分批）")
+            self.root.after(0, lambda: self.status_label.config(text=f"正在流水线处理所有天区的文件..."))
+
+            # 准备带目录的文件列表（为每个文件指定独立下载目录）
+            base_download_dir = self.download_dir_var.get().strip()
+            selected_files_with_dirs = []
             for filename, url, k_number in all_files_to_process:
-                files_by_region[k_number].append((filename, url))
+                per_dir = os.path.join(base_download_dir, tel_name, date, k_number)
+                selected_files_with_dirs.append((filename, url, per_dir))
 
-            # 对每个天区执行批量处理
-            for region_idx, (k_number, region_files) in enumerate(files_by_region.items(), 1):
-                # 检查停止标志
-                if self.batch_stopped:
-                    self._log("\n全天批量处理已被停止")
-                    break
+            # 设置输出根目录到 系统/日期
+            base_output_dir = self.diff_output_dir_var.get().strip()
+            self.last_batch_output_root = os.path.join(base_output_dir, tel_name, date)
+            os.makedirs(self.last_batch_output_root, exist_ok=True)
 
-                # 检查暂停标志
-                if self.batch_paused:
-                    self._log(f"\n全天批量处理已暂停（当前进度: 天区 {region_idx-1}/{len(files_by_region)}）")
-                    self.root.after(0, lambda r=region_idx-1, t=len(files_by_region): self.status_label.config(
-                        text=f"全天批量处理已暂停 (天区 {r}/{t})"))
-
-                # 等待暂停解除
-                self.batch_pause_event.wait()
-
-                # 暂停解除后再次检查停止标志
-                if self.batch_stopped:
-                    self._log("\n全天批量处理已被停止")
-                    break
-
-                try:
-                    self._log(f"\n处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
-                    self._log(f"文件数量: {len(region_files)}")
-
-                    # 调用现有的批量处理线程函数
-                    # 注意：这里直接调用内部处理逻辑，而不是启动新线程
-                    self._batch_process_region(region_files, tel_name, date, k_number)
-
-                    self._log(f"天区 {k_number} 处理完成")
-                except Exception as e:
-                    self._log(f"处理天区 {k_number} 时出错: {str(e)}")
-                    import traceback
-                    self._log(traceback.format_exc())
-                    # 继续处理下一个天区
-                    continue
+            # 执行流水线
+            thread_count = self.url_builder.get_thread_count()
+            self._pipeline_process_files(selected_files_with_dirs, base_download_dir, thread_count)
 
             self._log("\n" + "=" * 60)
             self._log("全天下载diff处理完成！")
@@ -2784,7 +2761,17 @@ Diff统计:
 
         # 下载文件并放入ASTAP队列（单线程下载）
         self._log("\n开始下载文件...")
-        for idx, (filename, url) in enumerate(selected_files, 1):
+        for idx, item in enumerate(selected_files, 1):
+            # 兼容两种输入格式：
+            # 1) (filename, url)
+            # 2) (filename, url, per_download_dir)
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                filename, url = item[0], item[1]
+                per_download_dir = item[2] if len(item) >= 3 and item[2] else download_dir
+            else:
+                # 输入异常，跳过
+                continue
+
             # 检查停止标志
             if self.batch_stopped:
                 self._log("\n批量处理已被停止")
@@ -2837,8 +2824,9 @@ Diff统计:
                 progress_state['last_time'] = now
                 progress_state['last_bytes'] = downloaded_bytes
 
-
-            file_path = os.path.join(download_dir, filename)
+            # 为每个文件选择独立目录（若提供）
+            os.makedirs(per_download_dir, exist_ok=True)
+            file_path = os.path.join(per_download_dir, filename)
 
             # 检查文件是否已存在
             if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
@@ -3305,40 +3293,21 @@ Diff统计:
                     for filename, url, tel_name_item, k_number in system_files_to_process:
                         self.root.after(0, lambda f=filename: self.batch_status_widget.add_file(f))
 
-                    # 按天区分组处理
-                    from collections import defaultdict
-                    files_by_region = defaultdict(list)
+                    # 直接跨天区流水线处理（单系统，不按天区分批）
+                    self._log(f"\n  使用跨天区流水线：系统 {tel_name}（不按天区分批）")
+                    base_download_dir = self.download_dir_var.get().strip()
+                    selected_files_with_dirs = []
                     for filename, url, tel_name_item, k_number in system_files_to_process:
-                        files_by_region[k_number].append((filename, url))
+                        per_dir = os.path.join(base_download_dir, tel_name, date, k_number)
+                        selected_files_with_dirs.append((filename, url, per_dir))
 
-                    # 对每个天区执行批量处理
-                    for region_idx, (k_number, region_files) in enumerate(files_by_region.items(), 1):
-                        # 检查停止标志
-                        if self.batch_stopped:
-                            self._log("\n全天全系统批量处理已被停止")
-                            break
+                    # 设置输出根目录到 系统/日期
+                    base_output_dir = self.diff_output_dir_var.get().strip()
+                    self.last_batch_output_root = os.path.join(base_output_dir, tel_name, date)
+                    os.makedirs(self.last_batch_output_root, exist_ok=True)
 
-                        # 检查暂停标志并等待
-                        self.batch_pause_event.wait()
-
-                        # 暂停解除后再次检查停止标志
-                        if self.batch_stopped:
-                            break
-
-                        try:
-                            self._log(f"\n  处理天区 [{region_idx}/{len(files_by_region)}]: {k_number}")
-                            self._log(f"  文件数量: {len(region_files)}")
-
-                            # 调用现有的批量处理逻辑
-                            self._batch_process_region(region_files, tel_name, date, k_number)
-
-                            self._log(f"  天区 {k_number} 处理完成")
-                        except Exception as e:
-                            self._log(f"  处理天区 {k_number} 时出错: {str(e)}")
-                            import traceback
-                            self._log(traceback.format_exc())
-                            # 继续处理下一个天区
-                            continue
+                    thread_count = self.url_builder.get_thread_count()
+                    self._pipeline_process_files(selected_files_with_dirs, base_download_dir, thread_count)
 
                     total_files_processed += len(system_files_to_process)
 
