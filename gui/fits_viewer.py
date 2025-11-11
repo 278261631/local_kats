@@ -2057,6 +2057,12 @@ class FitsImageViewer:
                 self.batch_delete_query_button.config(state="disabled")
                 self.file_info_label.config(text="未选择FITS文件")
 
+                # 允许在选择根目录(总目录)时启用“批量检测对齐”
+                if values and "root_dir" in tags:
+                    if hasattr(self, 'batch_alignment_button'):
+                        self.batch_alignment_button.config(state="normal")
+
+
     def _on_tree_double_click(self, event):
         """目录树双击事件"""
         selection = self.directory_tree.selection()
