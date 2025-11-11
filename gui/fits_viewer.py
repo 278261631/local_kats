@@ -499,6 +499,7 @@ class FitsImageViewer:
         refresh_frame.pack(fill=tk.X, pady=(0, 5))
 
         ttk.Button(refresh_frame, text="刷新目录", command=self._refresh_directory_tree).pack(side=tk.LEFT)
+        ttk.Button(refresh_frame, text="跳转高分", command=self._jump_to_next_high_score).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="跳转未查询 (g)", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="批量导出未查询", command=self._batch_export_unqueried).pack(side=tk.LEFT, padx=(5, 0))
 
@@ -3003,7 +3004,8 @@ class FitsImageViewer:
             messagebox.showerror("错误", error_msg)
 
     def _get_qualified_detection_indices(self, file_path, high_score_count):
-        """获取文件中符合条件的检测索引列表
+        """
+        获取文件中符合条件的检测索引列表
 
         条件：
         1. 小行星和变星都已查询且未找到
@@ -3189,6 +3191,57 @@ class FitsImageViewer:
             self.logger.debug(f"  未找到符合条件的检测索引")
 
         return qualified_indices
+
+    def _jump_to_next_high_score(self):
+        """
+        按照当前目录树选择位置，向下跳转到下一个"高分"文件（diff_gold_red）。
+        - 单向查找：仅从当前选中节点之后开始，直到树末尾；不循环。
+        - 找到后仅选中并聚焦该文件节点（将自动触发已存在的选择逻辑与diff结果自动加载）。
+        """
+        try:
+            selection = self.directory_tree.selection()
+            current = selection[0] if selection else None
+
+            # 生成整棵树的先序遍历序列（从根到叶，按可见顺序）
+            order = []
+
+            def walk(parent):
+                for child in self.directory_tree.get_children(parent):
+                    order.append(child)
+                    walk(child)
+
+            for root in self.directory_tree.get_children(""):
+                order.append(root)
+                walk(root)
+
+            try:
+                start_idx = order.index(current) + 1
+            except ValueError:
+                start_idx = 0
+
+            # 从当前位置之后开始查找带有高分标记的FITS文件
+            for i in range(start_idx, len(order)):
+                node = order[i]
+                tags = self.directory_tree.item(node, "tags")
+                if "fits_file" in tags and "diff_gold_red" in tags:
+                    # 程序自动选择，避免重置部分查找状态
+                    self._auto_selecting = True
+                    self.directory_tree.selection_set(node)
+                    self.directory_tree.focus(node)
+                    self.directory_tree.see(node)
+                    self.parent_frame.after(10, lambda: setattr(self, '_auto_selecting', False))
+
+                    try:
+                        text = self.directory_tree.item(node, 'text')
+                        self.logger.info(f"跳转到下一个高分文件: {text}")
+                    except Exception:
+                        pass
+                    return
+
+            # 未找到后续高分文件
+            messagebox.showinfo("提示", "已到末尾，后续没有高分项")
+        except Exception as e:
+            self.logger.error(f"跳转高分失败: {e}", exc_info=True)
 
     def _check_all_distances_far(self, section_text, min_distance):
         """检查文本中所有像素距离是否都>=指定距离
