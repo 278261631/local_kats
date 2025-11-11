@@ -2870,7 +2870,8 @@ Diff统计:
                         astap_config_path="config/url_config.json"
                     )
 
-                result = self.downloader.download_single_file(url, download_dir, progress_callback)
+                # 注意：需使用每个文件对应的独立下载目录 per_download_dir，避免与队列中的 file_path 不一致
+                result = self.downloader.download_single_file(url, per_download_dir, progress_callback)
 
                 if "成功" in result:
                     with stats_lock:
