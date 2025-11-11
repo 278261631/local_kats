@@ -34,16 +34,16 @@ class SignalBlobDetector:
         self.min_circularity = min_circularity
         self.gamma = gamma
         self.max_jaggedness_ratio = max_jaggedness_ratio
-        
+
     def load_fits_image(self, fits_path):
         """加载 FITS 文件"""
         try:
             print(f"\n加载 FITS 文件: {fits_path}")
-            
+
             with fits.open(fits_path) as hdul:
                 data = hdul[0].data
                 header = hdul[0].header
-                
+
                 if data is None:
                     print("错误: 无法读取图像数据")
                     return None, None
@@ -53,18 +53,18 @@ class SignalBlobDetector:
                 if len(data.shape) == 3:
                     print(f"检测到 3D 数据，取第一个通道")
                     data = data[0]
-                
+
                 print(f"图像信息:")
                 print(f"  - 形状: {data.shape}")
                 print(f"  - 数据范围: [{np.min(data):.6f}, {np.max(data):.6f}]")
                 print(f"  - 均值: {np.mean(data):.6f}, 标准差: {np.std(data):.6f}")
-                
+
                 return data, header
-                
+
         except Exception as e:
             print(f"加载 FITS 文件失败: {str(e)}")
             return None, None
-    
+
     def histogram_peak_stretch(self, data, ratio=2.0/3.0):
         """
         基于直方图峰值的拉伸策略
@@ -274,7 +274,7 @@ class SignalBlobDetector:
         print(f"  - 信号像素: {signal_pixels} ({percentage:.3f}%)")
 
         return mask, threshold
-    
+
     def detect_blobs_from_mask(self, mask, original_data, detection_method='contour'):
         """
         从掩码中检测斑点
@@ -507,7 +507,7 @@ class SignalBlobDetector:
         print(f"过滤后剩余 {len(blobs)} 个斑点")
 
         return blobs
-    
+
     def calculate_aligned_snr(self, blobs, aligned_data, cutout_size=100):
         """
         在排序前计算所有 blob 的 aligned_center_7x7_snr
@@ -696,7 +696,7 @@ class SignalBlobDetector:
         print(f"  - SNR: {np.mean(snrs):.2f} ± {np.std(snrs):.2f} (范围: {np.min(snrs):.2f} - {np.max(snrs):.2f})")
         print(f"  - 平均信号: {np.mean(signals):.6f} ± {np.std(signals):.6f}")
         print(f"  - 信号范围: {np.min(signals):.6f} - {np.max(signals):.6f}")
-    
+
     def draw_blobs(self, data, blobs, mask):
         """绘制检测结果"""
         # 创建彩色图像
@@ -716,7 +716,7 @@ class SignalBlobDetector:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
 
         return color_image
-    
+
     def local_stretch(self, cutout, method='percentile', low_percentile=1, high_percentile=99):
         """
         对截图进行局部拉伸以增强细节
@@ -1367,11 +1367,53 @@ class SignalBlobDetector:
         cv2.imwrite(result_output, result_image)
         print(f"保存检测结果图: {result_output}")
 
-        # 生成每个检测结果的截图和GIF
-        self.extract_blob_cutouts(original_data, stretched_data, result_image, blobs,
-                                  output_folder, base_name,
-                                  reference_data=reference_data, aligned_data=aligned_data,
-                                  header=header, generate_shape_viz=generate_shape_viz, generate_gif=generate_gif)
+        # 仅为“高分项”生成截图和GIF（按项目配置的阈值）
+        score_threshold = 3.0
+        aligned_snr_threshold = 1.1
+        try:
+            # 优先从GUI配置读取阈值（若可用），否则使用默认值
+            try:
+                from gui.config_manager import ConfigManager
+            except Exception:
+                import sys as _sys, os as _os
+                _repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+                if _repo_root not in _sys.path:
+                    _sys.path.append(_repo_root)
+                from gui.config_manager import ConfigManager
+            _cfg = ConfigManager().config
+            _bps = _cfg.get('batch_process_settings', {})
+            score_threshold = float(_bps.get('score_threshold', score_threshold))
+            aligned_snr_threshold = float(_bps.get('aligned_snr_threshold', aligned_snr_threshold))
+        except Exception:
+            pass
+
+        # 计算“高分项”集合（先判定使用哪个阈值口径）
+        if aligned_data is not None and any(b.get('aligned_center_7x7_snr') is not None for b in blobs):
+            high_blobs = [b for b in blobs if (b.get('aligned_center_7x7_snr') is not None and b.get('aligned_center_7x7_snr') >= aligned_snr_threshold)]
+            _criterion_str = f"aligned_snr>={aligned_snr_threshold}"
+        else:
+            high_blobs = [b for b in blobs if b.get('quality_score', 0) >= score_threshold]
+            _criterion_str = f"quality_score>={score_threshold}"
+
+        # 是否生成“非高分项”cutout 跟随快速模式：
+        # - 快速模式（generate_shape_viz=False）→ 仅为高分项生成
+        # - 非快速模式（generate_shape_viz=True）→ 为全部候选生成
+        is_fast_mode = not generate_shape_viz
+        if is_fast_mode:
+            blobs_for_cutouts = high_blobs
+            if not blobs_for_cutouts:
+                print(f"[快速模式] 无高分候选，跳过cutouts生成（条件：{_criterion_str}）")
+            else:
+                print(f"[快速模式] 仅为 {len(blobs_for_cutouts)}/{len(blobs)} 个高分候选生成cutouts（条件：{_criterion_str}）")
+        else:
+            blobs_for_cutouts = blobs
+            print(f"[非快速模式] 为全部 {len(blobs_for_cutouts)} 个候选生成cutouts；其中高分 {len(high_blobs)}（条件：{_criterion_str}）")
+
+        if blobs_for_cutouts:
+            self.extract_blob_cutouts(original_data, stretched_data, result_image, blobs_for_cutouts,
+                                      output_folder, base_name,
+                                      reference_data=reference_data, aligned_data=aligned_data,
+                                      header=header, generate_shape_viz=generate_shape_viz, generate_gif=generate_gif)
 
         # 保存详细信息
         txt_output = os.path.join(output_folder, f"{base_name}_analysis_{param_str}.txt")
@@ -1494,7 +1536,7 @@ class SignalBlobDetector:
                        f"{aligned_center_str}\n")
 
         print(f"保存分析报告: {txt_output}")
-    
+
     def process_fits_file(self, fits_path, output_dir=None, use_peak_stretch=None, detection_threshold=0.0,
                          reference_fits=None, aligned_fits=None, remove_bright_lines=True,
                          stretch_method='percentile', percentile_low=99.95, fast_mode=False, detection_method='contour',
@@ -1518,6 +1560,7 @@ class SignalBlobDetector:
             generate_gif: 是否生成GIF动画，默认True
             skybot_results: Skybot小行星查询结果（可选）
             vsx_results: VSX变星查询结果（可选）
+
         """
         # 加载数据
         data, header = self.load_fits_image(fits_path)
@@ -1665,6 +1708,7 @@ def main():
                        help='排序方式: quality_score=综合得分, aligned_snr=Aligned中心7x7 SNR（默认）, snr=差异图像SNR')
     parser.add_argument('--no-gif', action='store_true',
                        help='不生成GIF动画（默认生成）')
+
 
     args = parser.parse_args()
 
