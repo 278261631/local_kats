@@ -8427,7 +8427,7 @@ class FitsImageViewer:
                             pass
                         continue
 
-                # 
+                # 
 
 
 
@@ -9500,7 +9500,7 @@ class FitsImageViewer:
                         self.logger.error("=" * 60)
                         self.logger.error(f"OSS上传失败，返回码: {return_code}")
                         self.logger.error("=" * 60)
-                        # 
+                        # 
                         try:
                             self._auto_silent_mode = False
                         except Exception:
@@ -10195,8 +10195,8 @@ class FitsImageViewer:
 
         return deleted_count
     def _batch_query_local_asteroids_and_variables(self):
-        """   :   batch     
-           Local   
+        """   :   batch     
+           Local   
         """
         prev = getattr(self, "_use_local_query_override", False)
         self._use_local_query_override = True
@@ -10679,6 +10679,17 @@ class FitsImageViewer:
                     ratio_threshold = bs.get('alignment_error_ratio_threshold', 0.5)
                     cleanup_on_ratio = bs.get('alignment_cleanup_on_ratio_exceed', True)
                     delete_bad_when_ratio_below = bs.get('alignment_delete_exceeding_when_ratio_below_threshold', True)
+                    # 读取快速模式设置；在非快速模式下不执行任何删除，仅输出可视化标记
+                    try:
+                        fast_mode = bs.get('fast_mode', True)
+                    except Exception:
+                        fast_mode = True
+                    if not fast_mode:
+                        # 禁用清理/删除相关动作
+                        prune_non_high = False
+                        cleanup_on_ratio = False
+                        delete_bad_when_ratio_below = False
+
                 except Exception:
                     pass
 
@@ -10808,6 +10819,7 @@ class FitsImageViewer:
             # 收集要处理的文件
             files_to_process = []
             saving_root_output_dir = None
+            flagged_images_total = 0  # 统计已标记的图像数量（非快速模式可视化用）
             if "fits_file" in tags:
                 fp = values[0]
                 files_to_process.append({'file_path': fp, 'region_dir': os.path.dirname(fp)})
@@ -10824,6 +10836,10 @@ class FitsImageViewer:
                             info = self._check_file_diff_result(fpath, root)
                             if info and info.get('has_result') and info.get('high_score_count', 0) > 0:
                                 files_to_process.append({'file_path': fpath, 'region_dir': root})
+
+
+                # 统计已标记的图像数量（非快速模式可视化用）
+                flagged_images_total = 0
 
             if not files_to_process:
                 messagebox.showinfo("提示", "未找到可评估的高分检测目标")
@@ -10886,6 +10902,178 @@ class FitsImageViewer:
                 if not ref_imgs or not ali_imgs:
                     continue
 
+                #  
+                def _save_alignment_flag(seq, reason, err_text=None):
+                    """在 aligned 切片上绘制可视化标记并保存到 cutouts 目录，文件名与原始对齐切片相关联"""
+                    try:
+                        idx_flag = int(seq) - 1
+                        if idx_flag < 0 or idx_flag >= min(len(ref_imgs), len(ali_imgs)):
+                            return False
+                        ali_path = Path(ali_imgs[idx_flag])
+                        img = cv2.imread(str(ali_path), cv2.IMREAD_COLOR)
+                        if img is None:
+                            return False
+                        h, w = img.shape[:2]
+                        # 红色边框 + 文本标签
+                        cv2.rectangle(img, (0, 0), (w - 1, h - 1), (0, 0, 255), 3)
+
+                        label = "MISALIGNED" if reason == "misaligned" else "CENTERLINE"
+                        if err_text:
+                            try:
+                                label = f"{label} err={float(err_text):.3f}px"
+                            except Exception:
+                                label = f"{label} err={err_text}"
+                        cv2.putText(img, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+
+                        # 直接输出到 cutouts 目录，文件名与原始文件名关联
+                        cutouts_dir = ali_path.parent
+                        out_name = f"{ali_path.stem}__flag_{reason}.png"
+                        cv2.imwrite(str(cutouts_dir / out_name), img)
+                        return True
+                    except Exception:
+                        return False
+
+
+                def _save_line_viz(seq):
+                    try:
+                        # 兼容旧命名：直接调用新版 _save_line_viz2
+                        return _save_line_viz2(seq)
+                    except Exception:
+                        return False
+
+                # 修正后的可视化函数（避免递归/作用域问题）
+                def _save_alignment_viz2(seq, err_px=None):
+                    try:
+                        idx_v = int(seq) - 1
+                        if idx_v < 0 or idx_v >= min(len(ref_imgs), len(ali_imgs)):
+                            return False
+                        ref_path = Path(ref_imgs[idx_v])
+                        ali_path = Path(ali_imgs[idx_v])
+                        ref = cv2.imread(str(ref_path), cv2.IMREAD_COLOR)
+                        ali = cv2.imread(str(ali_path), cv2.IMREAD_COLOR)
+                        if ref is None or ali is None:
+                            return False
+                        h, w = ref.shape[:2]
+                        ref_g = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY) if len(ref.shape) == 3 else ref.copy()
+                        ali_g = cv2.cvtColor(ali, cv2.COLOR_BGR2GRAY) if len(ali.shape) == 3 else ali.copy()
+                        used_phase = False
+                        M = None
+                        k1 = k2 = d1 = d2 = matches = inliers = None
+                        try:
+                            ref_b = cv2.GaussianBlur(ref_g, (3, 3), 0)
+                            ali_b = cv2.GaussianBlur(ali_g, (3, 3), 0)
+                            orb = cv2.ORB_create(nfeatures=400, scaleFactor=1.2, nlevels=8)
+                            k1, d1 = orb.detectAndCompute(ref_b, None)
+                            k2, d2 = orb.detectAndCompute(ali_b, None)
+                            if d1 is not None and d2 is not None and len(k1) >= 6 and len(k2) >= 6:
+                                bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+                                matches = bf.match(d1, d2)
+                                matches = sorted(matches, key=lambda m: m.distance)
+                                if len(matches) >= 6:
+                                    pts1 = np.float32([k1[m.queryIdx].pt for m in matches])
+                                    pts2 = np.float32([k2[m.trainIdx].pt for m in matches])
+                                    M, inliers = cv2.estimateAffinePartial2D(pts2, pts1, method=cv2.RANSAC,
+                                                                             ransacReprojThreshold=3.0, maxIters=2000, confidence=0.99)
+                        except Exception:
+                            M = None
+                        if M is None:
+                            try:
+                                shift, _ = cv2.phaseCorrelate(np.float32(ref_g), np.float32(ali_g))
+                                dx, dy = float(shift[0]), float(shift[1])
+                                M = np.float32([[1, 0, dx], [0, 1, dy]])
+                                used_phase = True
+                            except Exception:
+                                return False
+                        # 构建并排大图，左侧ref，右侧ali，绘制全部匹配点与连线
+                        h1, w1 = ref.shape[:2]
+                        h2, w2 = ali.shape[:2]
+                        H = max(h1, h2)
+                        W = w1 + w2
+                        canvas = np.zeros((H, W, 3), dtype=np.uint8)
+                        canvas[0:h1, 0:w1] = ref
+                        canvas[0:h2, w1:w1+w2] = ali
+                        try:
+                            if matches is not None and len(matches) > 0 and k1 is not None and k2 is not None:
+                                # 绘制全部匹配（用RANSAC内点/外点区分颜色）
+                                inlier_mask = None
+                                try:
+                                    if inliers is not None:
+                                        inlier_mask = inliers.ravel().astype(bool)
+                                except Exception:
+                                    inlier_mask = None
+                                total = len(matches)
+                                inliers_cnt = int(inlier_mask.sum()) if inlier_mask is not None else 0
+                                for i, m in enumerate(matches):
+                                    x1, y1 = k1[m.queryIdx].pt
+                                    x2, y2 = k2[m.trainIdx].pt
+                                    p1 = (int(round(x1)), int(round(y1)))
+                                    p2 = (int(round(x2 + w1)), int(round(y2)))
+                                    ok = (inlier_mask[i] if (inlier_mask is not None and i < len(inlier_mask)) else True)
+                                    color = (0, 255, 0) if ok else (0, 0, 255)
+                                    cv2.circle(canvas, p1, 2, color, -1)
+                                    cv2.circle(canvas, p2, 2, color, -1)
+                                    cv2.line(canvas, p1, p2, (0, 255, 255), 1)
+                                # 文本信息（匹配统计 + 误差 + 方法）
+                                text = []
+                                text.append(f"matches={total}")
+                                if inlier_mask is not None:
+                                    text.append(f"inliers={inliers_cnt}")
+                                if isinstance(err_px, (int, float)):
+                                    text.append(f"err={float(err_px):.3f}px")
+                                text.append("phase" if used_phase else "ORB+RANSAC")
+                                info = " | ".join(text)
+                                cv2.putText(canvas, info, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                            else:
+                                # 无匹配：仅绘制中心十字并标注方法
+                                for off, img in [(0, ref), (w1, ali)]:
+                                    h_, w_ = img.shape[:2]
+                                    cx, cy = int(w_/2), int(h_/2)
+                                    cv2.drawMarker(canvas, (off+cx, cy), (0, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=10, thickness=1)
+                                text = ["no ORB matches"]
+                                if isinstance(err_px, (int, float)):
+                                    text.append(f"err={float(err_px):.3f}px")
+                                text.append("phase" if used_phase else "ORB+RANSAC")
+                                info = " | ".join(text)
+                                cv2.putText(canvas, info, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        except Exception:
+                            pass
+                        outp = ali_path.parent / f"{ali_path.stem}__align_overlay.png"
+                        cv2.imwrite(str(outp), canvas)
+                        return True
+                    except Exception:
+                        return False
+
+                def _save_line_viz2(seq):
+                    try:
+                        idx_v = int(seq) - 1
+                        if idx_v < 0 or idx_v >= len(ali_imgs):
+                            return False
+                        ali_path = Path(ali_imgs[idx_v])
+                        img = cv2.imread(str(ali_path), cv2.IMREAD_COLOR)
+                        if img is None:
+                            return False
+                        vis = img.copy()
+                        h, w = vis.shape[:2]
+                        cx, cy = int(w/2), int(h/2)
+                        cv2.drawMarker(vis, (cx, cy), (0, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
+                        thr = np.percentile(gray, 95)
+                        _, binary = cv2.threshold(gray, thr, 255, cv2.THRESH_BINARY)
+                        edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+                        lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50,
+                                                 minLineLength=min(w, h) * 0.3, maxLineGap=10)
+                        if lines is not None:
+                            for l in lines:
+                                x1, y1, x2, y2 = l[0]
+                                cv2.line(vis, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                        outp = ali_path.parent / f"{ali_path.stem}__lines.png"
+                        cv2.imwrite(str(outp), vis)
+                        return True
+                    except Exception:
+                        return False
+
+
+
                 # 直线检测：若启用过滤，预先标记高分序号中aligned切片存在过中心直线的项
                 line_bad_seq_set = set()
                 try:
@@ -10912,6 +11100,16 @@ class FitsImageViewer:
                     err = rigid_error_px(ref_imgs[idx], ali_imgs[idx])
                     seq_err_map[row['seq']] = f"{err:.3f}" if isinstance(err, float) else "N/A"
 
+                    # 可视化输出（每个检测结果都生成）
+                    try:
+                        _save_alignment_viz2(row['seq'], err if isinstance(err, float) else None)
+                    except Exception:
+                        pass
+                    try:
+                        _save_line_viz2(row['seq'])
+                    except Exception:
+                        pass
+
                 if not seq_err_map:
                     continue
 
@@ -10932,6 +11130,20 @@ class FitsImageViewer:
                                 if nxt and set(nxt) <= {'-'}:
                                     sep_idx = i + 1
                             break
+
+
+                    # 计算对齐误差超阈值的序号集合（用于非快速模式下的可视化标记）
+                    bad_seq_set = set()
+                    try:
+                        for _seq, _v in seq_err_map.items():
+                            try:
+                                if float(_v) > err_px_threshold:
+                                    bad_seq_set.add(_seq)
+                            except Exception:
+                                pass
+                    except Exception:
+                        bad_seq_set = set()
+
                     if header_idx is None:
                         # 找不到表头则跳过
                         continue
@@ -11063,11 +11275,11 @@ class FitsImageViewer:
                     if True:
 
 
-                        #  
+                        #  
                         removed_rows = 0
                         high_seq_set = {r['seq'] for r in high_rows}
                         if prune_non_high:
-                            #  
+                            #  
                             for j in range(data_start, len(lines)):
                                 sj = lines[j].rstrip('\n')
                                 if not sj.strip():
@@ -11080,7 +11292,7 @@ class FitsImageViewer:
                                 except Exception:
                                     continue
                                 if seqj not in high_seq_set:
-                                    #  cutouts
+                                    #  cutouts
                                     del_cnt_j = 0
                                     try:
                                         for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
@@ -11093,7 +11305,7 @@ class FitsImageViewer:
                                         pass
                                     if del_cnt_j:
                                         deleted_cutouts_total += del_cnt_j
-                                    lines[j] = ''  # 
+                                    lines[j] = ''  # 
                                     removed_rows += 1
 
 
@@ -11150,40 +11362,57 @@ class FitsImageViewer:
                             pass
 
 
-                    # 若启用了直线过滤，则无条件移除检测到过中心直线的高分行，并删除其cutouts
+                        # 非快速模式：不删除，标记对齐误差超阈值的高分序号
+                        if not fast_mode:
+                            try:
+                                if 'bad_seq_set' in locals() and bad_seq_set:
+                                    for seqk in sorted(bad_seq_set):
+                                        _save_alignment_flag(seqk, 'misaligned', err_text=seq_err_map.get(seqk))
+                                        flagged_images_total += 1
+                            except Exception:
+                                pass
+
+
+                    # 若启用了直线过滤：快速模式删除；非快速模式仅输出可视化标记
                     try:
                         if 'line_bad_seq_set' in locals() and line_bad_seq_set:
-                            removed_rows_line = 0
-                            for j in range(data_start, len(lines)):
-                                sj = lines[j].rstrip('\n')
-                                if not sj.strip():
-                                    continue
-                                parts_j = sj.split()
-                                if not parts_j:
-                                    continue
-                                try:
-                                    seqj = int(parts_j[0])
-                                except Exception:
-                                    continue
-                                if seqj in line_bad_seq_set:
-                                    # 删除该序号的 cutouts
-                                    del_cnt_j = 0
+                            if fast_mode:
+                                removed_rows_line = 0
+                                for j in range(data_start, len(lines)):
+                                    sj = lines[j].rstrip('\n')
+                                    if not sj.strip():
+                                        continue
+                                    parts_j = sj.split()
+                                    if not parts_j:
+                                        continue
                                     try:
-                                        for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
-                                            try:
-                                                p.unlink()
-                                                del_cnt_j += 1
-                                            except Exception:
-                                                pass
+                                        seqj = int(parts_j[0])
                                     except Exception:
-                                        pass
-                                    if del_cnt_j:
-                                        deleted_cutouts_total += del_cnt_j
-                                    lines[j] = ''
-                                    removed_rows_line += 1
-                            if removed_rows_line:
-                                removed_rows += removed_rows_line
-                                self.logger.info('删除过中心直线行: %d', removed_rows_line)
+                                        continue
+                                    if seqj in line_bad_seq_set:
+                                        # 删除该序号的 cutouts
+                                        del_cnt_j = 0
+                                        try:
+                                            for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
+                                                try:
+                                                    p.unlink()
+                                                    del_cnt_j += 1
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+                                        if del_cnt_j:
+                                            deleted_cutouts_total += del_cnt_j
+                                        lines[j] = ''
+                                        removed_rows_line += 1
+                                if removed_rows_line:
+                                    removed_rows += removed_rows_line
+                                    self.logger.info('删除过中心直线行: %d', removed_rows_line)
+                            else:
+                                # 非快速模式：不删除，仅输出标记
+                                for seqj in sorted(line_bad_seq_set):
+                                    _save_alignment_flag(seqj, 'centerline')
+                                    flagged_images_total += 1
                     except Exception:
                         pass
 
@@ -11245,7 +11474,13 @@ class FitsImageViewer:
             if updated_files == 0:
                 messagebox.showinfo("提示", "没有找到可更新的 analysis 文件或高分目标")
                 return
-            messagebox.showinfo("完成", f"已更新 {updated_files} 个 analysis 文件，共填充 {updated_rows_total} 行；清空 {cleared_files} 个文件；移除非高分行 {pruned_rows_total} 行；删除cutouts {deleted_cutouts_total} 个")
+            if fast_mode:
+                _msg = (f"已更新 {updated_files} 个 analysis 文件，共填充 {updated_rows_total} 行；"
+                        f"清空 {cleared_files} 个文件；移除非高分行 {pruned_rows_total} 行；删除cutouts {deleted_cutouts_total} 个")
+            else:
+                _msg = (f"已更新 {updated_files} 个 analysis 文件，共填充 {updated_rows_total} 行；"
+                        f"标记 {flagged_images_total} 张图像（misaligned/centerline），未进行删除操作")
+            messagebox.showinfo("完成", _msg)
         except Exception as e:
             self.logger.error("批量对齐评估失败: %s", str(e), exc_info=True)
             messagebox.showerror("错误", f"批量对齐评估失败:\n{str(e)}")
