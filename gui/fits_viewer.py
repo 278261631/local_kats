@@ -8427,7 +8427,7 @@ class FitsImageViewer:
                             pass
                         continue
 
-                # 
+                #
 
 
 
@@ -9500,7 +9500,7 @@ class FitsImageViewer:
                         self.logger.error("=" * 60)
                         self.logger.error(f"OSS上传失败，返回码: {return_code}")
                         self.logger.error("=" * 60)
-                        # 
+                        #
                         try:
                             self._auto_silent_mode = False
                         except Exception:
@@ -10195,8 +10195,8 @@ class FitsImageViewer:
 
         return deleted_count
     def _batch_query_local_asteroids_and_variables(self):
-        """   :   batch     
-           Local   
+        """   :   batch
+           Local
         """
         prev = getattr(self, "_use_local_query_override", False)
         self._use_local_query_override = True
@@ -10768,7 +10768,114 @@ class FitsImageViewer:
                 # 轻度预处理
                 img1b = cv2.GaussianBlur(img1, (3, 3), 0)
                 img2b = cv2.GaussianBlur(img2, (3, 3), 0)
-                orb = cv2.ORB_create(nfeatures=400, scaleFactor=1.2, nlevels=8)
+                # 优先：基于星点的多边形（三角形）刚性匹配，评估对齐误差
+                try:
+                    import math
+                    from itertools import combinations
+                    def _detect_stars(gray, max_points=300):
+                        g = cv2.GaussianBlur(gray, (3, 3), 0)
+                        m, s = cv2.meanStdDev(g)
+                        thr = float(m + 2.5 * s)
+                        _, bw = cv2.threshold(g, max(1, min(255, int(thr))), 255, cv2.THRESH_BINARY)
+                        num, labels, stats, centroids = cv2.connectedComponentsWithStats(bw, 8)
+                        cand = []
+                        H, W = gray.shape[:2]
+                        for i in range(1, num):
+                            area = int(stats[i, cv2.CC_STAT_AREA])
+                            if 2 <= area <= 200:
+                                cx, cy = float(centroids[i][0]), float(centroids[i][1])
+                                if 0 <= cx < W and 0 <= cy < H:
+                                    val = float(g[int(round(cy)), int(round(cx))])
+                                    cand.append((val, cx, cy))
+                        cand.sort(key=lambda t: t[0], reverse=True)
+                        pts = []
+                        min_d2 = 9.0  # 最小间距 3px
+                        for _, x, y in cand:
+                            if len(pts) >= max_points:
+                                break
+                            ok = True
+                            for ox, oy in pts:
+                                dx, dy = x - ox, y - oy
+                                if dx * dx + dy * dy < min_d2:
+                                    ok = False
+                                    break
+                            if ok:
+                                pts.append((x, y))
+                        return np.float32(pts)
+                    def _best_rigid_by_triangles(P1, P2, tri_points=25, thr=3.0, bin_scale=50):
+                        if P1.shape[0] < 3 or P2.shape[0] < 3:
+                            return None
+                        n1 = min(tri_points, P1.shape[0])
+                        n2 = min(tri_points, P2.shape[0])
+                        idxs1 = list(range(n1))
+                        idxs2 = list(range(n2))
+                        # 预建字典：按三角形形状比值量化
+                        def tri_key(pa, pb, pc):
+                            a = np.linalg.norm(pa - pb)
+                            b = np.linalg.norm(pb - pc)
+                            c = np.linalg.norm(pa - pc)
+                            l = sorted([a, b, c])
+                            if l[2] <= 1e-6:
+                                return None
+                            r1 = l[0] / l[2]
+                            r2 = l[1] / l[2]
+                            return (int(round(r1 * bin_scale)), int(round(r2 * bin_scale)))
+                        dct = {}
+                        for i, j, k in combinations(idxs1, 3):
+                            key = tri_key(P1[i], P1[j], P1[k])
+                            if key is None:
+                                continue
+                            dct.setdefault(key, []).append((i, j, k))
+                        if not dct:
+                            return None
+                        best = None  # (inliers_cnt, R, t, inlier_mask, err)
+                        # 遍历 P2 三角形，查找近邻桶
+                        for I, J, K in combinations(idxs2, 3):
+                            key = tri_key(P2[I], P2[J], P2[K])
+                            if key is None:
+                                continue
+                            bx, by = key
+                            cands = []
+                            for dx in (-1, 0, 1):
+                                for dy in (-1, 0, 1):
+                                    cands.extend(dct.get((bx + dx, by + dy), []))
+                            if not cands:
+                                continue
+                            B = np.stack([P2[I], P2[J], P2[K]], axis=0)
+                            for (i, j, k) in cands[:200]:  # 限制候选，控制耗时
+                                A = np.stack([P1[i], P1[j], P1[k]], axis=0)
+                                # Kabsch 刚体估计（无缩放） B->A
+                                muB, muA = B.mean(0), A.mean(0)
+                                X, Y = B - muB, A - muA
+                                U, S, Vt = np.linalg.svd(X.T @ Y)
+                                R = Vt.T @ U.T
+                                if np.linalg.det(R) < 0:
+                                    Vt[1, :] *= -1
+                                    R = Vt.T @ U.T
+                                t = muA - (R @ muB)
+                                # 将 P2 全部点变换后与 P1 做最近邻配对（阈值 thr）
+                                P2t = (P2 @ R.T) + t
+                                # 向量化最近邻距离
+                                d2 = np.sqrt(((P2t[:, None, :] - P1[None, :, :]) ** 2).sum(axis=2))
+                                mins = d2.min(axis=1)
+                                inlier_mask = mins <= thr
+                                inliers_cnt = int(inlier_mask.sum())
+                                if inliers_cnt >= 3:
+                                    err = float(mins[inlier_mask].mean()) if inliers_cnt > 0 else 0.0
+                                    if (best is None) or (inliers_cnt > best[0]) or (inliers_cnt == best[0] and err < best[4]):
+                                        best = (inliers_cnt, R, t, inlier_mask, err)
+                        return best
+                    P1 = _detect_stars(img1)
+                    P2 = _detect_stars(img2)
+                    if P1.shape[0] >= 10 and P2.shape[0] >= 10:
+                        res = _best_rigid_by_triangles(P1, P2, tri_points=25, thr=3.0, bin_scale=50)
+                        if res is not None and res[0] >= 6:
+                            # 返回刚性误差（内点均值）
+                            return float(res[4])
+                except Exception:
+                    pass
+
+                orb = cv2.ORB_create(nfeatures=1500, scaleFactor=1.2, nlevels=8)
                 k1, d1 = orb.detectAndCompute(img1b, None)
                 k2, d2 = orb.detectAndCompute(img2b, None)
                 if d1 is None or d2 is None or len(k1) < 6 or len(k2) < 6:
@@ -10778,15 +10885,17 @@ class FitsImageViewer:
                         return float(np.hypot(shift[0], shift[1]))
                     except Exception:
                         return None
-                bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-                matches = bf.match(d1, d2)
+                bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+                _raw = bf.knnMatch(d1, d2, k=2)
+                ratio = 0.8
+                matches = [m for m, n in _raw if n is not None and m.distance < ratio * n.distance]
                 if not matches:
                     try:
                         shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
                         return float(np.hypot(shift[0], shift[1]))
                     except Exception:
                         return None
-                matches = sorted(matches, key=lambda m: m.distance)[:80]
+                matches = sorted(matches, key=lambda m: m.distance)[:300]
                 if len(matches) < 6:
                     try:
                         shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
@@ -10900,6 +11009,25 @@ class FitsImageViewer:
             deleted_cutouts_total = 0
 
             for item in files_to_process:
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+                            #
+
                 file_path = item['file_path']
                 region_dir = item['region_dir']
                 filename = os.path.basename(file_path)
@@ -10949,7 +11077,7 @@ class FitsImageViewer:
                 if not ref_imgs or not ali_imgs:
                     continue
 
-                #  
+                #
                 def _save_alignment_flag(seq, reason, err_text=None):
                     """在 aligned 切片上绘制可视化标记并保存到 cutouts 目录，文件名与原始对齐切片相关联"""
                     try:
@@ -11006,65 +11134,152 @@ class FitsImageViewer:
                         used_phase = False
                         M = None
                         k1 = k2 = d1 = d2 = matches = inliers = None
+
+                        # 星点 + 三角形几何哈希（刚性，仅旋转+平移）优先用于可视化配对（失败也不回退）
+                        star_pairs = None
                         try:
-                            ref_b = cv2.GaussianBlur(ref_g, (3, 3), 0)
-                            ali_b = cv2.GaussianBlur(ali_g, (3, 3), 0)
-                            orb = cv2.ORB_create(nfeatures=400, scaleFactor=1.2, nlevels=8)
-                            k1, d1 = orb.detectAndCompute(ref_b, None)
-                            k2, d2 = orb.detectAndCompute(ali_b, None)
-                            if d1 is not None and d2 is not None and len(k1) >= 6 and len(k2) >= 6:
-                                bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-                                matches = bf.match(d1, d2)
-                                matches = sorted(matches, key=lambda m: m.distance)
-                                if len(matches) >= 6:
-                                    pts1 = np.float32([k1[m.queryIdx].pt for m in matches])
-                                    pts2 = np.float32([k2[m.trainIdx].pt for m in matches])
-                                    # 刚体RANSAC内点（禁用缩放/剪切，仅旋转+平移）
-                                    N = len(matches)
-                                    best_mask = None
-                                    best_inliers = 0
-                                    thr = 3.0
-                                    iters = 1000
-                                    try:
-                                        rng = np.random.default_rng()
-                                        for _ in range(iters):
-                                            if N < 3:
-                                                break
-                                            idxs = rng.choice(N, size=3, replace=False)
-                                            P2s = pts2[idxs]
-                                            P1s = pts1[idxs]
-                                            mu2 = P2s.mean(axis=0); mu1 = P1s.mean(axis=0)
-                                            X = P2s - mu2; Y = P1s - mu1
-                                            Hm = X.T @ Y
-                                            U, S, Vt = np.linalg.svd(Hm)
+                            from itertools import combinations
+                            def _detect_stars2(gray, max_points=300):
+                                g = cv2.GaussianBlur(gray, (3, 3), 0)
+                                m, s = cv2.meanStdDev(g)
+                                thr = float(m + 2.5 * s)
+                                _, bw = cv2.threshold(g, max(1, min(255, int(thr))), 255, cv2.THRESH_BINARY)
+                                num, labels, stats, centroids = cv2.connectedComponentsWithStats(bw, 8)
+                                cand = []
+                                H, W = gray.shape[:2]
+                                for i in range(1, num):
+                                    area = int(stats[i, cv2.CC_STAT_AREA])
+                                    if 2 <= area <= 200:
+                                        cx, cy = float(centroids[i][0]), float(centroids[i][1])
+                                        if 0 <= cx < W and 0 <= cy < H:
+                                            val = float(g[int(round(cy)), int(round(cx))])
+                                            cand.append((val, cx, cy))
+                                cand.sort(key=lambda t: t[0], reverse=True)
+                                pts = []
+                                min_d2 = 9.0
+                                for _, x, y in cand:
+                                    if len(pts) >= max_points:
+                                        break
+                                    ok = True
+                                    for ox, oy in pts:
+                                        dx, dy = x - ox, y - oy
+                                        if dx * dx + dy * dy < min_d2:
+                                            ok = False
+                                            break
+                                    if ok:
+                                        pts.append((x, y))
+                                return np.float32(pts)
+                            def _best_rigid_tri2(P1, P2, tri_points=25, thr=3.0, bin_scale=50):
+                                if P1.shape[0] < 3 or P2.shape[0] < 3:
+                                    return None
+                                n1 = min(tri_points, P1.shape[0])
+                                n2 = min(tri_points, P2.shape[0])
+                                idxs1 = list(range(n1))
+                                idxs2 = list(range(n2))
+                                def tri_key(pa, pb, pc):
+                                    a = np.linalg.norm(pa - pb)
+                                    b = np.linalg.norm(pb - pc)
+                                    c = np.linalg.norm(pa - pc)
+                                    l = sorted([a, b, c])
+                                    if l[2] <= 1e-6:
+                                        return None
+                                    r1 = l[0] / l[2]
+                                    r2 = l[1] / l[2]
+                                    return (int(round(r1 * bin_scale)), int(round(r2 * bin_scale)))
+                                dct = {}
+                                for i, j, k in combinations(idxs1, 3):
+                                    key = tri_key(P1[i], P1[j], P1[k])
+                                    if key is None:
+                                        continue
+                                    dct.setdefault(key, []).append((i, j, k))
+                                if not dct:
+                                    return None
+                                best = None
+                                for I, J, K in combinations(idxs2, 3):
+                                    key = tri_key(P2[I], P2[J], P2[K])
+                                    if key is None:
+                                        continue
+                                    bx, by = key
+                                    cands = []
+                                    for dx in (-1, 0, 1):
+                                        for dy in (-1, 0, 1):
+                                            cands.extend(dct.get((bx + dx, by + dy), []))
+                                    if not cands:
+                                        continue
+                                    B = np.stack([P2[I], P2[J], P2[K]], axis=0)
+                                    for (i, j, k) in cands[:200]:
+                                        A = np.stack([P1[i], P1[j], P1[k]], axis=0)
+                                        muB, muA = B.mean(0), A.mean(0)
+                                        X, Y = B - muB, A - muA
+                                        U, S, Vt = np.linalg.svd(X.T @ Y)
+                                        R = Vt.T @ U.T
+                                        if np.linalg.det(R) < 0:
+                                            Vt[1, :] *= -1
                                             R = Vt.T @ U.T
-                                            if np.linalg.det(R) < 0:
-                                                Vt[1, :] *= -1
-                                                R = Vt.T @ U.T
-                                            tvec = mu1 - (R @ mu2)
-                                            pred = (pts2 @ R.T) + tvec
-                                            res = np.sqrt(((pred - pts1) ** 2).sum(axis=1))
-                                            mask = res <= thr
-                                            inl = int(mask.sum())
-                                            if inl > best_inliers:
-                                                best_inliers = inl
-                                                best_mask = mask
-                                        if best_mask is not None and best_inliers >= 3:
-                                            inliers = best_mask.reshape(-1,1).astype(np.uint8)
-                                            # 设定非空以跳过 phase 回退分支
-                                            M = np.eye(2,3,dtype=np.float32)
-                                    except Exception:
-                                        inliers = None
+                                        tvec = muA - (R @ muB)
+                                        P2t = (P2 @ R.T) + tvec
+                                        d2 = np.sqrt(((P2t[:, None, :] - P1[None, :, :]) ** 2).sum(axis=2))
+                                        mins = d2.min(axis=1)
+                                        inlier_mask = mins <= thr
+                                        inliers_cnt = int(inlier_mask.sum())
+                                        err_all = float(mins.mean()) if mins.size > 0 else float('inf')
+                                        err_in = float(mins[inlier_mask].mean()) if inliers_cnt > 0 else None
+                                        if (best is None or inliers_cnt > best['inliers_cnt'] or
+                                            (inliers_cnt == best['inliers_cnt'] and err_all < best['err_all'])):
+                                            best = {
+                                                'inliers_cnt': inliers_cnt,
+                                                'R': R,
+                                                'tvec': tvec,
+                                                'mins': mins,
+                                                'd2': d2,
+                                                'err': err_in,
+                                                'err_all': err_all,
+                                                'tri1': (i, j, k),
+                                                'tri2': (I, J, K),
+                                            }
+                                return best
+                            P1 = _detect_stars2(ref_g)
+                            P2 = _detect_stars2(ali_g)
+                            if P1.shape[0] >= 3 and P2.shape[0] >= 3:
+                                res2 = _best_rigid_tri2(P1, P2, tri_points=25, thr=3.0, bin_scale=50)
+                                if res2 is not None:
+                                    inliers_cnt = int(res2['inliers_cnt'])
+                                    R = res2['R']; tvec = res2['tvec']; mins = res2['mins']; d2 = res2['d2']
+                                    err2 = res2['err']
+                                    # 构建唯一配对（按距离从小到大贪心），允许 <6 也绘制
+                                    P2t = (P2 @ R.T) + tvec
+                                    nearest_idx = d2.argmin(axis=1)
+                                    order = np.argsort(mins)
+                                    used1 = np.zeros((P1.shape[0],), dtype=bool)
+                                    pairs = []
+                                    for idx_s in order:
+                                        j = int(nearest_idx[idx_s]); d = float(mins[idx_s])
+                                        if d <= 3.0 and not used1[j]:
+                                            used1[j] = True
+                                            p1 = (int(round(P1[j, 0])), int(round(P1[j, 1])))
+                                            p2 = (int(round(P2[idx_s, 0])), int(round(P2[idx_s, 1])))
+                                            pairs.append((p1, p2))
+                                    tri_coords1 = None
+                                    tri_coords2 = None
+                                    if res2.get('tri1') is not None and res2.get('tri2') is not None:
+                                        i, j, k = res2['tri1']
+                                        I, J, K = res2['tri2']
+                                        tri_coords1 = [(int(round(P1[i,0])), int(round(P1[i,1]))),
+                                                       (int(round(P1[j,0])), int(round(P1[j,1]))),
+                                                       (int(round(P1[k,0])), int(round(P1[k,1])))]
+                                        tri_coords2 = [(int(round(P2[I,0])), int(round(P2[I,1]))),
+                                                       (int(round(P2[J,0])), int(round(P2[J,1]))),
+                                                       (int(round(P2[K,0])), int(round(P2[K,1])))]
+                                    success = inliers_cnt >= 6
+                                    star_pairs = {'pairs': pairs, 'error': (err2 if success else None),
+                                                  'tri_coords1': tri_coords1, 'tri_coords2': tri_coords2,
+                                                  'success': bool(success)}
+                                    if success and err_px is None and isinstance(err2, (int, float)):
+                                        err_px = err2
                         except Exception:
-                            M = None
-                        if M is None:
-                            try:
-                                shift, _ = cv2.phaseCorrelate(np.float32(ref_g), np.float32(ali_g))
-                                dx, dy = float(shift[0]), float(shift[1])
-                                M = np.float32([[1, 0, dx], [0, 1, dy]])
-                                used_phase = True
-                            except Exception:
-                                return False
+                            star_pairs = None
+
+
                         # 构建并排大图，左侧ref，右侧ali，绘制全部匹配点与连线
                         h1, w1 = ref.shape[:2]
                         h2, w2 = ali.shape[:2]
@@ -11074,35 +11289,34 @@ class FitsImageViewer:
                         canvas[0:h1, 0:w1] = ref
                         canvas[0:h2, w1:w1+w2] = ali
                         try:
-                            if matches is not None and len(matches) > 0 and k1 is not None and k2 is not None:
-                                # 绘制全部匹配（用RANSAC内点/外点区分颜色）
-                                inlier_mask = None
-                                try:
-                                    if inliers is not None:
-                                        inlier_mask = inliers.ravel().astype(bool)
-                                except Exception:
-                                    inlier_mask = None
-                                total = len(matches)
-                                inliers_cnt = int(inlier_mask.sum()) if inlier_mask is not None else 0
-                                for i, m in enumerate(matches):
-                                    x1, y1 = k1[m.queryIdx].pt
-                                    x2, y2 = k2[m.trainIdx].pt
-                                    p1 = (int(round(x1)), int(round(y1)))
-                                    p2 = (int(round(x2 + w1)), int(round(y2)))
-                                    ok = (inlier_mask[i] if (inlier_mask is not None and i < len(inlier_mask)) else True)
-                                    color = (0, 255, 0) if ok else (0, 0, 255)
-                                    cv2.circle(canvas, p1, 2, color, -1)
-                                    cv2.circle(canvas, p2, 2, color, -1)
-                                    cv2.line(canvas, p1, p2, (0, 255, 255), 1)
+                            if star_pairs is not None:
+                                # 星点-星点配对（刚性三角形匹配），以及使用到的多边形（三角形）
+                                total = len(star_pairs.get('pairs', []))
+                                for (p1, p2) in star_pairs.get('pairs', []):
+                                    p1_draw = (int(p1[0]), int(p1[1]))
+                                    p2_draw = (int(p2[0] + w1), int(p2[1]))
+                                    cv2.circle(canvas, p1_draw, 2, (0, 255, 0), -1)
+                                    cv2.circle(canvas, p2_draw, 2, (0, 255, 0), -1)
+                                    cv2.line(canvas, p1_draw, p2_draw, (0, 255, 255), 1)
+                                # 若存在用于建模的三角形，标记出形状（左右各一）
+                                tc1 = star_pairs.get('tri_coords1')
+                                tc2 = star_pairs.get('tri_coords2')
+                                if tc1 is not None and len(tc1) == 3:
+                                    for a, b in [(0,1), (1,2), (2,0)]:
+                                        cv2.line(canvas, tc1[a], tc1[b], (255, 0, 255), 1)
+                                if tc2 is not None and len(tc2) == 3:
+                                    for a, b in [(0,1), (1,2), (2,0)]:
+                                        pA = (int(tc2[a][0] + w1), int(tc2[a][1]))
+                                        pB = (int(tc2[b][0] + w1), int(tc2[b][1]))
+                                        cv2.line(canvas, pA, pB, (255, 0, 255), 1)
                                 # 文本信息（紧凑显示）
-                                text = []
-                                text.append(f"m={total}")
+                                text = [f"m={total}"]
                                 if isinstance(err_px, (int, float)):
                                     text.append(f"e={float(err_px):.3f}")
                                 info = " | ".join(text)
                                 cv2.putText(canvas, info, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                             else:
-                                # 无匹配：仅绘制中心十字并标注方法
+                                # 无匹配：仅绘制中心十字
                                 for off, img in [(0, ref), (w1, ali)]:
                                     h_, w_ = img.shape[:2]
                                     cx, cy = int(w_/2), int(h_/2)
@@ -11144,6 +11358,8 @@ class FitsImageViewer:
                                 x1, y1, x2, y2 = l[0]
                                 cv2.line(vis, (x1, y1), (x2, y2), (0, 255, 255), 2)
                         outp = ali_path.parent / f"{ali_path.stem}__lines.png"
+
+
                         cv2.imwrite(str(outp), vis)
                         return True
                     except Exception:
@@ -11352,11 +11568,11 @@ class FitsImageViewer:
                     if True:
 
 
-                        #  
+                        #
                         removed_rows = 0
                         high_seq_set = {r['seq'] for r in high_rows}
                         if prune_non_high:
-                            #  
+                            #
                             for j in range(data_start, len(lines)):
                                 sj = lines[j].rstrip('\n')
                                 if not sj.strip():
@@ -11382,7 +11598,7 @@ class FitsImageViewer:
                                         pass
                                     if del_cnt_j:
                                         deleted_cutouts_total += del_cnt_j
-                                    lines[j] = ''  # 
+                                    lines[j] = ''  #
                                     removed_rows += 1
 
 
