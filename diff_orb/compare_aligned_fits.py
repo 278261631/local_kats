@@ -10,7 +10,8 @@ import sys
 import numpy as np
 import cv2
 import matplotlib
-matplotlib.use('TkAgg')
+# 使用非交互后端，避免在子线程/无主循环环境触发 Tk 错误
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from astropy.io import fits
 from scipy.ndimage import gaussian_filter
@@ -247,6 +248,12 @@ class AlignedFITSComparator:
             draw_alignment_box (bool): 是否绘制对齐区域方框
         """
         try:
+            # 防御式切换为非交互后端，避免在子线程/Tk主循环之外触发错误
+            try:
+                import matplotlib.pyplot as _plt
+                _plt.switch_backend('Agg')
+            except Exception:
+                pass
             fig, ax = plt.subplots(figsize=(10, 8))
             im = ax.imshow(data, cmap=colormap, origin='lower')
             plt.colorbar(im, ax=ax, label='强度')
