@@ -10772,7 +10772,7 @@ class FitsImageViewer:
                 try:
                     import math
                     from itertools import combinations
-                    def _detect_stars(gray, max_points=300):
+                    def _detect_stars(gray, max_points=600):
                         g = cv2.GaussianBlur(gray, (3, 3), 0)
                         m, s = cv2.meanStdDev(g)
                         thr = float(m + 2.5 * s)
@@ -10789,7 +10789,7 @@ class FitsImageViewer:
                                     cand.append((val, cx, cy))
                         cand.sort(key=lambda t: t[0], reverse=True)
                         pts = []
-                        min_d2 = 9.0  # 最小间距 3px
+                        min_d2 = 4.0  # 最小间距 2px，保留更多星点
                         for _, x, y in cand:
                             if len(pts) >= max_points:
                                 break
@@ -10802,7 +10802,7 @@ class FitsImageViewer:
                             if ok:
                                 pts.append((x, y))
                         return np.float32(pts)
-                    def _best_rigid_by_triangles(P1, P2, tri_points=25, thr=3.0, bin_scale=50):
+                    def _best_rigid_by_triangles(P1, P2, tri_points=35, thr=4.0, bin_scale=60):
                         if P1.shape[0] < 3 or P2.shape[0] < 3:
                             return None
                         n1 = min(tri_points, P1.shape[0])
@@ -10868,7 +10868,7 @@ class FitsImageViewer:
                     P1 = _detect_stars(img1)
                     P2 = _detect_stars(img2)
                     if P1.shape[0] >= 10 and P2.shape[0] >= 10:
-                        res = _best_rigid_by_triangles(P1, P2, tri_points=25, thr=3.0, bin_scale=50)
+                        res = _best_rigid_by_triangles(P1, P2, tri_points=35, thr=4.0, bin_scale=60)
                         if res is not None and res[0] >= 6:
                             # 返回刚性误差（内点均值）
                             return float(res[4])
@@ -11139,7 +11139,7 @@ class FitsImageViewer:
                         star_pairs = None
                         try:
                             from itertools import combinations
-                            def _detect_stars2(gray, max_points=300):
+                            def _detect_stars2(gray, max_points=600):
                                 g = cv2.GaussianBlur(gray, (3, 3), 0)
                                 m, s = cv2.meanStdDev(g)
                                 thr = float(m + 2.5 * s)
@@ -11156,7 +11156,7 @@ class FitsImageViewer:
                                             cand.append((val, cx, cy))
                                 cand.sort(key=lambda t: t[0], reverse=True)
                                 pts = []
-                                min_d2 = 9.0
+                                min_d2 = 4.0  # 最小间距 2px，提高点数密度
                                 for _, x, y in cand:
                                     if len(pts) >= max_points:
                                         break
@@ -11169,7 +11169,7 @@ class FitsImageViewer:
                                     if ok:
                                         pts.append((x, y))
                                 return np.float32(pts)
-                            def _best_rigid_tri2(P1, P2, tri_points=25, thr=3.0, bin_scale=50):
+                            def _best_rigid_tri2(P1, P2, tri_points=35, thr=4.0, bin_scale=60, topk=5):
                                 if P1.shape[0] < 3 or P2.shape[0] < 3:
                                     return None
                                 n1 = min(tri_points, P1.shape[0])
@@ -11195,6 +11195,12 @@ class FitsImageViewer:
                                 if not dct:
                                     return None
                                 best = None
+                                top_tris = []  # 记录前若干个评分最高的三角形对
+                                def _push_top(entry):
+                                    top_tris.append(entry)
+                                    top_tris.sort(key=lambda e: (-e['inliers_cnt'], e['err_all']))
+                                    if len(top_tris) > topk:
+                                        top_tris.pop()
                                 for I, J, K in combinations(idxs2, 3):
                                     key = tri_key(P2[I], P2[J], P2[K])
                                     if key is None:
@@ -11224,24 +11230,35 @@ class FitsImageViewer:
                                         inliers_cnt = int(inlier_mask.sum())
                                         err_all = float(mins.mean()) if mins.size > 0 else float('inf')
                                         err_in = float(mins[inlier_mask].mean()) if inliers_cnt > 0 else None
+                                        entry = {
+                                            'inliers_cnt': inliers_cnt,
+                                            'R': R,
+                                            'tvec': tvec,
+                                            'mins': mins,
+                                            'd2': d2,
+                                            'err': err_in,
+                                            'err_all': err_all,
+                                            'tri1': (i, j, k),
+                                            'tri2': (I, J, K),
+                                        }
                                         if (best is None or inliers_cnt > best['inliers_cnt'] or
                                             (inliers_cnt == best['inliers_cnt'] and err_all < best['err_all'])):
-                                            best = {
-                                                'inliers_cnt': inliers_cnt,
-                                                'R': R,
-                                                'tvec': tvec,
-                                                'mins': mins,
-                                                'd2': d2,
-                                                'err': err_in,
-                                                'err_all': err_all,
-                                                'tri1': (i, j, k),
-                                                'tri2': (I, J, K),
-                                            }
+                                            best = entry
+                                        _push_top(entry)
+                                if best is None:
+                                    return None
+                                best['top_tris'] = top_tris
                                 return best
                             P1 = _detect_stars2(ref_g)
                             P2 = _detect_stars2(ali_g)
                             if P1.shape[0] >= 3 and P2.shape[0] >= 3:
-                                res2 = _best_rigid_tri2(P1, P2, tri_points=25, thr=3.0, bin_scale=50)
+                                res2 = _best_rigid_tri2(P1, P2, tri_points=35, thr=4.0, bin_scale=60, topk=5)
+                                # 即便 res2 为空也保留星点集合用于可视化
+                                tri_coords1 = None
+                                tri_coords2 = None
+                                top_tris = []
+                                pairs = []
+                                err2 = None
                                 if res2 is not None:
                                     inliers_cnt = int(res2['inliers_cnt'])
                                     R = res2['R']; tvec = res2['tvec']; mins = res2['mins']; d2 = res2['d2']
@@ -11251,16 +11268,14 @@ class FitsImageViewer:
                                     nearest_idx = d2.argmin(axis=1)
                                     order = np.argsort(mins)
                                     used1 = np.zeros((P1.shape[0],), dtype=bool)
-                                    pairs = []
+                                    THR = 4.0
                                     for idx_s in order:
                                         j = int(nearest_idx[idx_s]); d = float(mins[idx_s])
-                                        if d <= 3.0 and not used1[j]:
+                                        if d <= THR and not used1[j]:
                                             used1[j] = True
                                             p1 = (int(round(P1[j, 0])), int(round(P1[j, 1])))
                                             p2 = (int(round(P2[idx_s, 0])), int(round(P2[idx_s, 1])))
                                             pairs.append((p1, p2))
-                                    tri_coords1 = None
-                                    tri_coords2 = None
                                     if res2.get('tri1') is not None and res2.get('tri2') is not None:
                                         i, j, k = res2['tri1']
                                         I, J, K = res2['tri2']
@@ -11270,12 +11285,18 @@ class FitsImageViewer:
                                         tri_coords2 = [(int(round(P2[I,0])), int(round(P2[I,1]))),
                                                        (int(round(P2[J,0])), int(round(P2[J,1]))),
                                                        (int(round(P2[K,0])), int(round(P2[K,1])))]
-                                    success = inliers_cnt >= 6
-                                    star_pairs = {'pairs': pairs, 'error': (err2 if success else None),
-                                                  'tri_coords1': tri_coords1, 'tri_coords2': tri_coords2,
-                                                  'success': bool(success)}
-                                    if success and err_px is None and isinstance(err2, (int, float)):
-                                        err_px = err2
+                                    top_tris = res2.get('top_tris', [])
+                                star_pairs = {
+                                    'pairs': pairs,
+                                    'error': err2,
+                                    'tri_coords1': tri_coords1,
+                                    'tri_coords2': tri_coords2,
+                                    'top_tris': top_tris,
+                                    'all_stars1': P1,
+                                    'all_stars2': P2,
+                                }
+                                if err2 is not None and err_px is None and isinstance(err2, (int, float)):
+                                    err_px = err2
                         except Exception:
                             star_pairs = None
 
@@ -11290,7 +11311,16 @@ class FitsImageViewer:
                         canvas[0:h2, w1:w1+w2] = ali
                         try:
                             if star_pairs is not None:
-                                # 星点-星点配对（刚性三角形匹配），以及使用到的多边形（三角形）
+                                # 先绘制所有检测到的星点（蓝/青），再叠加配对（绿/黄线）与多三角形
+                                P1_all = star_pairs.get('all_stars1')
+                                P2_all = star_pairs.get('all_stars2')
+                                if isinstance(P1_all, np.ndarray) and P1_all.size > 0:
+                                    for (x, y) in P1_all:
+                                        cv2.circle(canvas, (int(x), int(y)), 1, (255, 0, 0), -1)  # 左图蓝色
+                                if isinstance(P2_all, np.ndarray) and P2_all.size > 0:
+                                    for (x, y) in P2_all:
+                                        cv2.circle(canvas, (int(x + w1), int(y)), 1, (180, 255, 255), -1)  # 右图浅青
+                                # 星点-星点配对（刚性三角形匹配）
                                 total = len(star_pairs.get('pairs', []))
                                 for (p1, p2) in star_pairs.get('pairs', []):
                                     p1_draw = (int(p1[0]), int(p1[1]))
@@ -11298,17 +11328,32 @@ class FitsImageViewer:
                                     cv2.circle(canvas, p1_draw, 2, (0, 255, 0), -1)
                                     cv2.circle(canvas, p2_draw, 2, (0, 255, 0), -1)
                                     cv2.line(canvas, p1_draw, p2_draw, (0, 255, 255), 1)
-                                # 若存在用于建模的三角形，标记出形状（左右各一）
+                                # 多个候选三角形（浅紫）
+                                for ent in star_pairs.get('top_tris', [])[:5]:
+                                    tri1 = ent.get('tri1'); tri2 = ent.get('tri2')
+                                    if tri1 and isinstance(P1_all, np.ndarray) and P1_all.shape[0] > max(tri1):
+                                        pts = [(int(P1_all[tri1[0],0]), int(P1_all[tri1[0],1])),
+                                               (int(P1_all[tri1[1],0]), int(P1_all[tri1[1],1])),
+                                               (int(P1_all[tri1[2],0]), int(P1_all[tri1[2],1]))]
+                                        for a,b in [(0,1),(1,2),(2,0)]:
+                                            cv2.line(canvas, pts[a], pts[b], (200, 100, 255), 1)
+                                    if tri2 and isinstance(P2_all, np.ndarray) and P2_all.shape[0] > max(tri2):
+                                        pts = [(int(P2_all[tri2[0],0]+w1), int(P2_all[tri2[0],1])),
+                                               (int(P2_all[tri2[1],0]+w1), int(P2_all[tri2[1],1])),
+                                               (int(P2_all[tri2[2],0]+w1), int(P2_all[tri2[2],1]))]
+                                        for a,b in [(0,1),(1,2),(2,0)]:
+                                            cv2.line(canvas, pts[a], pts[b], (200, 100, 255), 1)
+                                # 最佳三角形（亮品红，覆盖显示）
                                 tc1 = star_pairs.get('tri_coords1')
                                 tc2 = star_pairs.get('tri_coords2')
                                 if tc1 is not None and len(tc1) == 3:
                                     for a, b in [(0,1), (1,2), (2,0)]:
-                                        cv2.line(canvas, tc1[a], tc1[b], (255, 0, 255), 1)
+                                        cv2.line(canvas, tc1[a], tc1[b], (255, 0, 255), 2)
                                 if tc2 is not None and len(tc2) == 3:
                                     for a, b in [(0,1), (1,2), (2,0)]:
                                         pA = (int(tc2[a][0] + w1), int(tc2[a][1]))
                                         pB = (int(tc2[b][0] + w1), int(tc2[b][1]))
-                                        cv2.line(canvas, pA, pB, (255, 0, 255), 1)
+                                        cv2.line(canvas, pA, pB, (255, 0, 255), 2)
                                 # 文本信息（紧凑显示）
                                 text = [f"m={total}"]
                                 if isinstance(err_px, (int, float)):
