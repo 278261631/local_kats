@@ -10885,11 +10885,30 @@ class FitsImageViewer:
                 ali_imgs = sorted(cutouts_dir.glob('*_2_aligned.png'))
                 if not ref_imgs or not ali_imgs:
                     continue
+
+                # 直线检测：若启用过滤，预先标记高分序号中aligned切片存在过中心直线的项
+                line_bad_seq_set = set()
+                try:
+                    if getattr(self, 'enable_line_detection_filter_var', None) and self.enable_line_detection_filter_var.get():
+                        for row in high_rows:
+                            idx_chk = row['seq'] - 1
+                            if 0 <= idx_chk < min(len(ref_imgs), len(ali_imgs)):
+                                ali_img_path = ali_imgs[idx_chk]
+                                try:
+                                    if self._has_line_through_center(ali_img_path):
+                                        line_bad_seq_set.add(row['seq'])
+                                except Exception:
+                                    pass
+                except Exception:
+                    line_bad_seq_set = set()
+
                 seq_err_map = {}
                 for row in high_rows:
                     idx = row['seq'] - 1
                     if idx < 0 or idx >= min(len(ref_imgs), len(ali_imgs)):
                         continue
+
+
                     err = rigid_error_px(ref_imgs[idx], ali_imgs[idx])
                     seq_err_map[row['seq']] = f"{err:.3f}" if isinstance(err, float) else "N/A"
 
@@ -11109,6 +11128,8 @@ class FitsImageViewer:
                                                 for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
                                                     try:
                                                         p.unlink()
+
+
                                                         del_cnt_j += 1
                                                     except Exception:
                                                         pass
@@ -11127,6 +11148,44 @@ class FitsImageViewer:
                                     )
                         except Exception:
                             pass
+
+
+                    # 若启用了直线过滤，则无条件移除检测到过中心直线的高分行，并删除其cutouts
+                    try:
+                        if 'line_bad_seq_set' in locals() and line_bad_seq_set:
+                            removed_rows_line = 0
+                            for j in range(data_start, len(lines)):
+                                sj = lines[j].rstrip('\n')
+                                if not sj.strip():
+                                    continue
+                                parts_j = sj.split()
+                                if not parts_j:
+                                    continue
+                                try:
+                                    seqj = int(parts_j[0])
+                                except Exception:
+                                    continue
+                                if seqj in line_bad_seq_set:
+                                    # 删除该序号的 cutouts
+                                    del_cnt_j = 0
+                                    try:
+                                        for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
+                                            try:
+                                                p.unlink()
+                                                del_cnt_j += 1
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+                                    if del_cnt_j:
+                                        deleted_cutouts_total += del_cnt_j
+                                    lines[j] = ''
+                                    removed_rows_line += 1
+                            if removed_rows_line:
+                                removed_rows += removed_rows_line
+                                self.logger.info('删除过中心直线行: %d', removed_rows_line)
+                    except Exception:
+                        pass
 
                     # 宽度定义（原14列+新增列）
                     widths = [6, 12, 12, 12, 12, 10, 10, 12, 12, 12, 12, 14, 14, 18, 14]
@@ -11163,6 +11222,8 @@ class FitsImageViewer:
                             # 已有该列：重排整行，覆盖末列
                             lines[i] = pack_line(parts, err_val)
                         else:
+
+
                             # 尚无该列：在原行尾部直接追加固定宽度的字段
                             lines[i] = s + f" {err_val:<14}\n"
                         if seq in seq_err_map:
