@@ -506,6 +506,50 @@ class FitsWebDownloaderGUI:
             line_detection_check.grid(row=0, column=6, sticky=tk.W, padx=(20, 5))
 
         # 第五行：GPS和MPC设置
+        # 第六行：直线检测设置（灵敏度与中心距离）
+        row6_frame = ttk.LabelFrame(settings_container, text="直线检测设置", padding=10)
+        row6_frame.pack(fill=tk.X, pady=(0, 10))
+
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            ttk.Label(row6_frame, text="灵敏度(1-100):").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+            e_sens = ttk.Entry(row6_frame, textvariable=self.fits_viewer.line_sensitivity_var, width=8)
+            e_sens.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+
+            ttk.Label(row6_frame, text="过中心距离(px):").grid(row=0, column=2, sticky=tk.W, padx=(10, 5))
+            e_center = ttk.Entry(row6_frame, textvariable=self.fits_viewer.line_center_distance_var, width=8)
+            e_center.grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+
+        # 第七行：对齐性能设置（速度/稳健性权衡）
+        row7_frame = ttk.LabelFrame(settings_container, text="对齐性能设置", padding=10)
+        row7_frame.pack(fill=tk.X, pady=(0, 10))
+
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            # 第一排
+            ttk.Label(row7_frame, text="星点上限:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+            e_starmax = ttk.Entry(row7_frame, textvariable=self.fits_viewer.align_star_max_points_var, width=8)
+            e_starmax.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+
+            ttk.Label(row7_frame, text="最小间距(px):").grid(row=0, column=2, sticky=tk.W, padx=(10, 5))
+            e_starmind = ttk.Entry(row7_frame, textvariable=self.fits_viewer.align_star_min_distance_var, width=8)
+            e_starmind.grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+
+            ttk.Label(row7_frame, text="亮星点池(三角):").grid(row=0, column=4, sticky=tk.W, padx=(10, 5))
+            e_tripoints = ttk.Entry(row7_frame, textvariable=self.fits_viewer.align_tri_points_var, width=8)
+            e_tripoints.grid(row=0, column=5, sticky=tk.W, padx=(0, 10))
+
+            # 第二排
+            ttk.Label(row7_frame, text="内点阈值(px):").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=(8, 0))
+            e_trithr = ttk.Entry(row7_frame, textvariable=self.fits_viewer.align_tri_inlier_thr_var, width=8)
+            e_trithr.grid(row=1, column=1, sticky=tk.W, padx=(0, 10), pady=(8, 0))
+
+            ttk.Label(row7_frame, text="形状量化:").grid(row=1, column=2, sticky=tk.W, padx=(10, 5), pady=(8, 0))
+            e_tribin = ttk.Entry(row7_frame, textvariable=self.fits_viewer.align_tri_bin_scale_var, width=8)
+            e_tribin.grid(row=1, column=3, sticky=tk.W, padx=(0, 10), pady=(8, 0))
+
+            ttk.Label(row7_frame, text="可视化Top-K:").grid(row=1, column=4, sticky=tk.W, padx=(10, 5), pady=(8, 0))
+            e_tritopk = ttk.Entry(row7_frame, textvariable=self.fits_viewer.align_tri_topk_var, width=8)
+            e_tritopk.grid(row=1, column=5, sticky=tk.W, padx=(0, 10), pady=(8, 0))
+
         row5_frame = ttk.LabelFrame(settings_container, text="观测站设置", padding=10)
         row5_frame.pack(fill=tk.X, pady=(0, 10))
 

@@ -108,6 +108,21 @@ class ConfigManager:
                 "max_center_distance": 2400,  # 检测结果距离中心像素的最大距离（默认值：2400）
                 "auto_enable_threshold": 50  # 检测目标超过此数量时自动启用过滤（默认值：50）
             },
+            "line_detection_settings": {
+                "sensitivity": 50,                # 直线检测灵敏度(1-100)，越大越敏感
+                "center_distance_px": 3,         # 判定“过中心”的距离阈值（像素）
+                "min_line_length_ratio": 0.1,    # 最小线长=ratio*min(width,height)
+                "max_line_gap": 0,               # HoughLinesP 的最大断裂间隙
+                "percentile_high": 50             # 阈值化用的高百分位
+            },
+            "alignment_tuning_settings": {
+                "star_max_points": 600,           # 星点上限（越大越慢越稳）
+                "star_min_distance_px": 2.0,      # 星点最小间距（像素）
+                "tri_points": 35,                 # 构三角形的亮星点池大小
+                "tri_inlier_thr_px": 4.0,         # 内点距离阈值（像素）
+                "tri_bin_scale": 60,              # 三角形形状量化尺度
+                "tri_topk": 5                     # 可视化记录的Top-K三角形
+            },
             "display_settings": {
                 "default_display_mode": "linear",
                 "default_colormap": "gray",
@@ -373,11 +388,41 @@ class ConfigManager:
 
     def get_detection_filter_settings(self) -> Dict[str, Any]:
         """获取检测结果过滤设置"""
-        # 如果配置中没有检测结果过滤设置，使用默认值
         if "detection_filter_settings" not in self.config:
             self.config["detection_filter_settings"] = self.default_config["detection_filter_settings"].copy()
             self.save_config()
         return self.config["detection_filter_settings"]
+
+    def get_line_detection_settings(self) -> Dict[str, Any]:
+        """获取直线检测参数设置"""
+        if "line_detection_settings" not in self.config:
+            self.config["line_detection_settings"] = self.default_config.get("line_detection_settings", {}).copy()
+            self.save_config()
+        return self.config["line_detection_settings"]
+
+    def update_line_detection_settings(self, **kwargs):
+        """更新直线检测参数设置"""
+        if "line_detection_settings" not in self.config:
+            self.config["line_detection_settings"] = self.default_config.get("line_detection_settings", {}).copy()
+        for key, value in kwargs.items():
+            self.config["line_detection_settings"][key] = value
+        self.save_config()
+
+    def get_alignment_tuning_settings(self) -> Dict[str, Any]:
+        """获取对齐调优（速度/稳健性）设置"""
+        if "alignment_tuning_settings" not in self.config:
+            self.config["alignment_tuning_settings"] = self.default_config.get("alignment_tuning_settings", {}).copy()
+            self.save_config()
+        return self.config["alignment_tuning_settings"]
+
+    def update_alignment_tuning_settings(self, **kwargs):
+        """更新对齐调优设置"""
+        if "alignment_tuning_settings" not in self.config:
+            self.config["alignment_tuning_settings"] = self.default_config.get("alignment_tuning_settings", {}).copy()
+        for key, value in kwargs.items():
+            self.config["alignment_tuning_settings"][key] = value
+        self.save_config()
+
 
     def update_detection_filter_settings(self, **kwargs):
         """更新检测结果过滤设置"""

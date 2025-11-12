@@ -233,6 +233,16 @@ class FitsImageViewer:
         self.aligned_snr_threshold_var = tk.StringVar(value="1.1")
         self.sort_by_var = tk.StringVar(value="aligned_snr")
         self.enable_line_detection_filter_var = tk.BooleanVar(value=True)  # 默认启用直线检测过滤
+        # 直线检测灵敏度/中心距离 与 对齐性能调优变量
+        self.line_sensitivity_var = tk.IntVar(value=50)
+        self.line_center_distance_var = tk.IntVar(value=50)
+        self.align_star_max_points_var = tk.IntVar(value=600)
+        self.align_star_min_distance_var = tk.DoubleVar(value=2.0)
+        self.align_tri_points_var = tk.IntVar(value=35)
+        self.align_tri_inlier_thr_var = tk.DoubleVar(value=4.0)
+        self.align_tri_bin_scale_var = tk.IntVar(value=60)
+        self.align_tri_topk_var = tk.IntVar(value=5)
+
 
         # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
         self.gps_lat_var = tk.StringVar(value="43.4")
@@ -682,6 +692,21 @@ class FitsImageViewer:
             self.sort_by_var.set(sort_by)
 
             # WCS稀疏采样优化
+            # 直线检测与对齐调优设置
+            try:
+                lds = self.config_manager.get_line_detection_settings()
+                self.line_sensitivity_var.set(int(lds.get('sensitivity', 50)))
+                self.line_center_distance_var.set(int(lds.get('center_distance_px', 50)))
+                ats = self.config_manager.get_alignment_tuning_settings()
+                self.align_star_max_points_var.set(int(ats.get('star_max_points', 600)))
+                self.align_star_min_distance_var.set(float(ats.get('star_min_distance_px', 2.0)))
+                self.align_tri_points_var.set(int(ats.get('tri_points', 35)))
+                self.align_tri_inlier_thr_var.set(float(ats.get('tri_inlier_thr_px', 4.0)))
+                self.align_tri_bin_scale_var.set(int(ats.get('tri_bin_scale', 60)))
+                self.align_tri_topk_var.set(int(ats.get('tri_topk', 5)))
+            except Exception:
+                pass
+
             wcs_use_sparse = batch_settings.get('wcs_use_sparse', False)
             self.wcs_sparse_var.set(wcs_use_sparse)
 
@@ -720,6 +745,21 @@ class FitsImageViewer:
 
             # 绑定拉伸方法单选框
             self.stretch_method_var.trace('w', self._on_batch_settings_change)
+
+            # 绑定直线检测灵敏度/中心距离
+            self.line_sensitivity_var.trace('w', self._on_line_settings_change)
+            self.line_center_distance_var.trace('w', self._on_line_settings_change)
+
+            # 绑定对齐调优参数
+            for _v in [
+                self.align_star_max_points_var,
+                self.align_star_min_distance_var,
+                self.align_tri_points_var,
+                self.align_tri_inlier_thr_var,
+                self.align_tri_bin_scale_var,
+                self.align_tri_topk_var,
+            ]:
+                _v.trace('w', self._on_alignment_tuning_change)
 
             # 绑定百分位输入框（使用延迟保存，避免每次按键都保存）
             self.percentile_var.trace('w', self._on_percentile_change)
@@ -881,6 +921,39 @@ class FitsImageViewer:
 
         # 设置新的延迟保存任务（1秒后保存）
         self._score_save_timer = self.parent_frame.after(1000, self._save_score_threshold)
+
+
+    def _on_line_settings_change(self, *args):
+        """直线检测灵敏度/中心距离 改变时保存到配置"""
+        if not self.config_manager:
+            return
+        try:
+            sens = int(self.line_sensitivity_var.get())
+            center_px = int(self.line_center_distance_var.get())
+            self.config_manager.update_line_detection_settings(
+                sensitivity=max(1, min(100, sens)),
+                center_distance_px=max(1, center_px)
+            )
+            self.logger.info(f"直线检测参数已保存: 灵敏度={sens}, 中心距离={center_px}px")
+        except Exception as e:
+            self.logger.error(f"保存直线检测参数失败: {str(e)}")
+
+    def _on_alignment_tuning_change(self, *args):
+        """对齐调优参数改变时保存到配置"""
+        if not self.config_manager:
+            return
+        try:
+            self.config_manager.update_alignment_tuning_settings(
+                star_max_points=int(self.align_star_max_points_var.get()),
+                star_min_distance_px=float(self.align_star_min_distance_var.get()),
+                tri_points=int(self.align_tri_points_var.get()),
+                tri_inlier_thr_px=float(self.align_tri_inlier_thr_var.get()),
+                tri_bin_scale=int(self.align_tri_bin_scale_var.get()),
+                tri_topk=int(self.align_tri_topk_var.get()),
+            )
+            self.logger.info("对齐调优参数已保存")
+        except Exception as e:
+            self.logger.error(f"保存对齐调优参数失败: {str(e)}")
 
     def _save_score_threshold(self):
         """保存综合得分阈值参数到配置文件"""
@@ -3664,89 +3737,88 @@ class FitsImageViewer:
             messagebox.showerror("错误", error_msg)
 
     def _has_line_through_center(self, image_path, distance_threshold=50):
-        """检测图像中是否有明显直线并且直线过图像中心
+        """使用简单形态学方法判断是否存在过中心直线（无回退、无额外处理）。
 
-        Args:
-            image_path: 图像文件路径
-            distance_threshold: 直线到中心点的距离阈值（像素），默认50
-
-        Returns:
-            bool: 如果检测到过中心的直线返回True，否则返回False
+        思路：
+        - 直接在灰度图上，对若干角度的线性结构元素做开运算（erode→dilate）。
+        - 若以图像中心为圆心、半径=center_distance_px 的方形ROI内出现非零响应，则认为有直线经过中心附近。
+        - 不使用Canny/Hough/高百分位阈值等其它处理。
         """
         try:
-            # 读取图像
             img = cv2.imread(str(image_path))
             if img is None:
                 self.logger.warning(f"无法读取图像: {image_path}")
                 return False
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
 
-            # 转换为灰度图
-            if len(img.shape) == 3:
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            else:
-                gray = img.copy()
+            h, w = gray.shape[:2]
+            cx, cy = int(w/2), int(h/2)
+            min_dim = float(min(w, h))
 
-            # 获取图像中心
-            height, width = gray.shape
-            center_x = width / 2.0
-            center_y = height / 2.0
+            # 读取配置
+            lds = {}
+            try:
+                lds = self.config_manager.get_line_detection_settings() if self.config_manager else {}
+            except Exception:
+                lds = {}
+            center_distance_px = float(lds.get('center_distance_px', distance_threshold))
+            min_len_ratio = float(lds.get('min_line_length_ratio', 0.30))
 
-            # 使用自适应阈值增强对比度
-            # 计算高百分位数作为阈值
-            threshold_value = np.percentile(gray, 95)
-            _, binary = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
+            # 线性结构元素长度（至少10像素），厚度1
+            klen = max(10, int(min_dim * min_len_ratio))
+            if klen % 2 == 0:
+                klen += 1  # 保证奇数，便于以中心为对称
 
-            # 边缘检测
-            edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+            def _line_kernel(length: int, angle_deg: float, thickness: int = 1) -> np.ndarray:
+                size = length
+                c = size // 2
+                kernel = np.zeros((size, size), np.uint8)
+                ang = np.deg2rad(angle_deg)
+                dx = np.cos(ang)
+                dy = np.sin(ang)
+                x0 = int(round(c - (length//2) * dx))
+                y0 = int(round(c - (length//2) * dy))
+                x1 = int(round(c + (length//2) * dx))
+                y1 = int(round(c + (length//2) * dy))
+                cv2.line(kernel, (x0, y0), (x1, y1), 1, thickness)
+                return kernel
 
-            # 霍夫直线检测
-            # 使用较严格的参数，只检测明显的长直线
-            lines = cv2.HoughLinesP(
-                edges,
-                rho=1,
-                theta=np.pi/180,
-                threshold=50,
-                minLineLength=min(width, height) * 0.3,  # 至少占图像宽度或高度的30%
-                maxLineGap=20
-            )
+            # 在中心邻域检查响应是否非零
+            r = int(max(0, center_distance_px))
+            x0, x1 = max(0, cx - r), min(w, cx + r + 1)
+            y0, y1 = max(0, cy - r), min(h, cy + r + 1)
 
-            if lines is None:
-                self.logger.info(f"未检测到直线: {os.path.basename(image_path)}")
-                return False
+            # 形态学梯度 → 二值 → 轮廓
+            kernel3 = np.ones((3, 3), np.uint8)
+            grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel3)
+            _, binmask = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY)
+            try:
+                contours, hierarchy = cv2.findContours(binmask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+            except ValueError:
+                # 兼容不同OpenCV版本返回值
+                contours = cv2.findContours(binmask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]
 
-            self.logger.info(f"检测到 {len(lines)} 条直线: {os.path.basename(image_path)}")
-
-            # 检查每条直线是否过中心
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-
-                # 计算直线长度
-                line_length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-
-                # 只考虑较长的直线
-                if line_length < min(width, height) * 0.3:
+            min_len_px = max(10, int(min_dim * float(min_len_ratio)))
+            # 遍历轮廓，找“细长且足够长”的并且穿过中心邻域者
+            for cnt in contours:
+                if cnt is None or len(cnt) < 5:
                     continue
-
-                # 计算点到直线的距离
-                # 使用点到直线距离公式: |Ax + By + C| / sqrt(A^2 + B^2)
-                # 直线方程: (y2-y1)x - (x2-x1)y + (x2-x1)y1 - (y2-y1)x1 = 0
-                A = y2 - y1
-                B = -(x2 - x1)
-                C = (x2 - x1) * y1 - (y2 - y1) * x1
-
-                # 计算中心点到直线的距离
-                distance = abs(A * center_x + B * center_y + C) / np.sqrt(A**2 + B**2)
-
-                self.logger.info(f"  直线长度={line_length:.1f}, 到中心距离={distance:.1f}像素")
-
-                # 如果距离小于阈值，认为直线过中心
-                if distance < distance_threshold:
-                    self.logger.warning(f"检测到过中心的直线: {os.path.basename(image_path)}, 距离={distance:.1f}像素")
+                rect = cv2.minAreaRect(cnt)
+                (rw, rh) = rect[1]
+                long_len = float(max(rw, rh))
+                short_len = float(min(rw, rh))
+                if long_len < float(min_len_px):
+                    continue
+                slender = long_len / (short_len + 1e-6)
+                if slender < 3.0:
+                    continue
+                pts = cnt.reshape(-1, 2)
+                if pts.size == 0:
+                    continue
+                within = np.any((pts[:, 0] >= x0) & (pts[:, 0] < x1) & (pts[:, 1] >= y0) & (pts[:, 1] < y1))
+                if within:
                     return True
-
-            self.logger.info(f"未检测到过中心的直线: {os.path.basename(image_path)}")
             return False
-
         except Exception as e:
             self.logger.error(f"直线检测失败: {str(e)}", exc_info=True)
             return False
@@ -10772,6 +10844,18 @@ class FitsImageViewer:
                 try:
                     import math
                     from itertools import combinations
+                    # 读取对齐调优设置（速度/稳健性）
+                    ats = {}
+                    try:
+                        ats = self.config_manager.get_alignment_tuning_settings() if self.config_manager else {}
+                    except Exception:
+                        ats = {}
+                    _STAR_MAX = int(ats.get('star_max_points', 600))
+                    _STAR_MIN_DIST = float(ats.get('star_min_distance_px', 2.0))
+                    _TRI_POINTS = int(ats.get('tri_points', 35))
+                    _TRI_THR = float(ats.get('tri_inlier_thr_px', 4.0))
+                    _TRI_BIN = int(ats.get('tri_bin_scale', 60))
+
                     def _detect_stars(gray, max_points=600):
                         g = cv2.GaussianBlur(gray, (3, 3), 0)
                         m, s = cv2.meanStdDev(g)
@@ -10789,7 +10873,7 @@ class FitsImageViewer:
                                     cand.append((val, cx, cy))
                         cand.sort(key=lambda t: t[0], reverse=True)
                         pts = []
-                        min_d2 = 4.0  # 最小间距 2px，保留更多星点
+                        min_d2 = float(_STAR_MIN_DIST * _STAR_MIN_DIST)
                         for _, x, y in cand:
                             if len(pts) >= max_points:
                                 break
@@ -10865,10 +10949,10 @@ class FitsImageViewer:
                                     if (best is None) or (inliers_cnt > best[0]) or (inliers_cnt == best[0] and err < best[4]):
                                         best = (inliers_cnt, R, t, inlier_mask, err)
                         return best
-                    P1 = _detect_stars(img1)
-                    P2 = _detect_stars(img2)
+                    P1 = _detect_stars(img1, max_points=_STAR_MAX)
+                    P2 = _detect_stars(img2, max_points=_STAR_MAX)
                     if P1.shape[0] >= 10 and P2.shape[0] >= 10:
-                        res = _best_rigid_by_triangles(P1, P2, tri_points=35, thr=4.0, bin_scale=60)
+                        res = _best_rigid_by_triangles(P1, P2, tri_points=_TRI_POINTS, thr=_TRI_THR, bin_scale=_TRI_BIN)
                         if res is not None and res[0] >= 6:
                             # 返回刚性误差（内点均值）
                             return float(res[4])
@@ -11139,6 +11223,19 @@ class FitsImageViewer:
                         star_pairs = None
                         try:
                             from itertools import combinations
+                            # 读取对齐调优设置供可视化使用
+                            v_ats = {}
+                            try:
+                                v_ats = self.config_manager.get_alignment_tuning_settings() if self.config_manager else {}
+                            except Exception:
+                                v_ats = {}
+                            V_STAR_MAX = int(v_ats.get('star_max_points', 600))
+                            V_STAR_MIN_DIST = float(v_ats.get('star_min_distance_px', 2.0))
+                            V_TRI_POINTS = int(v_ats.get('tri_points', 35))
+                            V_TRI_THR = float(v_ats.get('tri_inlier_thr_px', 4.0))
+                            V_TRI_BIN = int(v_ats.get('tri_bin_scale', 60))
+                            V_TRI_TOPK = int(v_ats.get('tri_topk', 5))
+
                             def _detect_stars2(gray, max_points=600):
                                 g = cv2.GaussianBlur(gray, (3, 3), 0)
                                 m, s = cv2.meanStdDev(g)
@@ -11156,7 +11253,7 @@ class FitsImageViewer:
                                             cand.append((val, cx, cy))
                                 cand.sort(key=lambda t: t[0], reverse=True)
                                 pts = []
-                                min_d2 = 4.0  # 最小间距 2px，提高点数密度
+                                min_d2 = float(V_STAR_MIN_DIST * V_STAR_MIN_DIST)
                                 for _, x, y in cand:
                                     if len(pts) >= max_points:
                                         break
@@ -11249,10 +11346,10 @@ class FitsImageViewer:
                                     return None
                                 best['top_tris'] = top_tris
                                 return best
-                            P1 = _detect_stars2(ref_g)
-                            P2 = _detect_stars2(ali_g)
+                            P1 = _detect_stars2(ref_g, max_points=V_STAR_MAX)
+                            P2 = _detect_stars2(ali_g, max_points=V_STAR_MAX)
                             if P1.shape[0] >= 3 and P2.shape[0] >= 3:
-                                res2 = _best_rigid_tri2(P1, P2, tri_points=35, thr=4.0, bin_scale=60, topk=5)
+                                res2 = _best_rigid_tri2(P1, P2, tri_points=V_TRI_POINTS, thr=V_TRI_THR, bin_scale=V_TRI_BIN, topk=V_TRI_TOPK)
                                 # 即便 res2 为空也保留星点集合用于可视化
                                 tri_coords1 = None
                                 tri_coords2 = None
@@ -11268,7 +11365,7 @@ class FitsImageViewer:
                                     nearest_idx = d2.argmin(axis=1)
                                     order = np.argsort(mins)
                                     used1 = np.zeros((P1.shape[0],), dtype=bool)
-                                    THR = 4.0
+                                    THR = float(V_TRI_THR)
                                     for idx_s in order:
                                         j = int(nearest_idx[idx_s]); d = float(mins[idx_s])
                                         if d <= THR and not used1[j]:
@@ -11393,18 +11490,69 @@ class FitsImageViewer:
                         cx, cy = int(w/2), int(h/2)
                         cv2.drawMarker(vis, (cx, cy), (0, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
                         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
-                        thr = np.percentile(gray, 95)
-                        _, binary = cv2.threshold(gray, thr, 255, cv2.THRESH_BINARY)
-                        edges = cv2.Canny(binary, 50, 150, apertureSize=3)
-                        lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50,
-                                                 minLineLength=min(w, h) * 0.3, maxLineGap=10)
-                        if lines is not None:
-                            for l in lines:
-                                x1, y1, x2, y2 = l[0]
-                                cv2.line(vis, (x1, y1), (x2, y2), (0, 255, 255), 2)
+
+                        # 仅形态学：按多角度线性结构元素做开运算，检查中心邻域响应
+                        lds = {}
+                        try:
+                            lds = self.config_manager.get_line_detection_settings() if self.config_manager else {}
+                        except Exception:
+                            lds = {}
+                        center_distance_px = float(lds.get('center_distance_px', 50))
+                        min_len_ratio = float(lds.get('min_line_length_ratio', 0.30))
+
+                        min_dim = float(min(w, h))
+                        klen = max(10, int(min_dim * min_len_ratio))
+                        if klen % 2 == 0:
+                            klen += 1
+
+                        def _line_kernel(length: int, angle_deg: float, thickness: int = 1) -> np.ndarray:
+                            size = length
+                            c = size // 2
+                            kernel = np.zeros((size, size), np.uint8)
+                            ang = np.deg2rad(angle_deg)
+                            dx = np.cos(ang)
+                            dy = np.sin(ang)
+                            x0 = int(round(c - (length//2) * dx))
+                            y0 = int(round(c - (length//2) * dy))
+                            x1 = int(round(c + (length//2) * dx))
+                            y1 = int(round(c + (length//2) * dy))
+                            cv2.line(kernel, (x0, y0), (x1, y1), 1, thickness)
+                            return kernel
+
+                        r = int(max(0, center_distance_px))
+                        x0, x1 = max(0, cx - r), min(w, cx + r + 1)
+                        y0, y1 = max(0, cy - r), min(h, cy + r + 1)
+
+                        # 形态学梯度 → 二值 → 轮廓；绘制满足“细长且足够长”的、且触达中心邻域的轮廓
+                        kernel3 = np.ones((3, 3), np.uint8)
+                        grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel3)
+                        _, binmask = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY)
+                        try:
+                            contours, hierarchy = cv2.findContours(binmask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+                        except ValueError:
+                            contours = cv2.findContours(binmask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]
+
+                        min_len_px = max(10, int(min_dim * float(min_len_ratio)))
+                        for cnt in contours:
+                            if cnt is None or len(cnt) < 5:
+                                continue
+                            rect = cv2.minAreaRect(cnt)
+                            (rw, rh) = rect[1]
+                            long_len = float(max(rw, rh))
+                            short_len = float(min(rw, rh))
+                            if long_len < float(min_len_px):
+                                continue
+                            slender = long_len / (short_len + 1e-6)
+                            if slender < 3.0:
+                                continue
+                            pts = cnt.reshape(-1, 2)
+                            if pts.size == 0:
+                                continue
+                            within = np.any((pts[:, 0] >= x0) & (pts[:, 0] < x1) & (pts[:, 1] >= y0) & (pts[:, 1] < y1))
+                            color = (0, 0, 255) if within else (0, 255, 255)
+                            cv2.drawContours(vis, [cnt], -1, color, 2)
+
                         outp = ali_path.parent / f"{ali_path.stem}__lines.png"
-
-
                         cv2.imwrite(str(outp), vis)
                         return True
                     except Exception:
