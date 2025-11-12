@@ -10795,26 +10795,73 @@ class FitsImageViewer:
                         return None
                 pts1 = np.float32([k1[m.queryIdx].pt for m in matches])
                 pts2 = np.float32([k2[m.trainIdx].pt for m in matches])
-                M, inliers = cv2.estimateAffinePartial2D(pts2, pts1, method=cv2.RANSAC,
-                                                         ransacReprojThreshold=3.0, maxIters=2000, confidence=0.99)
-                if M is None or inliers is None:
+                # 刚体RANSAC：禁用缩放/剪切，仅旋转+平移参与筛内点
+                try:
+                    N = len(pts1)
+                    best_mask = None
+                    best_inliers = 0
+                    thr = 3.0
+                    iters = 1000
+                    rng = np.random.default_rng()
+                    for _ in range(iters):
+                        if N < 3:
+                            break
+                        idxs = rng.choice(N, size=3, replace=False)
+                        P2s = pts2[idxs]
+                        P1s = pts1[idxs]
+                        mu2 = P2s.mean(axis=0); mu1 = P1s.mean(axis=0)
+                        X = P2s - mu2; Y = P1s - mu1
+                        Hm = X.T @ Y
+                        U, S, Vt = np.linalg.svd(Hm)
+                        R = Vt.T @ U.T
+                        if np.linalg.det(R) < 0:
+                            Vt[1, :] *= -1
+                            R = Vt.T @ U.T
+                        tvec = mu1 - (R @ mu2)
+                        pred = (pts2 @ R.T) + tvec
+                        res = np.sqrt(((pred - pts1) ** 2).sum(axis=1))
+                        mask = res <= thr
+                        inl = int(mask.sum())
+                        if inl > best_inliers:
+                            best_inliers = inl
+                            best_mask = mask
+                    if best_mask is None or best_inliers < 3:
+                        try:
+                            shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
+                            return float(np.hypot(shift[0], shift[1]))
+                        except Exception:
+                            return None
+                    mask = best_mask
+                except Exception:
                     try:
                         shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
                         return float(np.hypot(shift[0], shift[1]))
                     except Exception:
                         return None
-                mask = inliers.ravel().astype(bool)
-                if mask.sum() < 3:
-                    try:
-                        shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
-                        return float(np.hypot(shift[0], shift[1]))
-                    except Exception:
-                        return None
+                # 使用 Kabsch 算法估计纯刚体（无缩放）变换，并用其重投影误差作为刚性对齐误差
                 p2 = pts2[mask]
                 p1 = pts1[mask]
-                p2t = (p2 @ M[:2, :2].T) + M[:2, 2]
-                errs = np.sqrt(((p2t - p1) ** 2).sum(axis=1))
-                return float(np.mean(errs)) if errs.size > 0 else 0.0
+                try:
+                    mu2 = p2.mean(axis=0)
+                    mu1 = p1.mean(axis=0)
+                    X = p2 - mu2
+                    Y = p1 - mu1
+                    Hm = X.T @ Y
+                    U, S, Vt = np.linalg.svd(Hm)
+                    R = Vt.T @ U.T
+                    if np.linalg.det(R) < 0:
+                        Vt[1, :] *= -1
+                        R = Vt.T @ U.T
+                    tvec = mu1 - (R @ mu2)
+                    p2t = (p2 @ R.T) + tvec
+                    errs = np.sqrt(((p2t - p1) ** 2).sum(axis=1))
+                    return float(np.mean(errs)) if errs.size > 0 else 0.0
+                except Exception:
+                    try:
+                        shift, _ = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
+                        return float(np.hypot(shift[0], shift[1]))
+                    except Exception:
+                        return None
 
             # 收集要处理的文件
             files_to_process = []
@@ -10972,8 +11019,42 @@ class FitsImageViewer:
                                 if len(matches) >= 6:
                                     pts1 = np.float32([k1[m.queryIdx].pt for m in matches])
                                     pts2 = np.float32([k2[m.trainIdx].pt for m in matches])
-                                    M, inliers = cv2.estimateAffinePartial2D(pts2, pts1, method=cv2.RANSAC,
-                                                                             ransacReprojThreshold=3.0, maxIters=2000, confidence=0.99)
+                                    # 刚体RANSAC内点（禁用缩放/剪切，仅旋转+平移）
+                                    N = len(matches)
+                                    best_mask = None
+                                    best_inliers = 0
+                                    thr = 3.0
+                                    iters = 1000
+                                    try:
+                                        rng = np.random.default_rng()
+                                        for _ in range(iters):
+                                            if N < 3:
+                                                break
+                                            idxs = rng.choice(N, size=3, replace=False)
+                                            P2s = pts2[idxs]
+                                            P1s = pts1[idxs]
+                                            mu2 = P2s.mean(axis=0); mu1 = P1s.mean(axis=0)
+                                            X = P2s - mu2; Y = P1s - mu1
+                                            Hm = X.T @ Y
+                                            U, S, Vt = np.linalg.svd(Hm)
+                                            R = Vt.T @ U.T
+                                            if np.linalg.det(R) < 0:
+                                                Vt[1, :] *= -1
+                                                R = Vt.T @ U.T
+                                            tvec = mu1 - (R @ mu2)
+                                            pred = (pts2 @ R.T) + tvec
+                                            res = np.sqrt(((pred - pts1) ** 2).sum(axis=1))
+                                            mask = res <= thr
+                                            inl = int(mask.sum())
+                                            if inl > best_inliers:
+                                                best_inliers = inl
+                                                best_mask = mask
+                                        if best_mask is not None and best_inliers >= 3:
+                                            inliers = best_mask.reshape(-1,1).astype(np.uint8)
+                                            # 设定非空以跳过 phase 回退分支
+                                            M = np.eye(2,3,dtype=np.float32)
+                                    except Exception:
+                                        inliers = None
                         except Exception:
                             M = None
                         if M is None:
@@ -11013,14 +11094,11 @@ class FitsImageViewer:
                                     cv2.circle(canvas, p1, 2, color, -1)
                                     cv2.circle(canvas, p2, 2, color, -1)
                                     cv2.line(canvas, p1, p2, (0, 255, 255), 1)
-                                # 文本信息（匹配统计 + 误差 + 方法）
+                                # 文本信息（紧凑显示）
                                 text = []
-                                text.append(f"matches={total}")
-                                if inlier_mask is not None:
-                                    text.append(f"inliers={inliers_cnt}")
+                                text.append(f"m={total}")
                                 if isinstance(err_px, (int, float)):
-                                    text.append(f"err={float(err_px):.3f}px")
-                                text.append("phase" if used_phase else "ORB+RANSAC")
+                                    text.append(f"e={float(err_px):.3f}")
                                 info = " | ".join(text)
                                 cv2.putText(canvas, info, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                             else:
@@ -11029,10 +11107,9 @@ class FitsImageViewer:
                                     h_, w_ = img.shape[:2]
                                     cx, cy = int(w_/2), int(h_/2)
                                     cv2.drawMarker(canvas, (off+cx, cy), (0, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=10, thickness=1)
-                                text = ["no ORB matches"]
+                                text = ["m=0"]
                                 if isinstance(err_px, (int, float)):
-                                    text.append(f"err={float(err_px):.3f}px")
-                                text.append("phase" if used_phase else "ORB+RANSAC")
+                                    text.append(f"e={float(err_px):.3f}")
                                 info = " | ".join(text)
                                 cv2.putText(canvas, info, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                         except Exception:
