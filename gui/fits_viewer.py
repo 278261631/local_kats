@@ -1255,9 +1255,9 @@ class FitsImageViewer:
         try:
             filter_settings = self.config_manager.get_detection_filter_settings()
 
-            # 加载是否启用中心距离过滤，默认值：False
-            enable_filter = filter_settings.get('enable_center_distance_filter', False)
-            self.enable_center_distance_filter_var.set(enable_filter)
+            # 不从配置读取该开关，强制默认关闭
+            enable_filter = False
+            self.enable_center_distance_filter_var.set(False)
 
             # 加载最大中心距离，默认值：2400像素
             max_center_distance = filter_settings.get('max_center_distance', 2400)
@@ -1438,38 +1438,9 @@ class FitsImageViewer:
             return None
 
     def _check_auto_enable_center_distance_filter(self):
-        """检查是否需要自动启用/禁用中心距离过滤（根据高分检测目标数量）"""
-        if not hasattr(self, '_auto_enable_threshold'):
-            self._auto_enable_threshold = 50  # 默认阈值
-
-        if not hasattr(self, '_total_cutouts'):
-            return
-
-        # 从当前detection目录的analysis.txt文件中读取高分检测目标数量
-        high_score_count = self._get_high_score_count_from_current_detection()
-
-        if high_score_count is None:
-            # 如果无法读取高分数量，使用总检测数量作为后备方案
-            self.logger.warning("无法读取高分检测目标数量，使用总检测数量作为后备方案")
-            high_score_count = self._total_cutouts
-
-        # 如果高分检测目标数量超过阈值，自动启用过滤
-        if high_score_count > self._auto_enable_threshold:
-            # 只在当前未启用时才自动启用
-            if not self.enable_center_distance_filter_var.get():
-                self.enable_center_distance_filter_var.set(True)
-                self.logger.info(f"高分检测目标数量 ({high_score_count}) 超过阈值 ({self._auto_enable_threshold})，自动启用中心距离过滤")
-                # 保存到配置文件
-                if self.config_manager:
-                    self.config_manager.update_detection_filter_settings(enable_center_distance_filter=True)
-        else:
-            # 如果高分检测目标数量不超过阈值，自动禁用过滤
-            if self.enable_center_distance_filter_var.get():
-                self.enable_center_distance_filter_var.set(False)
-                self.logger.info(f"高分检测目标数量 ({high_score_count}) 不超过阈值 ({self._auto_enable_threshold})，自动禁用中心距离过滤")
-                # 保存到配置文件
-                if self.config_manager:
-                    self.config_manager.update_detection_filter_settings(enable_center_distance_filter=False)
+        """自动启用/禁用中心距离过滤逻辑已关闭：仅保留手动控制"""
+        # 按用户要求，不再根据数量自动切换开关
+        return
 
     def _first_time_refresh(self):
         """首次打开时自动刷新目录树"""
