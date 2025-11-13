@@ -1389,11 +1389,11 @@ class SignalBlobDetector:
 
         # 计算“高分项”集合（先判定使用哪个阈值口径）
         if aligned_data is not None and any(b.get('aligned_center_7x7_snr') is not None for b in blobs):
-            high_blobs = [b for b in blobs if (b.get('aligned_center_7x7_snr') is not None and b.get('aligned_center_7x7_snr') >= aligned_snr_threshold)]
-            _criterion_str = f"aligned_snr>={aligned_snr_threshold}"
+            high_blobs = [b for b in blobs if (b.get('aligned_center_7x7_snr') is not None and b.get('aligned_center_7x7_snr') > aligned_snr_threshold)]
+            _criterion_str = f"aligned_snr>{aligned_snr_threshold}"
         else:
-            high_blobs = [b for b in blobs if b.get('quality_score', 0) >= score_threshold]
-            _criterion_str = f"quality_score>={score_threshold}"
+            high_blobs = [b for b in blobs if b.get('quality_score', 0) > score_threshold]
+            _criterion_str = f"quality_score>{score_threshold}"
 
         # 是否生成“非高分项”cutout 跟随快速模式：
         # - 快速模式（generate_shape_viz=False）→ 仅为高分项生成
@@ -1466,9 +1466,11 @@ class SignalBlobDetector:
             # 写入小行星列表
             f.write(f"小行星列表:\n")
             # 如果有blobs，使用第一个blob的中心作为检测中心
+            # 仅导出高分项到 analysis 文件
+            analysis_blobs = high_blobs
             detection_center = None
-            if blobs and len(blobs) > 0:
-                first_blob_center = blobs[0]['center']
+            if analysis_blobs and len(analysis_blobs) > 0:
+                first_blob_center = analysis_blobs[0]['center']
                 detection_center = (first_blob_center[0], first_blob_center[1])
 
             skybot_lines = self.format_skybot_results(
@@ -1512,11 +1514,11 @@ class SignalBlobDetector:
                 f.write(f"信号像素数: {threshold_info['signal_pixels']}\n")
             f.write("\n")
 
-            f.write(f"检测到 {len(blobs)} 个斑点（按综合得分排序：(圆度^2)×2000×面积归一化）\n\n")
+            f.write(f"检测到 {len(analysis_blobs)} 个斑点（仅导出高分项；条件：{_criterion_str}）\n\n")
             f.write(f"{'序号':<6} {'综合得分':<12} {'面积':<12} {'圆度':<12} {'锯齿比':<12} {'Hull顶点':<10} {'Poly顶点':<10} {'X坐标':<12} {'Y坐标':<12} {'SNR':<12} {'最大SNR':<12} {'平均信号':<14} {'最大信号':<14} {'Aligned中心7x7SNR':<18}\n")
             f.write("-" * 194 + "\n")
 
-            for i, blob in enumerate(blobs, 1):
+            for i, blob in enumerate(analysis_blobs, 1):
                 cx, cy = blob['center']
                 quality_score = blob.get('quality_score', 0)
                 snr = blob.get('snr', 0)
