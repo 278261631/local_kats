@@ -31,7 +31,7 @@ def detect_lines_near_center(image: np.ndarray,
                              canny2: int = 150,
                              hough_thresh: int = 60,
                              min_len: int = 30,
-                             max_gap: int = 5,
+                             max_gap: int = 4,
                              roi_margin: int = 0) -> Tuple[List[Tuple[int, int, int, int]], List[Tuple[int, int, int, int]], Tuple[int, int]]:
     """
     使用 Canny + HoughLinesP 检测线段，仅在中心附近 ROI 内进行，返回：
@@ -228,6 +228,17 @@ def process_one_image(img_path: Path, out_dir: Path, radius_px: int,
     cv2.imwrite(str(out_file), annotated)
 
     print(f"- {img_path.name}: 检测线段 {len(all_lines)} 条，靠近中心(≤{radius_px}px) {len(near_lines)} 条 -> {out_file.name}")
+    # 逐条输出线段信息：端点、显著性、Hough与MaxGap参数
+    try:
+        if all_lines:
+            for i, (x1, y1, x2, y2) in enumerate(all_lines, start=1):
+                key = (int(x1), int(y1), int(x2), int(y2))
+                s = line_scores.get(key) if isinstance(line_scores, dict) else None
+                s_txt = f"{s:.2f}" if isinstance(s, (int, float)) else "N/A"
+                print(f"    · #{i}: ({x1},{y1})-({x2},{y2}) | s={s_txt} | Hough={hough_thresh} | MaxGap={max_gap}")
+    except Exception:
+        pass
+
     return len(all_lines), len(near_lines)
 
 
@@ -242,7 +253,7 @@ def main():
     parser.add_argument("--canny2", type=int, default=150, help="Canny 高阈值")
     parser.add_argument("--hough-thresh", type=int, default=60, help="HoughLinesP 累计阈值")
     parser.add_argument("--min-len", type=int, default=30, help="最小线段长度")
-    parser.add_argument("--max-gap", type=int, default=5, help="线段内最大间隙")
+    parser.add_argument("--max-gap", type=int, default=4, help="线段内最大间隙")
     # 显示控制：默认绘制所有线段，并为每条线标注显著性
     parser.add_argument("--saliency-thresh", type=float, default=0.65,
                         help="显著性阈值，低于该值的线段将被忽略（范围0~1，默认0.65）")
@@ -284,11 +295,11 @@ def main():
         canny1, canny2, hough_thresh, min_len, max_gap = 70, 200, 100, 30, 4
         mode = "gentle"
     elif args.aggressive:
-        canny1, canny2, hough_thresh, min_len, max_gap = 30, 90, 20, 8, 12
+        canny1, canny2, hough_thresh, min_len, max_gap = 30, 90, 20, 8, 4
         mode = "aggressive"
     else:
         # 默认使用 aggressive 参数
-        canny1, canny2, hough_thresh, min_len, max_gap = 30, 90, 20, 8, 12
+        canny1, canny2, hough_thresh, min_len, max_gap = 30, 90, 20, 8, 4
         mode = "aggressive (default)"
 
     max_near = args.max_near_lines if args.max_near_lines and args.max_near_lines > 0 else None
@@ -325,6 +336,8 @@ def main():
     print(f"输出目录: {out_dir}")
     print(f"中心半径阈值: {args.radius} px")
     print(f"模式: {mode} | ROI外扩: {args.roi_margin}px | 最大中心线数: {max_near or '不限'} | 显著性阈值: {args.saliency_thresh:.2f}")
+    print(f"Hough阈值: {hough_thresh} | MaxGap: {max_gap}")
+
 
     total_all, total_near = 0, 0
     for p in img_files:

@@ -3762,7 +3762,7 @@ class FitsImageViewer:
                 img,
                 radius_px=3,
                 canny1=30, canny2=90,
-                hough_thresh=20, min_len=8, max_gap=12,
+                hough_thresh=20, min_len=8, max_gap=4,
                 roi_margin=-1,
             )
             # 显著性阈值过滤（与 CLI 保持一致，默认0.65，可在工具栏调整）
@@ -11445,7 +11445,7 @@ class FitsImageViewer:
                             img,
                             radius_px=3,
                             canny1=30, canny2=90,
-                            hough_thresh=20, min_len=8, max_gap=12,
+                            hough_thresh=20, min_len=8, max_gap=4,
                             roi_margin=-1,
                         )
                         # 显著性阈值过滤：默认0.65（可在工具栏调整），并与CLI保持一致：先评分再过滤 all_lines 与 near_lines
