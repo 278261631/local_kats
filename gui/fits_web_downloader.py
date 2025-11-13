@@ -144,6 +144,10 @@ class FitsWebDownloaderGUI:
         self.advanced_settings_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.advanced_settings_frame, text="高级设置")
 
+        # 创建天区收集（GY1）标签页
+        self.region_collect_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.region_collect_frame, text="天区收集")
+
         # 创建日志标签页
         self.log_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.log_frame, text="日志")
@@ -153,6 +157,7 @@ class FitsWebDownloaderGUI:
         self._create_batch_status_widgets()
         self._create_viewer_widgets()
         self._create_advanced_settings_widgets()
+        self._create_region_collect_widgets()
         self._create_log_widgets()
 
     def _create_scan_widgets(self):
@@ -692,6 +697,124 @@ class FitsWebDownloaderGUI:
 
         ttk.Button(log_control_frame, text="清除日志", command=self._clear_log).pack(side=tk.LEFT)
         ttk.Button(log_control_frame, text="保存日志", command=self._save_log).pack(side=tk.LEFT, padx=(10, 0))
+
+    def _create_region_collect_widgets(self):
+        """创建“天区收集（仅GY1）”界面：按日期范围收集GY1天区列表
+        规则：默认优先从本地缓存加载；本地没有才去扫描远端。
+        """
+        from calendar_widget import CalendarDialog
+
+        container = ttk.Frame(self.region_collect_frame)
+        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 日期选择区域
+        date_frame = ttk.LabelFrame(container, text="日期范围（YYYYMMDD）")
+        date_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        today = datetime.today().strftime("%Y%m%d")
+        self.region_collect_start_var = tk.StringVar(value=today)
+        self.region_collect_end_var = tk.StringVar(value=today)
+
+        ttk.Label(date_frame, text="起始日期:").grid(row=0, column=0, sticky=tk.W, padx=(10, 5), pady=8)
+        start_entry = ttk.Entry(date_frame, textvariable=self.region_collect_start_var, width=12)
+        start_entry.grid(row=0, column=1, sticky=tk.W)
+        ttk.Button(date_frame, text="选择", command=lambda: self._open_calendar(self.region_collect_start_var, "选择起始日期")).grid(row=0, column=2, padx=(6, 12))
+
+        ttk.Label(date_frame, text="终止日期:").grid(row=0, column=3, sticky=tk.W, padx=(10, 5))
+        end_entry = ttk.Entry(date_frame, textvariable=self.region_collect_end_var, width=12)
+        end_entry.grid(row=0, column=4, sticky=tk.W)
+        ttk.Button(date_frame, text="选择", command=lambda: self._open_calendar(self.region_collect_end_var, "选择终止日期")).grid(row=0, column=5, padx=(6, 12))
+
+        # 动作按钮
+        action_frame = ttk.Frame(container)
+        action_frame.pack(fill=tk.X, padx=5, pady=(5, 10))
+        ttk.Button(action_frame, text="收集GY1天区信息", command=self._collect_regions_for_range).pack(side=tk.LEFT)
+        self.region_collect_status = ttk.Label(action_frame, text="就绪")
+        self.region_collect_status.pack(side=tk.LEFT, padx=(12, 0))
+
+        # 说明
+        tip = "说明：仅针对 GY1。优先从本地缓存加载，当某天无缓存时才扫描远端。缓存路径：gui/variables/region_cache/GY1"
+        ttk.Label(container, text=tip, foreground="blue").pack(fill=tk.X, padx=5)
+
+    def _open_calendar(self, var: tk.StringVar, title: str):
+        try:
+            from calendar_widget import CalendarDialog
+        except Exception:
+            messagebox.showwarning("提示", "未发现日历组件，需手动输入日期。")
+            return
+        current = var.get() or datetime.today().strftime("%Y%m%d")
+        dlg = CalendarDialog(self.root, title, current)
+        selected = dlg.show()
+        if selected:
+            var.set(selected)
+
+    def _collect_regions_for_range(self):
+        start = (self.region_collect_start_var.get() or '').strip()
+        end = (self.region_collect_end_var.get() or '').strip()
+        if not (self.config_manager.validate_date(start) and self.config_manager.validate_date(end)):
+            messagebox.showerror("错误", "请输入有效的起止日期（YYYYMMDD）")
+            return
+        if start > end:
+            messagebox.showerror("错误", "起始日期不能大于终止日期")
+            return
+
+        def work():
+            try:
+                self.region_collect_status_after("处理中...", "blue")
+                total = 0
+                from_cache = 0
+                scanned = 0
+                dt = datetime.strptime(start, "%Y%m%d")
+                end_dt = datetime.strptime(end, "%Y%m%d")
+                while dt <= end_dt:
+                    date_str = dt.strftime("%Y%m%d")
+                    total += 1
+                    # 本地是否已有缓存
+                    cache_file = self._region_cache_file('GY1', date_str)
+                    if os.path.exists(cache_file):
+                        from_cache += 1
+                        self._log(f"[GY1][{date_str}] 本地已有缓存，跳过扫描。")
+                    else:
+                        # 需要扫描
+                        try:
+                            base_url = self.url_builder._build_base_url('GY1', date_str)
+                            regions = self.url_builder.region_scanner.scan_available_regions(base_url)
+                            self._save_region_cache('GY1', date_str, regions)
+                            scanned += 1
+                            self._log(f"[GY1][{date_str}] 扫描完成，{len(regions)} 个天区 -> 已缓存。")
+                        except Exception as e:
+                            self._log(f"[GY1][{date_str}] 扫描失败: {e}")
+                    # 更新进度
+                    self.region_collect_status_after(f"进度: {from_cache + scanned}/{total} 天；缓存: {from_cache} 天；扫描: {scanned} 天", "green")
+                    dt = dt.replace(day=dt.day) + (datetime.strptime("19700102","%Y%m%d") - datetime.strptime("19700101","%Y%m%d"))
+                self.region_collect_status_after(f"完成：合计{total}天，其中缓存{from_cache}天，扫描{scanned}天。", "green")
+            except Exception as e:
+                self.region_collect_status_after(f"失败：{e}", "red")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def region_collect_status_after(self, text: str, color: str):
+        try:
+            self.root.after(0, lambda: self.region_collect_status.config(text=text, foreground=color))
+        except Exception:
+            pass
+
+    # 缓存文件路径与读写（与URL构建页保持一致的路径）
+    def _region_cache_file(self, tel_name: str, date: str) -> str:
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'variables', 'region_cache', (tel_name or '').upper())
+        os.makedirs(base_dir, exist_ok=True)
+        return os.path.join(base_dir, f'{date}.json')
+
+    def _save_region_cache(self, tel_name: str, date: str, regions):
+        path = self._region_cache_file(tel_name, date)
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                import json
+                json.dump(sorted(list(set(regions))), f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self._log(f"写入缓存失败: {e}")
+
+
 
     def _on_toggle_auto_chain_oss_upload(self):
         """高级设置：切换自动链末尾OSS上传开关（立即保存到配置）"""

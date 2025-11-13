@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 import logging
 import requests
 import re
+import os
+import json
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from typing import Callable, Optional, List
@@ -560,12 +562,25 @@ class URLBuilderFrame:
         # 构建不包含天区的基础URL
         base_url = self._build_base_url(tel_name, date)
 
+        # GY1：默认从本地缓存加载（仅在非手动扫描时）
+        if (tel_name or '').upper() == 'GY1' and not getattr(self, '_manual_scan', False):
+            cached_regions = self.__load_regions_cache(tel_name, date)
+            if cached_regions:
+                self.last_scanned_url = base_url
+                self._update_region_list(cached_regions)
+                self.region_status_label.config(text=f"缓存: {len(cached_regions)} 个天区", foreground="green")
+                self.logger.info(f"GY1 {date} 天区从本地缓存加载，共 {len(cached_regions)} 个")
+                return
+
         # 检查是否与上次扫描的URL相同，避免重复扫描
         if base_url == self.last_scanned_url:
             return
 
         # 在后台线程中扫描天区
         import threading
+
+
+
 
         def scan_thread():
             try:
@@ -578,6 +593,14 @@ class URLBuilderFrame:
 
                 # 记录扫描的URL
                 self.last_scanned_url = base_url
+
+                # 保存到缓存（仅GY1）
+                if (tel_name or '').upper() == 'GY1':
+                    try:
+                        self.__save_regions_cache(tel_name, date, regions)
+                    except Exception as e:
+                        self.logger.warning(f"保存GY1天区缓存失败: {e}")
+
 
                 # 更新界面
                 self.parent_frame.after(0, lambda: self._update_region_list(regions))
@@ -812,6 +835,32 @@ class URLBuilderFrame:
     def get_available_regions(self) -> List[str]:
         """获取当前可用的天区列表"""
         return self.available_regions.copy() if self.available_regions else []
+
+    # -------- GY1 天区缓存工具（私有） --------
+    def __region_cache_file(self, tel_name: str, date: str) -> str:
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'variables', 'region_cache', (tel_name or '').upper())
+        os.makedirs(base_dir, exist_ok=True)
+        return os.path.join(base_dir, f'{date}.json')
+
+    def __load_regions_cache(self, tel_name: str, date: str):
+        try:
+            path = self.__region_cache_file(tel_name, date)
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    return [str(x).upper() for x in data]
+        except Exception as e:
+            self.logger.warning(f"加载GY1天区缓存失败: {e}")
+        return None
+
+    def __save_regions_cache(self, tel_name: str, date: str, regions):
+        try:
+            path = self.__region_cache_file(tel_name, date)
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(sorted(list(set(regions))), f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.logger.warning(f"写入GY1天区缓存失败: {e}")
 
 
 
