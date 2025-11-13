@@ -11502,15 +11502,16 @@ class FitsImageViewer:
                     err = rigid_error_px(ref_imgs[idx], ali_imgs[idx])
                     seq_err_map[row['seq']] = f"{err:.3f}" if isinstance(err, float) else "N/A"
 
-                    # 可视化输出（每个检测结果都生成）
-                    try:
-                        _save_alignment_viz2(row['seq'], err if isinstance(err, float) else None)
-                    except Exception:
-                        pass
-                    try:
-                        _save_line_viz2(row['seq'])
-                    except Exception:
-                        pass
+                    # 可视化输出（非快速模式才生成 overlay/lines 文件）
+                    if not fast_mode:
+                        try:
+                            _save_alignment_viz2(row['seq'], err if isinstance(err, float) else None)
+                        except Exception:
+                            pass
+                        try:
+                            _save_line_viz2(row['seq'])
+                        except Exception:
+                            pass
 
                 if not seq_err_map:
                     continue
@@ -11697,7 +11698,7 @@ class FitsImageViewer:
                                     #  cutouts
                                     del_cnt_j = 0
                                     try:
-                                        for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
+                                        for p in (Path(detection_dir_path) / 'cutouts').glob(f"{seqj:03d}_*.png"):
                                             try:
                                                 p.unlink()
                                                 del_cnt_j += 1
@@ -11739,7 +11740,7 @@ class FitsImageViewer:
                                             # 删除该序号的 cutouts
                                             del_cnt_j = 0
                                             try:
-                                                for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
+                                                for p in (Path(detection_dir_path) / 'cutouts').glob(f"{seqj:03d}_*.png"):
                                                     try:
                                                         p.unlink()
 
@@ -11795,7 +11796,7 @@ class FitsImageViewer:
                                         # 删除该序号的 cutouts
                                         del_cnt_j = 0
                                         try:
-                                            for p in (Path(detection_dir_path) / 'cutouts').glob(f"*_{seqj}_*.png"):
+                                            for p in (Path(detection_dir_path) / 'cutouts').glob(f"{seqj:03d}_*.png"):
                                                 try:
                                                     p.unlink()
                                                     del_cnt_j += 1
