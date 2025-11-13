@@ -87,14 +87,55 @@ def detect_lines_near_center(image: np.ndarray,
     return near_lines, all_lines, (cx, cy)
 
 
+
+def compute_line_saliency_map(gray: np.ndarray,
+                               all_lines: List[Tuple[int, int, int, int]],
+                               center: Tuple[int, int]) -> dict:
+    """计算每条线段的显著性分数并返回映射 {(x1,y1,x2,y2) -> score}。
+    设计：
+    - 长度归一化: 线长 / (0.5*max(w,h))，截断到[0,1]
+    - 边缘强度: Sobel梯度幅值在该线段上的平均，除以整图的P95后截断到[0,1]
+    - 显著性: 0.6*边缘强度 + 0.4*长度
+    """
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    gray_f = gray.astype(np.float32)
+    gx = cv2.Sobel(gray_f, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray_f, cv2.CV_32F, 0, 1, ksize=3)
+    grad = cv2.magnitude(gx, gy)
+    p95 = float(np.percentile(grad, 95)) if grad.size > 0 else 1.0
+    p95 = max(p95, 1e-6)
+    L_ref = 0.5 * float(max(w, h))
+    L_ref = max(L_ref, 1.0)
+
+    scores = {}
+    for x1, y1, x2, y2 in all_lines:
+        # 线段长度
+        length = float(np.hypot(x2 - x1, y2 - y1))
+        L_norm = min(1.0, length / L_ref)
+        # 采样线上的梯度强度
+        n_samples = max(10, int(length))
+        xs = np.linspace(x1, x2, num=n_samples, dtype=np.float32)
+        ys = np.linspace(y1, y2, num=n_samples, dtype=np.float32)
+        xi = np.clip(xs.astype(np.int32), 0, w - 1)
+        yi = np.clip(ys.astype(np.int32), 0, h - 1)
+        vals = grad[yi, xi] if grad.size > 0 else np.array([0.0], dtype=np.float32)
+        G_norm = float(np.clip(np.mean(vals) / p95, 0.0, 1.0)) if vals.size > 0 else 0.0
+        saliency = 0.6 * G_norm + 0.4 * L_norm
+        scores[(int(x1), int(y1), int(x2), int(y2))] = float(saliency)
+    return scores
+
+
 def annotate_image(image: np.ndarray,
                    near_lines: List[Tuple[int, int, int, int]],
                    center: Tuple[int, int],
                    radius_px: int,
-                   all_lines: List[Tuple[int, int, int, int]] | None = None) -> np.ndarray:
+                   all_lines: List[Tuple[int, int, int, int]] | None = None,
+                   line_scores: dict | None = None) -> np.ndarray:
     """
     标注图像：
-    - 所有检测到的线段（可选）用浅色标示
+    - 所有检测到的线段（可选）用绿色绘制，并在有评分时标注 s=显著性
     - 与中心距离 <= radius_px 的线段用红色高亮
     - 画出中心点和半径圈
     """
@@ -103,14 +144,23 @@ def annotate_image(image: np.ndarray,
     else:
         out = image.copy()
 
-    # 可选：先绘制所有线段为浅色（方便对比）
+    # 先绘制所有线段为绿色，并可选标注显著性
     if all_lines:
         for x1, y1, x2, y2 in all_lines:
-            cv2.line(out, (x1, y1), (x2, y2), (180, 180, 180), 1, cv2.LINE_AA)
+            cv2.line(out, (x1, y1), (x2, y2), (0, 255, 0), 1, cv2.LINE_AA)
+            if line_scores is not None:
+                s = line_scores.get((int(x1), int(y1), int(x2), int(y2)))
+                if s is not None:
+                    mx, my = int((x1 + x2) * 0.5), int((y1 + y2) * 0.5)
+                    label = f"s={s:.2f}"
+                    cv2.putText(out, label, (mx + 3, my - 3), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4, (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(out, label, (mx + 3, my - 3), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4, (0, 255, 255), 1, cv2.LINE_AA)
 
-    # 高亮靠近中心的线段
+    # 高亮靠近中心的线段（红色，线宽与绿色一致，不加粗）
     for x1, y1, x2, y2 in near_lines:
-        cv2.line(out, (x1, y1), (x2, y2), (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.line(out, (x1, y1), (x2, y2), (0, 0, 255), 1, cv2.LINE_AA)
 
     cx, cy = center
     # 中心与半径圈
@@ -124,7 +174,9 @@ def process_one_image(img_path: Path, out_dir: Path, radius_px: int,
                       canny1: int, canny2: int, hough_thresh: int, min_len: int, max_gap: int,
                       roi_margin: int = 0,
                       max_near_lines: int | None = None,
-                      save_all_lines: bool = True) -> Tuple[int, int]:
+                      save_all_lines: bool = True,
+                      label_saliency: bool = True,
+                      saliency_thresh: float = 0.8) -> Tuple[int, int]:
     image = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
     if image is None:
         print(f"[跳过] 无法读取图片: {img_path}")
@@ -150,7 +202,26 @@ def process_one_image(img_path: Path, out_dir: Path, radius_px: int,
         )
         near_lines = ranked[:max_near_lines]
 
-    annotated = annotate_image(image, near_lines, center, radius_px, all_lines if save_all_lines else None)
+    # 显著性评分与阈值过滤：计算每条线段的显著性，并丢弃 s < saliency_thresh 的线
+    gray_for_score = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    line_scores = compute_line_saliency_map(gray_for_score, all_lines, center) if len(all_lines) > 0 else {}
+
+    if len(line_scores) > 0:
+        # 过滤 all_lines 与 near_lines
+        all_lines = [ln for ln in all_lines if line_scores.get((int(ln[0]), int(ln[1]), int(ln[2]), int(ln[3])), 0.0) >= float(saliency_thresh)]
+        near_lines = [ln for ln in near_lines if line_scores.get((int(ln[0]), int(ln[1]), int(ln[2]), int(ln[3])), 0.0) >= float(saliency_thresh)]
+
+    # 若不需要显示显著性标签，则不传入评分
+    line_scores_for_draw = line_scores if label_saliency else None
+
+    annotated = annotate_image(
+        image,
+        near_lines,
+        center,
+        radius_px,
+        all_lines if save_all_lines else None,
+        line_scores=line_scores_for_draw,
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"{img_path.stem}_center_lines.png"
@@ -172,11 +243,18 @@ def main():
     parser.add_argument("--hough-thresh", type=int, default=60, help="HoughLinesP 累计阈值")
     parser.add_argument("--min-len", type=int, default=30, help="最小线段长度")
     parser.add_argument("--max-gap", type=int, default=5, help="线段内最大间隙")
-    # 显示控制：默认不绘制所有线段，提供反向开关以兼容（--show-all-lines）
-    parser.add_argument("--no-all-lines", dest="no_all_lines", action="store_true", default=True,
-                        help="不以灰色绘制所有线段（默认）")
+    # 显示控制：默认绘制所有线段，并为每条线标注显著性
+    parser.add_argument("--saliency-thresh", type=float, default=0.65,
+                        help="显著性阈值，低于该值的线段将被忽略（范围0~1，默认0.65）")
+
+    parser.add_argument("--no-all-lines", dest="no_all_lines", action="store_true", default=False,
+                        help="不以绿色绘制所有线段（默认绘制）")
     parser.add_argument("--show-all-lines", dest="no_all_lines", action="store_false",
-                        help="绘制所有检测到的线段为浅灰色")
+                        help="绘制所有检测到的线段为绿色（默认）")
+    parser.add_argument("--label-saliency", dest="label_saliency", action="store_true", default=True,
+                        help="为每条检测线段标注显著性分数（默认）")
+    parser.add_argument("--no-label-saliency", dest="label_saliency", action="store_false",
+                        help="不标注显著性分数")
 
     # ROI 默认关闭（-1 表示全图检测）；最多保留2条最近中心线段
     parser.add_argument("--roi-margin", type=int, default=-1, help="中心半径外扩像素；-1 表示全图检测（默认）")
@@ -185,6 +263,9 @@ def main():
     # 模式：未指定时默认使用 aggressive 参数
     parser.add_argument("--gentle", action="store_true", help="温和模式：降低灵敏度，减少误检")
     parser.add_argument("--aggressive", action="store_true", help="激进模式：提高灵敏度，尽量不漏检（默认）")
+    parser.add_argument("--recursive", action="store_true", help="递归扫描子目录（默认关闭）")
+    parser.add_argument("--only-aligned", action="store_true", help="仅处理文件名以 _aligned 结尾的图片（默认处理所有）")
+
     args = parser.parse_args()
 
     script_dir = Path(__file__).parent
@@ -213,12 +294,28 @@ def main():
     max_near = args.max_near_lines if args.max_near_lines and args.max_near_lines > 0 else None
 
     # 支持的测试图像后缀
+    print(f"递归扫描: {'是' if args.recursive else '否'} | 仅_aligned: {'是' if args.only_aligned else '否'}")
+
     exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-    # 跳过已标注的输出文件（避免重复处理 *_center_lines.png）
-    img_files = [
-        p for p in sorted(in_dir.iterdir())
-        if p.suffix.lower() in exts and not p.stem.endswith("_center_lines")
-    ]
+    # 构建候选文件列表：支持递归和仅_aligned 过滤
+    if args.recursive:
+        candidates = (p for p in in_dir.rglob("*") if p.is_file())
+    else:
+        candidates = (p for p in in_dir.iterdir() if p.is_file())
+
+    img_files = []
+    for p in candidates:
+        suf = p.suffix.lower()
+        if suf not in exts:
+            continue
+        stem = p.stem
+        if stem.endswith("_center_lines"):
+            continue
+        if args.only_aligned and not stem.endswith("_aligned"):
+            continue
+        img_files.append(p)
+
+    img_files = sorted(img_files)
 
     if not img_files:
         print(f"未在目录中找到测试图像: {in_dir}")
@@ -227,13 +324,31 @@ def main():
     print(f"输入目录: {in_dir}")
     print(f"输出目录: {out_dir}")
     print(f"中心半径阈值: {args.radius} px")
-    print(f"模式: {mode} | ROI外扩: {args.roi_margin}px | 最大中心线数: {max_near or '不限'}")
+    print(f"模式: {mode} | ROI外扩: {args.roi_margin}px | 最大中心线数: {max_near or '不限'} | 显著性阈值: {args.saliency_thresh:.2f}")
 
     total_all, total_near = 0, 0
     for p in img_files:
+        # 递归模式下：输出目录按文件所在目录决定；
+        # - 若 --output-dir 为绝对路径，则在该目录下按相对 in_dir 的层级展开
+        # - 若为相对路径或未提供，则在图片所在目录下创建对应子目录
+        if args.recursive:
+            out_dir_for_file: Path
+            out_dir_opt = Path(args.output_dir) if args.output_dir else None
+            if out_dir_opt and out_dir_opt.is_absolute():
+                try:
+                    rel = p.parent.relative_to(in_dir)
+                except Exception:
+                    rel = Path()
+                out_dir_for_file = out_dir_opt / rel
+            else:
+                out_name = out_dir_opt if out_dir_opt else Path("output_center_lines")
+                out_dir_for_file = p.parent / out_name
+        else:
+            out_dir_for_file = out_dir
+
         cnt_all, cnt_near = process_one_image(
             p,
-            out_dir,
+            out_dir_for_file,
             args.radius,
             canny1,
             canny2,
@@ -243,6 +358,8 @@ def main():
             roi_margin=args.roi_margin,
             max_near_lines=max_near,
             save_all_lines=(not args.no_all_lines),
+            label_saliency=args.label_saliency,
+            saliency_thresh=args.saliency_thresh,
         )
         total_all += cnt_all
         total_near += cnt_near

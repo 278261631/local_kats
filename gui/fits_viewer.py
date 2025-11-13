@@ -31,6 +31,8 @@ import cv2
 # 添加项目根目录到路径以导入dss_cds_downloader
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cds_dss_download.dss_cds_downloader import download_dss_rot
+from line_in_pic.detect_center_lines import detect_lines_near_center, annotate_image, point_to_segment_distance, compute_line_saliency_map
+
 
 # 尝试导入ASTAP处理器
 try:
@@ -243,6 +245,9 @@ class FitsImageViewer:
         self.align_tri_bin_scale_var = tk.IntVar(value=60)
         self.align_tri_topk_var = tk.IntVar(value=5)
 
+        # 显著性阈值（用于直线检测过滤/绘制），默认与CLI一致：0.65
+        self.saliency_thresh_var = tk.DoubleVar(value=0.65)
+
 
         # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
         self.gps_lat_var = tk.StringVar(value="43.4")
@@ -407,6 +412,11 @@ class FitsImageViewer:
             state="disabled"
         )
         self.batch_alignment_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        # 显著性阈值控件（与CLI一致，默认0.5）
+        ttk.Label(toolbar_frame6, text="显著性阈值:").pack(side=tk.LEFT, padx=(10, 2))
+        self.saliency_thresh_entry = ttk.Entry(toolbar_frame6, width=5, textvariable=self.saliency_thresh_var)
+        self.saliency_thresh_entry.pack(side=tk.LEFT, padx=(0, 5))
 
         # 批量本地查询按钮（离线）
         self.batch_local_query_button = ttk.Button(
@@ -3737,88 +3747,33 @@ class FitsImageViewer:
             messagebox.showerror("错误", error_msg)
 
     def _has_line_through_center(self, image_path, distance_threshold=50):
-        """使用简单形态学方法判断是否存在过中心直线（无回退、无额外处理）。
+        """使用 detect_center_lines 的方法和默认参数判断是否存在过中心直线。
 
-        思路：
-        - 直接在灰度图上，对若干角度的线性结构元素做开运算（erode→dilate）。
-        - 若以图像中心为圆心、半径=center_distance_px 的方形ROI内出现非零响应，则认为有直线经过中心附近。
-        - 不使用Canny/Hough/高百分位阈值等其它处理。
+        注意：为与命令行工具保持一致，固定采用默认参数：
+        - 半径=3像素；aggressive 参数集（Canny 30/90，Hough阈值20，min_len=8，max_gap=12）；ROI=-1(全图)
+        - distance_threshold 参数将被忽略，仅为兼容旧调用签名
         """
         try:
-            img = cv2.imread(str(image_path))
+            img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
             if img is None:
                 self.logger.warning(f"无法读取图像: {image_path}")
                 return False
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
-
-            h, w = gray.shape[:2]
-            cx, cy = int(w/2), int(h/2)
-            min_dim = float(min(w, h))
-
-            # 读取配置
-            lds = {}
+            near_lines, all_lines, center = detect_lines_near_center(
+                img,
+                radius_px=3,
+                canny1=30, canny2=90,
+                hough_thresh=20, min_len=8, max_gap=12,
+                roi_margin=-1,
+            )
+            # 显著性阈值过滤（与 CLI 保持一致，默认0.65，可在工具栏调整）
             try:
-                lds = self.config_manager.get_line_detection_settings() if self.config_manager else {}
+                thr = float(self.saliency_thresh_var.get()) if hasattr(self, 'saliency_thresh_var') else 0.65
             except Exception:
-                lds = {}
-            center_distance_px = float(lds.get('center_distance_px', distance_threshold))
-            min_len_ratio = float(lds.get('min_line_length_ratio', 0.30))
-
-            # 线性结构元素长度（至少10像素），厚度1
-            klen = max(10, int(min_dim * min_len_ratio))
-            if klen % 2 == 0:
-                klen += 1  # 保证奇数，便于以中心为对称
-
-            def _line_kernel(length: int, angle_deg: float, thickness: int = 1) -> np.ndarray:
-                size = length
-                c = size // 2
-                kernel = np.zeros((size, size), np.uint8)
-                ang = np.deg2rad(angle_deg)
-                dx = np.cos(ang)
-                dy = np.sin(ang)
-                x0 = int(round(c - (length//2) * dx))
-                y0 = int(round(c - (length//2) * dy))
-                x1 = int(round(c + (length//2) * dx))
-                y1 = int(round(c + (length//2) * dy))
-                cv2.line(kernel, (x0, y0), (x1, y1), 1, thickness)
-                return kernel
-
-            # 在中心邻域检查响应是否非零
-            r = int(max(0, center_distance_px))
-            x0, x1 = max(0, cx - r), min(w, cx + r + 1)
-            y0, y1 = max(0, cy - r), min(h, cy + r + 1)
-
-            # 形态学梯度 → 二值 → 轮廓
-            kernel3 = np.ones((3, 3), np.uint8)
-            grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel3)
-            _, binmask = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY)
-            try:
-                contours, hierarchy = cv2.findContours(binmask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-            except ValueError:
-                # 兼容不同OpenCV版本返回值
-                contours = cv2.findContours(binmask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]
-
-            min_len_px = max(10, int(min_dim * float(min_len_ratio)))
-            # 遍历轮廓，找“细长且足够长”的并且穿过中心邻域者
-            for cnt in contours:
-                if cnt is None or len(cnt) < 5:
-                    continue
-                rect = cv2.minAreaRect(cnt)
-                (rw, rh) = rect[1]
-                long_len = float(max(rw, rh))
-                short_len = float(min(rw, rh))
-                if long_len < float(min_len_px):
-                    continue
-                slender = long_len / (short_len + 1e-6)
-                if slender < 3.0:
-                    continue
-                pts = cnt.reshape(-1, 2)
-                if pts.size == 0:
-                    continue
-                within = np.any((pts[:, 0] >= x0) & (pts[:, 0] < x1) & (pts[:, 1] >= y0) & (pts[:, 1] < y1))
-                if within:
-                    return True
-            return False
+                thr = 0.65
+            scores = compute_line_saliency_map(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img,
+                                               all_lines, center) if all_lines else {}
+            near_lines = [ln for ln in near_lines if scores.get((int(ln[0]), int(ln[1]), int(ln[2]), int(ln[3])), 0.0) >= thr]
+            return len(near_lines) > 0
         except Exception as e:
             self.logger.error(f"直线检测失败: {str(e)}", exc_info=True)
             return False
@@ -11482,76 +11437,37 @@ class FitsImageViewer:
                         if idx_v < 0 or idx_v >= len(ali_imgs):
                             return False
                         ali_path = Path(ali_imgs[idx_v])
-                        img = cv2.imread(str(ali_path), cv2.IMREAD_COLOR)
+                        img = cv2.imread(str(ali_path), cv2.IMREAD_UNCHANGED)
                         if img is None:
                             return False
-                        vis = img.copy()
-                        h, w = vis.shape[:2]
-                        cx, cy = int(w/2), int(h/2)
-                        cv2.drawMarker(vis, (cx, cy), (0, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
-                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
-
-                        # 仅形态学：按多角度线性结构元素做开运算，检查中心邻域响应
-                        lds = {}
+                        # 使用 detect_center_lines.py 的默认参数：aggressive + ROI=-1 + 半径=3px
+                        near_lines, all_lines, center = detect_lines_near_center(
+                            img,
+                            radius_px=3,
+                            canny1=30, canny2=90,
+                            hough_thresh=20, min_len=8, max_gap=12,
+                            roi_margin=-1,
+                        )
+                        # 显著性阈值过滤：默认0.65（可在工具栏调整），并与CLI保持一致：先评分再过滤 all_lines 与 near_lines
                         try:
-                            lds = self.config_manager.get_line_detection_settings() if self.config_manager else {}
+                            thr = float(self.saliency_thresh_var.get()) if hasattr(self, 'saliency_thresh_var') else 0.65
                         except Exception:
-                            lds = {}
-                        center_distance_px = float(lds.get('center_distance_px', 50))
-                        min_len_ratio = float(lds.get('min_line_length_ratio', 0.30))
-
-                        min_dim = float(min(w, h))
-                        klen = max(10, int(min_dim * min_len_ratio))
-                        if klen % 2 == 0:
-                            klen += 1
-
-                        def _line_kernel(length: int, angle_deg: float, thickness: int = 1) -> np.ndarray:
-                            size = length
-                            c = size // 2
-                            kernel = np.zeros((size, size), np.uint8)
-                            ang = np.deg2rad(angle_deg)
-                            dx = np.cos(ang)
-                            dy = np.sin(ang)
-                            x0 = int(round(c - (length//2) * dx))
-                            y0 = int(round(c - (length//2) * dy))
-                            x1 = int(round(c + (length//2) * dx))
-                            y1 = int(round(c + (length//2) * dy))
-                            cv2.line(kernel, (x0, y0), (x1, y1), 1, thickness)
-                            return kernel
-
-                        r = int(max(0, center_distance_px))
-                        x0, x1 = max(0, cx - r), min(w, cx + r + 1)
-                        y0, y1 = max(0, cy - r), min(h, cy + r + 1)
-
-                        # 形态学梯度 → 二值 → 轮廓；绘制满足“细长且足够长”的、且触达中心邻域的轮廓
-                        kernel3 = np.ones((3, 3), np.uint8)
-                        grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel3)
-                        _, binmask = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY)
-                        try:
-                            contours, hierarchy = cv2.findContours(binmask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-                        except ValueError:
-                            contours = cv2.findContours(binmask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]
-
-                        min_len_px = max(10, int(min_dim * float(min_len_ratio)))
-                        for cnt in contours:
-                            if cnt is None or len(cnt) < 5:
-                                continue
-                            rect = cv2.minAreaRect(cnt)
-                            (rw, rh) = rect[1]
-                            long_len = float(max(rw, rh))
-                            short_len = float(min(rw, rh))
-                            if long_len < float(min_len_px):
-                                continue
-                            slender = long_len / (short_len + 1e-6)
-                            if slender < 3.0:
-                                continue
-                            pts = cnt.reshape(-1, 2)
-                            if pts.size == 0:
-                                continue
-                            within = np.any((pts[:, 0] >= x0) & (pts[:, 0] < x1) & (pts[:, 1] >= y0) & (pts[:, 1] < y1))
-                            color = (0, 0, 255) if within else (0, 255, 255)
-                            cv2.drawContours(vis, [cnt], -1, color, 2)
-
+                            thr = 0.65
+                        scores = compute_line_saliency_map(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img,
+                                                           all_lines, center) if all_lines else {}
+                        if all_lines:
+                            all_lines = [ln for ln in all_lines if scores.get((int(ln[0]), int(ln[1]), int(ln[2]), int(ln[3])), 0.0) >= thr]
+                        if near_lines:
+                            near_lines = [ln for ln in near_lines if scores.get((int(ln[0]), int(ln[1]), int(ln[2]), int(ln[3])), 0.0) >= thr]
+                        # 最多保留距中心最近的2条
+                        if near_lines:
+                            cx, cy = center
+                            near_lines = sorted(
+                                near_lines,
+                                key=lambda ln: point_to_segment_distance(cx, cy, ln[0], ln[1], ln[2], ln[3])
+                            )[:2]
+                        # 生成标注图（与CLI一致：所有线段绿色+显著性标签，中心附近线段红色）
+                        vis = annotate_image(img, near_lines, center, radius_px=3, all_lines=all_lines, line_scores=scores)
                         outp = ali_path.parent / f"{ali_path.stem}__lines.png"
                         cv2.imwrite(str(outp), vis)
                         return True
