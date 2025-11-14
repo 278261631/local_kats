@@ -1065,7 +1065,18 @@ class FitsWebDownloaderGUI:
             try:
                 config_path = os.path.join(base_dir, "..", "config", "url_config.json")
                 astap_processor = ASTAPProcessor(config_path)
-                astap_processor.process_directory(update_root)
+
+                # ASTAP解算进度回调：在状态栏显示已处理文件数
+                def _astap_progress(current, total, file_path, success):
+                    basename = os.path.basename(file_path)
+                    status = "成功" if success else "失败"
+                    color = "blue" if success else "orange"
+                    self._template_update_status_after(
+                        f"ASTAP解算: ({current}/{total}) {status} - {basename}",
+                        color,
+                    )
+
+                astap_processor.process_directory(update_root, progress_callback=_astap_progress)
             except Exception as e:
                 self._log(f"[模板生成] ASTAP解算过程中出错: {e}")
 

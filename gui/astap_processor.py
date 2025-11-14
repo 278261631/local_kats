@@ -270,51 +270,62 @@ class ASTAPProcessor:
             self.logger.error(f"处理FITS文件时出错: {str(e)}")
             return False
     
-    def process_directory(self, directory_path: str) -> Dict[str, bool]:
-        """
-        处理目录中的所有FITS文件
-        
+    def process_directory(self, directory_path: str, progress_callback=None) -> Dict[str, bool]:
+        """处理目录中的所有FITS文件
+
         Args:
             directory_path (str): 目录路径
-            
+            progress_callback (callable, optional):
+                用于报告进度的回调函数，签名为
+                callback(current: int, total: int, file_path: str, success: bool)
+
         Returns:
             Dict[str, bool]: 文件处理结果字典 {文件路径: 是否成功}
         """
         results = {}
-        
+
         try:
             if not os.path.exists(directory_path):
                 self.logger.error(f"目录不存在: {directory_path}")
                 return results
-            
+
             # 查找所有FITS文件
             fits_extensions = ['.fits', '.fit', '.fts']
             fits_files = []
-            
+
             for ext in fits_extensions:
                 pattern = f"*{ext}"
                 fits_files.extend(Path(directory_path).glob(pattern))
                 fits_files.extend(Path(directory_path).glob(pattern.upper()))
-            
+
             if not fits_files:
                 self.logger.warning(f"目录中没有找到FITS文件: {directory_path}")
                 return results
-            
-            self.logger.info(f"找到 {len(fits_files)} 个FITS文件")
-            
+
+            total_files = len(fits_files)
+            self.logger.info(f"找到 {total_files} 个FITS文件")
+
             # 处理每个文件
-            for fits_file in fits_files:
+            for idx, fits_file in enumerate(fits_files, 1):
                 file_path = str(fits_file)
                 success = self.process_fits_file(file_path)
                 results[file_path] = success
-            
+
+                # 进度回调
+                if progress_callback is not None:
+                    try:
+                        progress_callback(idx, total_files, file_path, success)
+                    except Exception:
+                        # 回调失败不影响主流程
+                        self.logger.debug("进度回调执行失败", exc_info=True)
+
             # 统计结果
             successful = sum(1 for success in results.values() if success)
             total = len(results)
             self.logger.info(f"目录处理完成: {successful}/{total} 个文件成功处理")
-            
+
             return results
-            
+
         except Exception as e:
             self.logger.error(f"处理目录时出错: {str(e)}")
             return results
