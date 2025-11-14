@@ -209,7 +209,20 @@ class ASTAPProcessor:
                 self.logger.error(f"FITS文件不存在: {fits_file_path}")
                 return False
             
-            # 1. 从文件名提取天区编号
+            # 1. 如果已经有ASTAP/WCS结果，则跳过
+            try:
+                from astropy.io import fits
+                with fits.open(fits_file_path) as hdul:
+                    hdr = hdul[0].header
+                    has_wcs = ("CRVAL1" in hdr and "CRVAL2" in hdr) or ("ASTAP" in hdr or "ASTAP0" in hdr)
+                if has_wcs:
+                    self.logger.info(f"文件已包含WCS/ASTAP结果，跳过ASTAP处理: {fits_file_path}")
+                    return True
+            except Exception:
+                # 如果检查失败，不影响后续正常处理
+                pass
+
+            # 2. 从文件名提取天区编号
             filename = os.path.basename(fits_file_path)
             k_full = self.extract_k_full_from_filename(filename)
             if not k_full:

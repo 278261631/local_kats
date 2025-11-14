@@ -744,7 +744,7 @@ class FitsWebDownloaderGUI:
 
         # 前N个问题模板
         ttk.Label(update_frame, text="处理前N个问题模板:").grid(row=0, column=0, sticky=tk.W, padx=(10, 5), pady=5)
-        self.problem_top_n_var = tk.IntVar(value=10)
+        self.problem_top_n_var = tk.IntVar(value=1)
         top_n_spin = ttk.Spinbox(update_frame, from_=1, to=999, textvariable=self.problem_top_n_var, width=5)
         top_n_spin.grid(row=0, column=1, sticky=tk.W)
         self.problem_use_all_var = tk.BooleanVar(value=False)
@@ -1141,8 +1141,8 @@ class FitsWebDownloaderGUI:
                         match_background=True,
                     )
 
-                    # 只保留所有图像都覆盖的位置，其它位置设为NaN
-                    data = np.where(footprint == len(hdu_list2), comb, np.nan)
+                    # 只保留所有图像都覆盖的位置，其它位置设为NaN，并转为 float32 以兼容旧程序
+                    data = np.where(footprint == len(hdu_list2), comb, np.nan).astype("float32")
 
                     field_name = f"K{k_region:03d}-{k_index}"
                     no_trim_name = f"{field_name}_no_trim.fits"
@@ -1165,7 +1165,8 @@ class FitsWebDownloaderGUI:
                     ys, xs = np.where(mask)
                     y_min, y_max = int(ys.min()), int(ys.max())
                     x_min, x_max = int(xs.min()), int(xs.max())
-                    trimmed_data = data[y_min: y_max + 1, x_min: x_max + 1]
+                    # 裁剪后也保持 float32
+                    trimmed_data = data[y_min: y_max + 1, x_min: x_max + 1].astype("float32")
 
                     header = wcs.to_header()
                     try:
