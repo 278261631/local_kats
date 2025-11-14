@@ -562,14 +562,25 @@ class URLBuilderFrame:
         # 构建不包含天区的基础URL
         base_url = self._build_base_url(tel_name, date)
 
-        # GY1：默认从本地缓存加载（仅在非手动扫描时）
-        if (tel_name or '').upper() == 'GY1' and not getattr(self, '_manual_scan', False):
+        is_manual = getattr(self, '_manual_scan', False)
+        tel_upper = (tel_name or '').upper()
+
+        # 默认从本地缓存加载（所有系统共用GY1索引，仅在非手动扫描时）
+        if not is_manual:
             cached_regions = self.__load_regions_cache(tel_name, date)
             if cached_regions:
                 self.last_scanned_url = base_url
                 self._update_region_list(cached_regions)
                 self.region_status_label.config(text=f"缓存: {len(cached_regions)} 个天区", foreground="green")
-                self.logger.info(f"GY1 {date} 天区从本地缓存加载，共 {len(cached_regions)} 个")
+                self.logger.info(f"{tel_upper} {date} 天区从本地缓存加载，共 {len(cached_regions)} 个")
+                return
+            else:
+                # 非手动且本地无缓存：不自动扫描，只提示
+                self.region_status_label.config(
+                    text="本地无缓存，未自动扫描（请先使用‘天区收集’或手动扫描）",
+                    foreground="orange",
+                )
+                self.logger.info(f"{tel_upper} {date} 本地无缓存，未自动扫描。")
                 return
 
         # 检查是否与上次扫描的URL相同，避免重复扫描
@@ -837,30 +848,64 @@ class URLBuilderFrame:
         return self.available_regions.copy() if self.available_regions else []
 
     # -------- GY1 天区缓存工具（私有） --------
-    def __region_cache_file(self, tel_name: str, date: str) -> str:
-        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'variables', 'region_cache', (tel_name or '').upper())
-        os.makedirs(base_dir, exist_ok=True)
-        return os.path.join(base_dir, f'{date}.json')
-
     def __load_regions_cache(self, tel_name: str, date: str):
+        """从 gui/gy1_region_index.json 中按日期读取天区列表（所有系统共用）"""
         try:
-            path = self.__region_cache_file(tel_name, date)
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if isinstance(data, list):
-                    return [str(x).upper() for x in data]
+            index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gy1_region_index.json")
+            if not os.path.exists(index_path):
+                return None
+            with open(index_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return None
+            regions = data.get(date)
+            if isinstance(regions, list) and regions:
+                # 规整为大写、去重、排序
+                normalized = sorted({str(r).upper() for r in regions if r})
+                return normalized
         except Exception as e:
-            self.logger.warning(f"加载GY1天区缓存失败: {e}")
+            self.logger.warning(f"加载GY1天区索引失败: {e}")
         return None
 
     def __save_regions_cache(self, tel_name: str, date: str, regions):
+        """将指定日期的GY1天区列表写入 gui/gy1_region_index.json
+
+        格式要求：
+        - 多行JSON
+        - 开头和结尾的大括号单独占一行
+        - 每个日期一行，按日期(key)排序
+        """
+        if (tel_name or "").upper() != "GY1":
+            return
         try:
-            path = self.__region_cache_file(tel_name, date)
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(sorted(list(set(regions))), f, ensure_ascii=False, indent=2)
+            index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gy1_region_index.json")
+            index = {}
+            if os.path.exists(index_path):
+                try:
+                    with open(index_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        index = data
+                except Exception as e:
+                    self.logger.warning(f"读取GY1天区索引失败，将重新生成: {e}")
+            # 规范化当前日期的天区列表
+            normalized = sorted({str(r).upper() for r in regions if r})
+            index[date] = normalized
+
+            # 按日期排序，多行JSON写回文件
+            with open(index_path, "w", encoding="utf-8") as f:
+                f.write("{\n")
+                keys = sorted(index.keys())
+                for i, k in enumerate(keys):
+                    v = index[k]
+                    line = "  " + json.dumps(str(k), ensure_ascii=False) + ":" + \
+                        json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+                    if i < len(keys) - 1:
+                        line += ","
+                    f.write(line + "\n")
+                f.write("}")
         except Exception as e:
-            self.logger.warning(f"写入GY1天区缓存失败: {e}")
+            self.logger.warning(f"写入GY1天区索引失败: {e}")
 
 
 

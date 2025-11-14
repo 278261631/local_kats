@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 
 import time
+import json
+
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -733,7 +735,7 @@ class FitsWebDownloaderGUI:
         self.region_collect_status.pack(side=tk.LEFT, padx=(12, 0))
 
         # 说明
-        tip = "说明：仅针对 GY1。优先从本地缓存加载，当某天无缓存时才扫描远端。缓存路径：gui/variables/region_cache/GY1"
+        tip = "说明：仅针对 GY1。优先从本地缓存加载，当某天无缓存时才扫描远端。缓存文件：gui/gy1_region_index.json"
         ttk.Label(container, text=tip, foreground="blue").pack(fill=tk.X, padx=5)
 
     def _open_calendar(self, var: tk.StringVar, title: str):
@@ -749,8 +751,8 @@ class FitsWebDownloaderGUI:
             var.set(selected)
 
     def _collect_regions_for_range(self):
-        start = (self.region_collect_start_var.get() or '').strip()
-        end = (self.region_collect_end_var.get() or '').strip()
+        start = (self.region_collect_start_var.get() or "").strip()
+        end = (self.region_collect_end_var.get() or "").strip()
         if not (self.config_manager.validate_date(start) and self.config_manager.validate_date(end)):
             messagebox.showerror("错误", "请输入有效的起止日期（YYYYMMDD）")
             return
@@ -766,28 +768,39 @@ class FitsWebDownloaderGUI:
                 scanned = 0
                 dt = datetime.strptime(start, "%Y%m%d")
                 end_dt = datetime.strptime(end, "%Y%m%d")
+                # 预先加载GY1索引（日期 -> [天区列表]）
+                index = self._load_gy1_index()
                 while dt <= end_dt:
                     date_str = dt.strftime("%Y%m%d")
                     total += 1
-                    # 本地是否已有缓存
-                    cache_file = self._region_cache_file('GY1', date_str)
-                    if os.path.exists(cache_file):
+                    regions = index.get(date_str)
+                    if isinstance(regions, list) and regions:
+                        # 本地已有缓存
                         from_cache += 1
                         self._log(f"[GY1][{date_str}] 本地已有缓存，跳过扫描。")
                     else:
                         # 需要扫描
                         try:
-                            base_url = self.url_builder._build_base_url('GY1', date_str)
+                            base_url = self.url_builder._build_base_url("GY1", date_str)
                             regions = self.url_builder.region_scanner.scan_available_regions(base_url)
-                            self._save_region_cache('GY1', date_str, regions)
+                            normalized = sorted({str(r).upper() for r in regions if r})
+                            index[date_str] = normalized
                             scanned += 1
-                            self._log(f"[GY1][{date_str}] 扫描完成，{len(regions)} 个天区 -> 已缓存。")
+                            self._log(f"[GY1][{date_str}] 扫描完成，{len(normalized)} 个天区 -> 已缓存。")
                         except Exception as e:
                             self._log(f"[GY1][{date_str}] 扫描失败: {e}")
                     # 更新进度
-                    self.region_collect_status_after(f"进度: {from_cache + scanned}/{total} 天；缓存: {from_cache} 天；扫描: {scanned} 天", "green")
-                    dt = dt.replace(day=dt.day) + (datetime.strptime("19700102","%Y%m%d") - datetime.strptime("19700101","%Y%m%d"))
-                self.region_collect_status_after(f"完成：合计{total}天，其中缓存{from_cache}天，扫描{scanned}天。", "green")
+                    self.region_collect_status_after(
+                        f"进度: {from_cache + scanned}/{total} 天；缓存: {from_cache} 天；扫描: {scanned} 天", "green"
+                    )
+                    dt = dt.replace(day=dt.day) + (
+                        datetime.strptime("19700102", "%Y%m%d") - datetime.strptime("19700101", "%Y%m%d")
+                    )
+                # 所有日期处理完后统一写回索引文件
+                self._save_gy1_index(index)
+                self.region_collect_status_after(
+                    f"完成：合计{total}天，其中缓存{from_cache}天，扫描{scanned}天。", "green"
+                )
             except Exception as e:
                 self.region_collect_status_after(f"失败：{e}", "red")
 
@@ -799,20 +812,47 @@ class FitsWebDownloaderGUI:
         except Exception:
             pass
 
-    # 缓存文件路径与读写（与URL构建页保持一致的路径）
-    def _region_cache_file(self, tel_name: str, date: str) -> str:
-        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'variables', 'region_cache', (tel_name or '').upper())
-        os.makedirs(base_dir, exist_ok=True)
-        return os.path.join(base_dir, f'{date}.json')
+    # GY1 索引文件：多行紧凑JSON（日期 -> [天区列表]），存放于 gui/gy1_region_index.json
+    # 要求：大括号单独一行，每个日期一行，按日期排序
+    def _gy1_index_file(self) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "gy1_region_index.json")
 
-    def _save_region_cache(self, tel_name: str, date: str, regions):
-        path = self._region_cache_file(tel_name, date)
+    def _load_gy1_index(self) -> dict:
         try:
-            with open(path, 'w', encoding='utf-8') as f:
-                import json
-                json.dump(sorted(list(set(regions))), f, ensure_ascii=False, indent=2)
+            path = self._gy1_index_file()
+            if not os.path.exists(path):
+                return {}
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
         except Exception as e:
-            self._log(f"写入缓存失败: {e}")
+            self._log(f"读取GY1索引文件失败，将使用空索引: {e}")
+        return {}
+
+    def _save_gy1_index(self, index: dict):
+        """将GY1索引写入文件，格式例如：
+        {
+          "YYYYMMDD":["K001","K002"],
+          "YYYYMMDE":[...]
+        }
+        大括号单独一行，日期行按key排序。
+        """
+        try:
+            path = self._gy1_index_file()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{\n")
+                keys = sorted(index.keys())
+                for i, k in enumerate(keys):
+                    v = index[k]
+                    line = "  " + json.dumps(str(k), ensure_ascii=False) + ":" + \
+                        json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+                    if i < len(keys) - 1:
+                        line += ","
+                    f.write(line + "\n")
+                f.write("}")
+        except Exception as e:
+            self._log(f"写入GY1索引文件失败: {e}")
 
 
 
