@@ -944,17 +944,21 @@ class FitsWebDownloaderGUI:
                     self._log(f"[模板更新] {system_upper} {date} 未找到包含 {k_full} 的文件（共 {len(fits_files)} 个）")
                     continue
 
-                filename, file_url = candidates[0]
-                try:
-                    self._log(f"[模板更新] ({idx}/{total_tasks}) 下载 {system_upper} {date} {k_full} -> {filename}")
-                    result = self.downloader.download_single_file(file_url, update_root)
-                    completed += 1
-                    status_text = f"模板更新: {completed}/{total_tasks} - {system_upper} {date} {k_full} -> {result}"
-                    self._template_update_status_after(status_text, "green")
-                except Exception as e:
-                    self._log(f"[模板更新] 下载失败 {file_url}: {e}")
-                    status_text = f"模板更新失败: {system_upper} {date} {k_full} - {e}"
-                    self._template_update_status_after(status_text, "red")
+                for j, (filename, file_url) in enumerate(candidates, 1):
+                    try:
+                        self._log(
+                            f"[模板更新] ({idx}/{total_tasks}) #{j}/{len(candidates)} 下载 {system_upper} {date} {k_full} -> {filename}"
+                        )
+                        result = self.downloader.download_single_file(file_url, update_root)
+                        completed += 1
+                        status_text = (
+                            f"模板更新: 已下载 {completed} 个文件 - {system_upper} {date} {k_full} -> {result}"
+                        )
+                        self._template_update_status_after(status_text, "green")
+                    except Exception as e:
+                        self._log(f"[模板更新] 下载失败 {file_url}: {e}")
+                        status_text = f"模板更新失败: {system_upper} {date} {k_full} - {e}"
+                        self._template_update_status_after(status_text, "red")
 
             if completed:
                 self._template_update_status_after(f"模板更新完成：成功 {completed}/{total_tasks} 个下载任务。", "green")
