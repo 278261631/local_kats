@@ -756,11 +756,17 @@ class FitsWebDownloaderGUI:
         recent_spin = ttk.Spinbox(update_frame, from_=1, to=30, textvariable=self.problem_recent_days_var, width=5)
         recent_spin.grid(row=1, column=1, sticky=tk.W)
 
+        # 生成模板最少参与图像数
+        ttk.Label(update_frame, text="生成模板最少参与图像数:").grid(row=2, column=0, sticky=tk.W, padx=(10, 5), pady=5)
+        self.problem_min_images_var = tk.IntVar(value=30)
+        min_images_spin = ttk.Spinbox(update_frame, from_=1, to=999, textvariable=self.problem_min_images_var, width=5)
+        min_images_spin.grid(row=2, column=1, sticky=tk.W)
+
         # 下载/生成按钮和状态
-        ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=2, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 8))
-        ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=2, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 8))
+        ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=3, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 8))
+        ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=3, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 8))
         self.template_update_status = ttk.Label(update_frame, text="就绪")
-        self.template_update_status.grid(row=2, column=2, columnspan=2, sticky=tk.W)
+        self.template_update_status.grid(row=3, column=2, columnspan=2, sticky=tk.W)
 
         ttk.Label(
             update_frame,
@@ -1067,6 +1073,7 @@ class FitsWebDownloaderGUI:
             try:
                 import numpy as np
                 from astropy.io import fits
+                from astropy.wcs import WCS
                 from reproject.mosaicking import find_optimal_celestial_wcs, reproject_and_coadd
                 import reproject
             except Exception as e:
@@ -1075,6 +1082,14 @@ class FitsWebDownloaderGUI:
 
             total_templates = len(selected)
             made = 0
+
+            # 生成模板时的最少参与图像数设置
+            try:
+                min_images = int(self.problem_min_images_var.get())
+            except Exception:
+                min_images = 30
+            if min_images < 1:
+                min_images = 1
 
             for idx, item in enumerate(selected, 1):
                 k_number = item.get("k_number")
@@ -1107,26 +1122,46 @@ class FitsWebDownloaderGUI:
                 )
 
                 try:
+                    # 收集具有天球WCS的HDU，出问题的文件逐个跳过
                     hdu_list = []
+                    used_files = []
                     for fpath in fits_files:
                         try:
-                            hdu_list.append(fits.open(fpath)[0])
+                            hdu = fits.open(fpath)[0]
+                            try:
+                                w = WCS(hdu.header)
+                                if not w.has_celestial:
+                                    self._log(f"[模板生成] 文件缺少天球WCS，跳过: {fpath}")
+                                    continue
+                            except Exception as w_err:
+                                self._log(f"[模板生成] 文件WCS检查失败，跳过: {fpath}: {w_err}")
+                                continue
+
+                            hdu_list.append(hdu)
+                            used_files.append(fpath)
                         except Exception as e:
                             self._log(f"[模板生成] 打开文件失败 {fpath}: {e}")
 
                     if not hdu_list:
-                        self._log(f"[模板生成] {system_upper} {k_full} 所有文件均无法打开，跳过。")
+                        self._log(f"[模板生成] {system_upper} {k_full} 所有文件均缺少有效天球WCS或无法打开，跳过。")
+                        continue
+
+                    # 如果可用图像数小于阈值，则不生成该模板
+                    if len(hdu_list) < min_images:
+                        self._log(
+                            f"[模板生成] {system_upper} {k_full} 可用图像数 {len(hdu_list)} 小于最少参与图像数 {min_images}，跳过生成。"
+                        )
                         continue
 
                     wcs, shape_out = find_optimal_celestial_wcs(hdu_list)
 
                     # 为避免内存泄漏，重新打开一次用于真正重投影
                     hdu_list2 = []
-                    for fpath in fits_files:
+                    for fpath in used_files:
                         try:
                             hdu_list2.append(fits.open(fpath)[0])
-                        except Exception:
-                            continue
+                        except Exception as e:
+                            self._log(f"[模板生成] 重投影时打开文件失败 {fpath}: {e}")
 
                     if not hdu_list2:
                         self._log(f"[模板生成] {system_upper} {k_full} 重投影时没有可用的HDU，跳过。")
@@ -1186,7 +1221,9 @@ class FitsWebDownloaderGUI:
                         "green",
                     )
                 except Exception as e:
-                    self._log(f"[模板生成] {system_upper} {k_full} 处理失败: {e}")
+                    # 记录更详细的信息，指出涉及到的观测文件，然后跳过该模板
+                    files_str = ", ".join(str(p) for p in fits_files)
+                    self._log(f"[模板生成] {system_upper} {k_full} 处理失败: {e} | 文件列表: {files_str}")
 
             if made:
                 self._template_update_status_after(
