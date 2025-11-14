@@ -787,6 +787,8 @@ class FitsWebDownloaderGUI:
                             index[date_str] = normalized
                             scanned += 1
                             self._log(f"[GY1][{date_str}] 扫描完成，{len(normalized)} 个天区 -> 已缓存。")
+                            # 为保护服务器，每次实际扫描后增加 0.5 秒延迟
+                            time.sleep(0.5)
                         except Exception as e:
                             self._log(f"[GY1][{date_str}] 扫描失败: {e}")
                     # 更新进度
