@@ -727,7 +727,7 @@ class FitsWebDownloaderGUI:
         end_entry.grid(row=0, column=4, sticky=tk.W)
         ttk.Button(date_frame, text="选择", command=lambda: self._open_calendar(self.region_collect_end_var, "选择终止日期")).grid(row=0, column=5, padx=(6, 12))
 
-        # 动作按钮
+        # 天区索引收集按钮
         action_frame = ttk.Frame(container)
         action_frame.pack(fill=tk.X, padx=5, pady=(5, 10))
         ttk.Button(action_frame, text="收集GY1天区信息", command=self._collect_regions_for_range).pack(side=tk.LEFT)
@@ -737,6 +737,35 @@ class FitsWebDownloaderGUI:
         # 说明
         tip = "说明：仅针对 GY1。优先从本地缓存加载，当某天无缓存时才扫描远端。缓存文件：gui/gy1_region_index.json"
         ttk.Label(container, text=tip, foreground="blue").pack(fill=tk.X, padx=5)
+
+        # 问题模板自动更新区域
+        update_frame = ttk.LabelFrame(container, text="问题模板自动更新（fits_check_report.txt）")
+        update_frame.pack(fill=tk.X, padx=5, pady=(10, 5))
+
+        # 前N个问题模板
+        ttk.Label(update_frame, text="处理前N个问题模板:").grid(row=0, column=0, sticky=tk.W, padx=(10, 5), pady=5)
+        self.problem_top_n_var = tk.IntVar(value=10)
+        top_n_spin = ttk.Spinbox(update_frame, from_=1, to=999, textvariable=self.problem_top_n_var, width=5)
+        top_n_spin.grid(row=0, column=1, sticky=tk.W)
+        self.problem_use_all_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(update_frame, text="全部", variable=self.problem_use_all_var).grid(row=0, column=2, sticky=tk.W, padx=(10, 0))
+
+        # 每个天区最近日期数
+        ttk.Label(update_frame, text="每个天区最近日期数:").grid(row=1, column=0, sticky=tk.W, padx=(10, 5), pady=5)
+        self.problem_recent_days_var = tk.IntVar(value=3)
+        recent_spin = ttk.Spinbox(update_frame, from_=1, to=30, textvariable=self.problem_recent_days_var, width=5)
+        recent_spin.grid(row=1, column=1, sticky=tk.W)
+
+        # 下载按钮和状态
+        ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=2, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 8))
+        self.template_update_status = ttk.Label(update_frame, text="就绪")
+        self.template_update_status.grid(row=2, column=1, columnspan=3, sticky=tk.W)
+
+        ttk.Label(
+            update_frame,
+            text="说明：从 gui/templates_update/fits_check_report.txt 读取问题模板，按 gy1_region_index.json 查找最近日期并下载相应观测文件。",
+            foreground="gray"
+        ).grid(row=3, column=0, columnspan=4, sticky=tk.W, padx=(10, 5), pady=(0, 8))
 
     def _open_calendar(self, var: tk.StringVar, title: str):
         try:
@@ -807,6 +836,203 @@ class FitsWebDownloaderGUI:
                 self.region_collect_status_after(f"失败：{e}", "red")
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _update_problem_templates(self):
+        """根据 fits_check_report.txt 下载问题模板对应的最新观测文件（后台线程）"""
+        thread = threading.Thread(target=self._update_problem_templates_worker, daemon=True)
+        thread.start()
+
+    def _update_problem_templates_worker(self):
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            report_path = os.path.join(base_dir, "templates_update", "fits_check_report.txt")
+            self._template_update_status_after("解析 fits_check_report.txt...", "blue")
+            system_name, problems = self._parse_fits_check_report(report_path)
+            if not system_name:
+                self._template_update_status_after("无法从报告中识别系统名称", "red")
+                return
+            if not problems:
+                self._template_update_status_after("报告中未找到问题模板文件", "orange")
+                return
+
+            # 选择前N个问题模板
+            use_all = bool(self.problem_use_all_var.get())
+            try:
+                top_n = int(self.problem_top_n_var.get())
+            except Exception:
+                top_n = 1
+            if top_n < 1:
+                top_n = 1
+            selected = problems if use_all else problems[:top_n]
+
+            try:
+                recent_days = int(self.problem_recent_days_var.get())
+            except Exception:
+                recent_days = 3
+            if recent_days < 1:
+                recent_days = 1
+
+            index = self._load_gy1_index()
+            if not index:
+                self._template_update_status_after("GY1索引为空，请先执行“天区收集”。", "red")
+                return
+
+            system_upper = system_name.upper()
+            update_root = os.path.join(base_dir, "templates_update", "update", system_upper.lower())
+            os.makedirs(update_root, exist_ok=True)
+
+            if not self.downloader:
+                self.downloader = FitsDownloader(
+                    max_workers=1,
+                    retry_times=self.retry_times_var.get(),
+                    timeout=self.timeout_var.get(),
+                    enable_astap=False,
+                    astap_config_path="config/url_config.json"
+                )
+
+            # 准备下载任务列表：[(problem_item, date_str), ...]
+            tasks = []
+            for item in selected:
+                region = item["k_number"]
+                dates = self._find_recent_dates_for_region(index, region, recent_days)
+                if not dates:
+                    self._log(f"[模板更新] 天区 {region} 在 GY1 索引中没有找到任何日期，跳过。")
+                    continue
+                for date in dates:
+                    tasks.append((item, date))
+
+            if not tasks:
+                self._template_update_status_after("没有需要下载的文件（所有天区在索引中都不存在）", "orange")
+                return
+
+            url_template = self.config_manager.get_url_template()
+            total_tasks = len(tasks)
+            completed = 0
+
+            from datetime import datetime as _dt
+
+            for idx, (problem, date) in enumerate(tasks, 1):
+                region = problem["k_number"]
+                k_full = problem["k_full"]
+
+                # 构建该天区的URL
+                format_params = {"tel_name": system_upper, "date": date, "k_number": region}
+                if "{year_of_date}" in url_template:
+                    try:
+                        year_of_date = date[:4] if len(date) >= 4 else _dt.now().strftime("%Y")
+                    except Exception:
+                        year_of_date = _dt.now().strftime("%Y")
+                    format_params["year_of_date"] = year_of_date
+
+                region_url = url_template.format(**format_params)
+                self._log(f"[模板更新] 扫描 {system_upper} {date} {k_full} - {region_url}")
+                try:
+                    fits_files = self.directory_scanner.scan_directory_listing(region_url)
+                    if not fits_files:
+                        fits_files = self.scanner.scan_fits_files(region_url)
+                except Exception as e:
+                    self._log(f"[模板更新] 扫描失败 {region_url}: {e}")
+                    continue
+
+                if not fits_files:
+                    self._log(f"[模板更新] {system_upper} {date} {k_full} 未找到任何FITS文件")
+                    continue
+
+                pattern = k_full.lower()
+                candidates = [(fn, url) for fn, url, size in fits_files if pattern in fn.lower()]
+                if not candidates:
+                    self._log(f"[模板更新] {system_upper} {date} 未找到包含 {k_full} 的文件（共 {len(fits_files)} 个）")
+                    continue
+
+                filename, file_url = candidates[0]
+                try:
+                    self._log(f"[模板更新] ({idx}/{total_tasks}) 下载 {system_upper} {date} {k_full} -> {filename}")
+                    result = self.downloader.download_single_file(file_url, update_root)
+                    completed += 1
+                    status_text = f"模板更新: {completed}/{total_tasks} - {system_upper} {date} {k_full} -> {result}"
+                    self._template_update_status_after(status_text, "green")
+                except Exception as e:
+                    self._log(f"[模板更新] 下载失败 {file_url}: {e}")
+                    status_text = f"模板更新失败: {system_upper} {date} {k_full} - {e}"
+                    self._template_update_status_after(status_text, "red")
+
+            if completed:
+                self._template_update_status_after(f"模板更新完成：成功 {completed}/{total_tasks} 个下载任务。", "green")
+            else:
+                self._template_update_status_after("模板更新完成：没有成功下载任何文件。", "orange")
+        except Exception as e:
+            self._template_update_status_after(f"模板更新出错: {e}", "red")
+
+
+
+    def _parse_fits_check_report(self, report_path: str):
+        """解析 gui/templates_update/fits_check_report.txt，返回 (system_name, problems)"""
+        system_name = None
+        problems = []
+        try:
+            import re
+            with open(report_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("检查目录:"):
+                        m = re.search(r"(GY\d+)", line, re.IGNORECASE)
+                        if m:
+                            system_name = m.group(1).upper()
+                        continue
+                    # 形如：1. F:\template\gy2\K001-5.fits (1个问题, 1个错误)
+                    m = re.match(r"\d+\.\s+(.+?\.fits)\b", line, re.IGNORECASE)
+                    if not m:
+                        continue
+                    file_path = m.group(1)
+                    base = os.path.basename(file_path)
+                    m_k = re.search(r"(K\d{3})-(\d+)", base, re.IGNORECASE)
+                    if not m_k:
+                        continue
+                    k_number = m_k.group(1).upper()
+                    suffix = m_k.group(2)
+                    k_full = f"{k_number}-{suffix}"
+                    problems.append({
+                        "path": file_path,
+                        "k_number": k_number,
+                        "suffix": suffix,
+                        "k_full": k_full,
+                    })
+                    if not system_name:
+                        m_sys = re.search(r"(GY\d+)", file_path, re.IGNORECASE)
+                        if m_sys:
+                            system_name = m_sys.group(1).upper()
+        except Exception as e:
+            self._log(f"解析fits_check_report失败: {e}")
+        return system_name, problems
+
+    def _find_recent_dates_for_region(self, index: dict, region: str, max_count: int):
+        """在GY1索引中为指定天区寻找最近的若干日期（按日期字符串倒序）"""
+        region_upper = str(region).upper()
+        try:
+            sorted_dates = sorted(index.keys(), reverse=True)
+        except Exception:
+            sorted_dates = list(index.keys())
+            sorted_dates.sort(reverse=True)
+        result = []
+        for date in sorted_dates:
+            regions = index.get(date) or []
+            try:
+                if region_upper in [str(r).upper() for r in regions]:
+                    result.append(date)
+                    if len(result) >= max_count:
+                        break
+            except Exception:
+                continue
+        return result
+
+    def _template_update_status_after(self, text: str, color: str = "black"):
+        """在线程中安全更新模板更新状态标签"""
+        try:
+            self.root.after(0, lambda: self.template_update_status.config(text=text, foreground=color))
+        except Exception:
+            pass
 
     def region_collect_status_after(self, text: str, color: str):
         try:
