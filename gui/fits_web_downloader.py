@@ -756,10 +756,11 @@ class FitsWebDownloaderGUI:
         recent_spin = ttk.Spinbox(update_frame, from_=1, to=30, textvariable=self.problem_recent_days_var, width=5)
         recent_spin.grid(row=1, column=1, sticky=tk.W)
 
-        # 下载按钮和状态
+        # 下载/生成按钮和状态
         ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=2, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 8))
+        ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=2, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 8))
         self.template_update_status = ttk.Label(update_frame, text="就绪")
-        self.template_update_status.grid(row=2, column=1, columnspan=3, sticky=tk.W)
+        self.template_update_status.grid(row=2, column=2, columnspan=2, sticky=tk.W)
 
         ttk.Label(
             update_frame,
@@ -1008,6 +1009,193 @@ class FitsWebDownloaderGUI:
                 self._template_update_status_after("模板更新完成：没有成功下载任何文件。", "orange")
         except Exception as e:
             self._template_update_status_after(f"模板更新出错: {e}", "red")
+
+
+    def _make_problem_templates(self):
+        """根据已下载的观测文件生成新模板（后台线程）"""
+        thread = threading.Thread(target=self._make_problem_templates_worker, daemon=True)
+        thread.start()
+
+    def _make_problem_templates_worker(self):
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            report_path = os.path.join(base_dir, "templates_update", "fits_check_report.txt")
+            self._template_update_status_after("解析 fits_check_report.txt...", "blue")
+            system_name, problems = self._parse_fits_check_report(report_path)
+            if not system_name:
+                self._template_update_status_after("无法从报告中识别系统名称", "red")
+                return
+            if not problems:
+                self._template_update_status_after("报告中未找到问题模板文件", "orange")
+                return
+
+            # 选择前N个问题模板
+            use_all = bool(self.problem_use_all_var.get())
+            try:
+                top_n = int(self.problem_top_n_var.get())
+            except Exception:
+                top_n = 1
+            if top_n < 1:
+                top_n = 1
+            selected = problems if use_all else problems[:top_n]
+
+            system_upper = system_name.upper()
+            tel = system_upper.lower()
+            update_root = os.path.join(base_dir, "templates_update", "update", tel)
+            output_root = os.path.join(base_dir, "templates_update", "output", tel)
+            os.makedirs(output_root, exist_ok=True)
+
+            update_root_path = Path(update_root)
+            if not update_root_path.exists():
+                self._template_update_status_after("下载目录不存在，请先点击“下载问题模板对应观测文件”。", "red")
+                return
+
+            # 先对下载目录中的文件执行ASTAP解算
+            if not ASTAPProcessor:
+                self._template_update_status_after("ASTAP处理器不可用，无法生成新模板。", "red")
+                return
+
+            self._template_update_status_after("正在对下载文件执行ASTAP解算...", "blue")
+            try:
+                config_path = os.path.join(base_dir, "..", "config", "url_config.json")
+                astap_processor = ASTAPProcessor(config_path)
+                astap_processor.process_directory(update_root)
+            except Exception as e:
+                self._log(f"[模板生成] ASTAP解算过程中出错: {e}")
+
+            # 导入生成模板所需的库
+            try:
+                import numpy as np
+                from astropy.io import fits
+                from reproject.mosaicking import find_optimal_celestial_wcs, reproject_and_coadd
+                import reproject
+            except Exception as e:
+                self._template_update_status_after(f"模板生成失败：缺少依赖库（numpy/astropy/reproject）: {e}", "red")
+                return
+
+            total_templates = len(selected)
+            made = 0
+
+            for idx, item in enumerate(selected, 1):
+                k_number = item.get("k_number")
+                suffix = item.get("suffix")
+                k_full = item.get("k_full")
+                if not (k_number and suffix and k_full):
+                    continue
+
+                try:
+                    k_region = int(str(k_number).lstrip("Kk"))
+                    k_index = int(suffix)
+                except Exception:
+                    self._log(f"[模板生成] 无法解析天区编号: {k_number}-{suffix}")
+                    continue
+
+                pattern = k_full.lower()
+                fits_files = []
+                for ext in ("*.fits", "*.fit", "*.fts"):
+                    for p in update_root_path.glob(ext):
+                        if pattern in p.name.lower():
+                            fits_files.append(str(p))
+
+                if not fits_files:
+                    self._log(f"[模板生成] {system_upper} {k_full} 在下载目录中未找到任何FITS文件，跳过。")
+                    continue
+
+                self._template_update_status_after(
+                    f"模板生成: ({idx}/{total_templates}) {system_upper} {k_full} - 使用 {len(fits_files)} 个文件合成...",
+                    "blue",
+                )
+
+                try:
+                    hdu_list = []
+                    for fpath in fits_files:
+                        try:
+                            hdu_list.append(fits.open(fpath)[0])
+                        except Exception as e:
+                            self._log(f"[模板生成] 打开文件失败 {fpath}: {e}")
+
+                    if not hdu_list:
+                        self._log(f"[模板生成] {system_upper} {k_full} 所有文件均无法打开，跳过。")
+                        continue
+
+                    wcs, shape_out = find_optimal_celestial_wcs(hdu_list)
+
+                    # 为避免内存泄漏，重新打开一次用于真正重投影
+                    hdu_list2 = []
+                    for fpath in fits_files:
+                        try:
+                            hdu_list2.append(fits.open(fpath)[0])
+                        except Exception:
+                            continue
+
+                    if not hdu_list2:
+                        self._log(f"[模板生成] {system_upper} {k_full} 重投影时没有可用的HDU，跳过。")
+                        continue
+
+                    comb, footprint = reproject_and_coadd(
+                        hdu_list2,
+                        wcs,
+                        shape_out=shape_out,
+                        reproject_function=reproject.reproject_interp,
+                        combine_function="mean",
+                        match_background=True,
+                    )
+
+                    # 只保留所有图像都覆盖的位置，其它位置设为NaN
+                    data = np.where(footprint == len(hdu_list2), comb, np.nan)
+
+                    field_name = f"K{k_region:03d}-{k_index}"
+                    no_trim_name = f"{field_name}_no_trim.fits"
+                    temp_name = f"{field_name}.fits"
+
+                    write_temp_dir = Path(output_root)
+                    write_temp_dir.mkdir(parents=True, exist_ok=True)
+                    no_trim_path = write_temp_dir / no_trim_name
+                    temp_path = write_temp_dir / temp_name
+
+                    # 写入未裁剪模板
+                    fits.writeto(no_trim_path, data, wcs.to_header(), overwrite=True)
+
+                    # 简单实现 trim_zeros：裁掉外围都是NaN的区域，并修正CRPIX
+                    mask = np.isfinite(data)
+                    if not mask.any():
+                        self._log(f"[模板生成] {system_upper} {k_full} 合成结果全部为NaN，跳过裁剪。")
+                        continue
+
+                    ys, xs = np.where(mask)
+                    y_min, y_max = int(ys.min()), int(ys.max())
+                    x_min, x_max = int(xs.min()), int(xs.max())
+                    trimmed_data = data[y_min: y_max + 1, x_min: x_max + 1]
+
+                    header = wcs.to_header()
+                    try:
+                        if "CRPIX1" in header:
+                            header["CRPIX1"] -= x_min
+                        if "CRPIX2" in header:
+                            header["CRPIX2"] -= y_min
+                    except Exception:
+                        pass
+
+                    fits.writeto(temp_path, trimmed_data, header, overwrite=True)
+
+                    made += 1
+                    self._log(f"[模板生成] 完成 {system_upper} {k_full} -> {temp_path}")
+                    self._template_update_status_after(
+                        f"模板生成: ({idx}/{total_templates}) {system_upper} {k_full} -> {temp_path.name}",
+                        "green",
+                    )
+                except Exception as e:
+                    self._log(f"[模板生成] {system_upper} {k_full} 处理失败: {e}")
+
+            if made:
+                self._template_update_status_after(
+                    f"模板生成完成：成功生成 {made}/{total_templates} 个模板，输出目录: templates_update/output/{tel}",
+                    "green",
+                )
+            else:
+                self._template_update_status_after("模板生成完成：没有成功生成任何新模板。", "orange")
+        except Exception as e:
+            self._template_update_status_after(f"模板生成出错: {e}", "red")
 
 
 
