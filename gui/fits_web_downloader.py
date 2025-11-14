@@ -910,6 +910,20 @@ class FitsWebDownloaderGUI:
             completed = 0
 
             from datetime import datetime as _dt
+            def _format_bytes(num):
+                if num is None:
+                    return "未知"
+                try:
+                    num = float(num)
+                except Exception:
+                    return str(num)
+                for unit in ["B", "KB", "MB", "GB"]:
+                    if num < 1024.0:
+                        return f"{num:.1f}{unit}"
+                    num /= 1024.0
+                return f"{num:.1f}TB"
+
+
 
             for idx, (problem, date) in enumerate(tasks, 1):
                 region = problem["k_number"]
@@ -949,12 +963,40 @@ class FitsWebDownloaderGUI:
                         self._log(
                             f"[模板更新] ({idx}/{total_tasks}) #{j}/{len(candidates)} 下载 {system_upper} {date} {k_full} -> {filename}"
                         )
-                        result = self.downloader.download_single_file(file_url, update_root)
-                        completed += 1
-                        status_text = (
-                            f"模板更新: 已下载 {completed} 个文件 - {system_upper} {date} {k_full} -> {result}"
-                        )
-                        self._template_update_status_after(status_text, "green")
+
+                        start_time = time.time()
+                        last_update = [start_time]
+
+                        def progress_callback(downloaded_bytes, total_bytes, fn):
+                            now = time.time()
+                            # 限速更新，避免过于频繁
+                            if now - last_update[0] < 0.3 and (total_bytes is None or downloaded_bytes < (total_bytes or 0)):
+                                return
+                            last_update[0] = now
+                            elapsed = max(now - start_time, 1e-3)
+                            speed = downloaded_bytes / elapsed
+                            speed_str = _format_bytes(speed)
+                            downloaded_str = _format_bytes(downloaded_bytes)
+                            total_str = _format_bytes(total_bytes) if total_bytes is not None else "未知"
+                            text = (
+                                f"模板更新下载中: {fn} {downloaded_str}/{total_str} @ {speed_str}/s"
+                            )
+                            self._template_update_status_after(text, "blue")
+
+                        result = self.downloader.download_single_file(file_url, update_root, progress_callback)
+
+                        # 已存在且完整的文件由下载器返回“跳过已存在文件”
+                        if isinstance(result, str) and result.startswith("跳过已存在文件"):
+                            status_text = (
+                                f"模板更新: 已存在，跳过 - {system_upper} {date} {k_full} -> {result}"
+                            )
+                            self._template_update_status_after(status_text, "orange")
+                        else:
+                            completed += 1
+                            status_text = (
+                                f"模板更新: 已下载 {completed} 个文件 - {system_upper} {date} {k_full} -> {result}"
+                            )
+                            self._template_update_status_after(status_text, "green")
                     except Exception as e:
                         self._log(f"[模板更新] 下载失败 {file_url}: {e}")
                         status_text = f"模板更新失败: {system_upper} {date} {k_full} - {e}"
