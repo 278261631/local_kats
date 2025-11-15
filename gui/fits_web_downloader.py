@@ -15,6 +15,7 @@ from pathlib import Path
 
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 
 # 添加项目根目录到路径
@@ -770,9 +771,10 @@ class FitsWebDownloaderGUI:
 
         # 下载/生成按钮和状态
         ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=3, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 5))
-        ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=3, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 5))
+        ttk.Button(update_frame, text="预处理图像", command=self._preprocess_problem_images).grid(row=3, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 5))
+        ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=3, column=2, sticky=tk.W, padx=(5, 5), pady=(8, 5))
         self.template_update_status = ttk.Label(update_frame, text="就绪")
-        self.template_update_status.grid(row=3, column=2, columnspan=2, sticky=tk.W, padx=(5, 5))
+        self.template_update_status.grid(row=3, column=3, columnspan=2, sticky=tk.W, padx=(5, 5))
 
         # 说明文本单独放在第4行，避免被遮挡
         ttk.Label(
@@ -1022,6 +1024,210 @@ class FitsWebDownloaderGUI:
                 self._template_update_status_after("模板更新完成：没有成功下载任何文件。", "orange")
         except Exception as e:
             self._template_update_status_after(f"模板更新出错: {e}", "red")
+
+
+    def _preprocess_problem_images(self):
+        """预处理已下载的观测图像（ASTAP多线程 + 质量筛选）"""
+        thread = threading.Thread(target=self._preprocess_problem_images_worker, daemon=True)
+        thread.start()
+
+    def _preprocess_problem_images_worker(self):
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            report_path = os.path.join(base_dir, "templates_update", "fits_check_report.txt")
+            self._template_update_status_after("解析 fits_check_report.txt...", "blue")
+            system_name, problems = self._parse_fits_check_report(report_path)
+            if not system_name:
+                self._template_update_status_after("无法从报告中识别系统名称", "red")
+                return
+
+            system_upper = system_name.upper()
+            tel = system_upper.lower()
+            update_root = os.path.join(base_dir, "templates_update", "update", tel)
+            update_root_path = Path(update_root)
+            if not update_root_path.exists():
+                self._template_update_status_after("下载目录不存在，请先点击“下载问题模板对应观测文件”。", "red")
+                return
+
+            # 收集待处理FITS文件
+            fits_files = []
+            for ext in [".fits", ".fit", ".fts"]:
+                fits_files.extend(update_root_path.glob(f"*{ext}"))
+                fits_files.extend(update_root_path.glob(f"*{ext.upper()}"))
+            fits_files = sorted(set(fits_files))
+            if not fits_files:
+                self._template_update_status_after("预处理失败：下载目录中未找到任何FITS文件。", "orange")
+                return
+
+            # 导入依赖
+            try:
+                import numpy as np
+                from astropy.io import fits
+                from fits_checking.fits_monitor import FITSQualityAnalyzer
+            except Exception as e:
+                self._template_update_status_after(f"预处理失败：缺少依赖库（numpy/astropy/fits_checking）: {e}", "red")
+                return
+
+            # ASTAP 处理器
+            if not ASTAPProcessor:
+                self._template_update_status_after("ASTAP处理器不可用，无法执行预处理。", "red")
+                return
+            config_path = os.path.join(base_dir, "..", "config", "url_config.json")
+            astap_processor = ASTAPProcessor(config_path)
+
+            # 质量分析器
+            quality_analyzer = FITSQualityAnalyzer()
+
+            # 阈值
+            lm_thres = 15.0
+            ell_thres = 0.2
+            fwhm_thres = 10.0
+
+            bad_dir = os.path.join(base_dir, "templates_update", "bad_img")
+            os.makedirs(bad_dir, exist_ok=True)
+
+            import shutil
+            import math
+            import threading as _threading
+
+            total = len(fits_files)
+            counters = {"processed": 0, "bad": 0}
+            lock = _threading.Lock()
+
+            def _compute_lm5sig(fits_path: Path):
+                """根据 .check.fits 和曝光时间计算5σ限制星等，并写入LM5SIG"""
+                stem = fits_path.stem
+                check_path = fits_path.with_name(f"{stem}.check.fits")
+                if not check_path.exists():
+                    return None
+                try:
+                    with fits.open(check_path) as chdul:
+                        data = chdul[0].data
+                    if data is None:
+                        return None
+                    data = np.asarray(data, dtype=np.float64)
+                    med = float(np.median(data))
+                    if med <= 0:
+                        return None
+                    with fits.open(str(fits_path), mode="update") as hdul2:
+                        hdr = hdul2[0].header
+                        exptime = hdr.get("EXPOSURE", hdr.get("EXPTIME", 1.0))
+                        try:
+                            exptime = float(exptime)
+                        except Exception:
+                            exptime = 1.0
+                        if exptime <= 0:
+                            exptime = 1.0
+                        zp = None
+                        for key in ("ZP", "PHOTZP", "MAGZP", "ZP_MAG"):
+                            if key in hdr:
+                                zp = hdr.get(key)
+                                break
+                        if zp is None:
+                            zp = 25.0
+                        try:
+                            zp = float(zp)
+                        except Exception:
+                            zp = 25.0
+                        lmag = zp - 2.5 * np.log10(med * 5.0 * np.pi * 4.0**2 / exptime)
+                        lmag = float(round(lmag, 3))
+                        hdr["LM5SIG"] = (lmag, "5-sigma limiting magnitude")
+                        hdul2.flush()
+                    return lmag
+                except Exception as e:
+                    self._log(f"[预处理] 计算LM5SIG失败 {fits_path}: {e}")
+                    return None
+
+            def _process_single(path: Path):
+                file_path = str(path)
+                basename = path.name
+                reasons = []
+                is_bad = False
+
+                # 1) ASTAP 解算（内部自动跳过已有WCS的文件）
+                try:
+                    astap_ok = astap_processor.process_fits_file(file_path)
+                    if not astap_ok:
+                        reasons.append("ASTAP失败")
+                        is_bad = True
+                except Exception as e:
+                    self._log(f"[预处理] ASTAP处理异常 {file_path}: {e}")
+                    reasons.append("ASTAP异常")
+                    is_bad = True
+
+                # 2) 质量评估（FWHM、椭圆度）
+                fwhm = np.nan
+                ellip = np.nan
+                lm_val = None
+                try:
+                    with fits.open(file_path) as hdul:
+                        data = hdul[0].data
+                    if data is not None:
+                        image = data.astype(np.float64)
+                        metrics = quality_analyzer.calculate_quality_metrics(image)
+                        if metrics:
+                            fwhm = float(metrics.get("fwhm", np.nan))
+                            ellip = float(metrics.get("ellipticity", np.nan))
+                            lm_val = metrics.get("lm5sig")
+                except Exception as e:
+                    self._log(f"[预处理] 质量分析失败 {file_path}: {e}")
+
+                # 3) 从 .check.fits 计算限制星等（如有），优先使用
+                lm_from_check = _compute_lm5sig(path)
+                if lm_from_check is not None:
+                    lm_val = lm_from_check
+
+                # 4) 根据阈值判断
+                if lm_val is None or not (isinstance(lm_val, (int, float)) and math.isfinite(lm_val)):
+                    reasons.append("LM未知")
+                    is_bad = True
+                elif lm_val < lm_thres:
+                    reasons.append(f"LM5SIG={lm_val:.2f}<{lm_thres}")
+                    is_bad = True
+
+                if not (isinstance(fwhm, (int, float)) and math.isfinite(fwhm)) or fwhm > fwhm_thres:
+                    reasons.append(f"FWHM={fwhm}")
+                    is_bad = True
+                if not (isinstance(ellip, (int, float)) and math.isfinite(ellip)) or ellip > ell_thres:
+                    reasons.append(f"ELL={ellip}")
+                    is_bad = True
+
+                # 5) 移动到 bad_img
+                if is_bad:
+                    try:
+                        dest = os.path.join(bad_dir, basename)
+                        shutil.move(file_path, dest)
+                        self._log(f"[预处理] 移动到 bad_img: {basename} ({'; '.join(reasons)})")
+                    except Exception as e:
+                        self._log(f"[预处理] 移动坏图像失败 {file_path}: {e}")
+
+                # 6) 更新进度
+                with lock:
+                    counters["processed"] += 1
+                    if is_bad:
+                        counters["bad"] += 1
+                    processed = counters["processed"]
+                    bad = counters["bad"]
+
+                status = "BAD" if is_bad else "OK"
+                color = "orange" if is_bad else "green"
+                text = f"预处理: ({processed}/{total}) {basename} -> {status}，坏图像 {bad} 张"
+                self._template_update_status_after(text, color)
+
+            max_workers = min(4, os.cpu_count() or 1)
+            self._template_update_status_after(
+                f"开始预处理 {total} 个FITS文件（ASTAP多线程 + 质量筛选）...", "blue"
+            )
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                executor.map(_process_single, fits_files)
+
+            bad = counters["bad"]
+            self._template_update_status_after(
+                f"预处理完成：共处理 {total} 个文件，坏图像 {bad} 个（已移动到 templates_update/bad_img）",
+                "green",
+            )
+        except Exception as e:
+            self._template_update_status_after(f"预处理出错: {e}", "red")
 
 
     def _make_problem_templates(self):
