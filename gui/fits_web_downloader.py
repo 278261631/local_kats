@@ -1131,6 +1131,14 @@ class FitsWebDownloaderGUI:
                     self._log(f"[模板生成] 无法解析天区编号: {k_number}-{suffix}")
                     continue
 
+                # 如果输出目录中该模板已存在，则直接跳过
+                field_name = f"K{k_region:03d}-{k_index}"
+                temp_name = f"{field_name}.fits"
+                existing_temp_path = Path(output_root) / temp_name
+                if existing_temp_path.exists():
+                    self._log(f"[模板生成] 已存在输出模板 {system_upper} {k_full} -> {existing_temp_path}，跳过。")
+                    continue
+
                 pattern = k_full.lower()
                 fits_files = []
                 for ext in ("*.fits", "*.fit", "*.fts"):
