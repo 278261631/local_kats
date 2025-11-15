@@ -761,6 +761,12 @@ class FitsWebDownloaderGUI:
         self.problem_min_images_var = tk.IntVar(value=30)
         min_images_spin = ttk.Spinbox(update_frame, from_=1, to=999, textvariable=self.problem_min_images_var, width=5)
         min_images_spin.grid(row=2, column=1, sticky=tk.W)
+        # 重投影线程数
+        ttk.Label(update_frame, text="重投影线程数:").grid(row=2, column=2, sticky=tk.W, padx=(10, 5), pady=5)
+        self.problem_reproject_threads_var = tk.IntVar(value=10)
+        threads_spin = ttk.Spinbox(update_frame, from_=1, to=64, textvariable=self.problem_reproject_threads_var, width=5)
+        threads_spin.grid(row=2, column=3, sticky=tk.W)
+
 
         # 下载/生成按钮和状态
         ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=3, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 5))
@@ -1103,6 +1109,14 @@ class FitsWebDownloaderGUI:
             if min_images < 1:
                 min_images = 1
 
+            # 重投影线程数设置
+            try:
+                parallel_threads = int(self.problem_reproject_threads_var.get())
+            except Exception:
+                parallel_threads = 10
+            if parallel_threads < 1:
+                parallel_threads = 1
+
             for idx, item in enumerate(selected, 1):
                 k_number = item.get("k_number")
                 suffix = item.get("suffix")
@@ -1134,6 +1148,7 @@ class FitsWebDownloaderGUI:
                 )
 
                 try:
+                    start_time = time.time()
                     # 收集具有天球WCS的HDU，出问题的文件逐个跳过
                     hdu_list = []
                     used_files = []
@@ -1186,6 +1201,7 @@ class FitsWebDownloaderGUI:
                         reproject_function=reproject.reproject_interp,
                         combine_function="mean",
                         match_background=True,
+                        parallel=parallel_threads,
                     )
 
                     # 只保留所有图像都覆盖的位置，其它位置设为NaN，并转为 float32 以兼容旧程序
@@ -1226,10 +1242,12 @@ class FitsWebDownloaderGUI:
 
                     fits.writeto(temp_path, trimmed_data, header, overwrite=True)
 
+                    elapsed = time.time() - start_time
+                    self._log(f"[模板生成] 完成 {system_upper} {k_full} -> {temp_path}，用时 {elapsed:.1f} 秒")
+
                     made += 1
-                    self._log(f"[模板生成] 完成 {system_upper} {k_full} -> {temp_path}")
                     self._template_update_status_after(
-                        f"模板生成: ({idx}/{total_templates}) {system_upper} {k_full} -> {temp_path.name}",
+                        f"模板生成: ({idx}/{total_templates}) {system_upper} {k_full} -> {temp_path.name} ({elapsed:.1f}s)",
                         "green",
                     )
                 except Exception as e:
