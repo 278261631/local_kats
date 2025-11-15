@@ -763,16 +763,17 @@ class FitsWebDownloaderGUI:
         min_images_spin.grid(row=2, column=1, sticky=tk.W)
 
         # 下载/生成按钮和状态
-        ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=3, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 8))
-        ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=3, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 8))
+        ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=3, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 5))
+        ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=3, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 5))
         self.template_update_status = ttk.Label(update_frame, text="就绪")
-        self.template_update_status.grid(row=3, column=2, columnspan=2, sticky=tk.W)
+        self.template_update_status.grid(row=3, column=2, columnspan=2, sticky=tk.W, padx=(5, 5))
 
+        # 说明文本单独放在第4行，避免被遮挡
         ttk.Label(
             update_frame,
             text="说明：从 gui/templates_update/fits_check_report.txt 读取问题模板，按 gy1_region_index.json 查找最近日期并下载相应观测文件。",
             foreground="gray"
-        ).grid(row=3, column=0, columnspan=4, sticky=tk.W, padx=(10, 5), pady=(0, 8))
+        ).grid(row=4, column=0, columnspan=4, sticky=tk.W, padx=(10, 5), pady=(5, 8))
 
     def _open_calendar(self, var: tk.StringVar, title: str):
         try:
