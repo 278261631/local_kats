@@ -767,6 +767,11 @@ class FitsWebDownloaderGUI:
         self.problem_reproject_threads_var = tk.IntVar(value=10)
         threads_spin = ttk.Spinbox(update_frame, from_=1, to=64, textvariable=self.problem_reproject_threads_var, width=5)
         threads_spin.grid(row=2, column=3, sticky=tk.W)
+        # 预处理线程数
+        ttk.Label(update_frame, text="预处理线程数:").grid(row=2, column=4, sticky=tk.W, padx=(10, 5), pady=5)
+        self.problem_preprocess_threads_var = tk.IntVar(value=20)
+        preprocess_threads_spin = ttk.Spinbox(update_frame, from_=1, to=64, textvariable=self.problem_preprocess_threads_var, width=5)
+        preprocess_threads_spin.grid(row=2, column=5, sticky=tk.W)
 
 
         # 下载/生成按钮和状态
@@ -774,14 +779,14 @@ class FitsWebDownloaderGUI:
         ttk.Button(update_frame, text="预处理图像", command=self._preprocess_problem_images).grid(row=3, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 5))
         ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=3, column=2, sticky=tk.W, padx=(5, 5), pady=(8, 5))
         self.template_update_status = ttk.Label(update_frame, text="就绪")
-        self.template_update_status.grid(row=3, column=3, columnspan=2, sticky=tk.W, padx=(5, 5))
+        self.template_update_status.grid(row=3, column=3, columnspan=3, sticky=tk.W, padx=(5, 5))
 
         # 说明文本单独放在第4行，避免被遮挡
         ttk.Label(
             update_frame,
             text="说明：从 gui/templates_update/fits_check_report.txt 读取问题模板，按 gy1_region_index.json 查找最近日期并下载相应观测文件。",
             foreground="gray"
-        ).grid(row=4, column=0, columnspan=4, sticky=tk.W, padx=(10, 5), pady=(5, 8))
+        ).grid(row=4, column=0, columnspan=6, sticky=tk.W, padx=(10, 5), pady=(5, 8))
 
     def _open_calendar(self, var: tk.StringVar, title: str):
         try:
@@ -1214,7 +1219,12 @@ class FitsWebDownloaderGUI:
                 text = f"预处理: ({processed}/{total}) {basename} -> {status}，坏图像 {bad} 张"
                 self._template_update_status_after(text, color)
 
-            max_workers = min(4, os.cpu_count() or 1)
+            try:
+                max_workers = int(self.problem_preprocess_threads_var.get())
+            except Exception:
+                max_workers = 20
+            if max_workers < 1:
+                max_workers = 1
             self._template_update_status_after(
                 f"开始预处理 {total} 个FITS文件（ASTAP多线程 + 质量筛选）...", "blue"
             )
