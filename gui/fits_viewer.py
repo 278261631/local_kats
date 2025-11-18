@@ -3834,12 +3834,13 @@ class FitsImageViewer:
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
     def _export_ai_training_data(self):
-        """将当前选择目录/文件下所有手工标记为 GOOD/BAD 的 detection 图像导出到配置的AI训练根目录。
+        """将当前选择目录/文件下所有手工标记为 GOOD/BAD 的目标对应的 reference/aligned 图像导出到配置的AI训练根目录。
 
         导出规则：
         - 仅导出手工标记 manual_label 为 'good' 或 'bad' 的目标；
-        - 分别保存到 <根目录>/good 和 <根目录>/bad；
-        - 文件名采用 "<FITS文件名去扩展>_<原detection文件名>"，如有重名则自动追加序号。
+        - *成对*导出 cutout 的 "*_1_reference.png" 和 "*_2_aligned.png" 两张图；
+        - GOOD/BAD 分别保存到 <根目录>/good 和 <根目录>/bad；
+        - 输出文件名采用 "<FITS文件名去扩展>_<原文件名>", 如有重名则自动追加序号。
         """
         try:
             # 1. 读取配置中的导出根目录
@@ -3898,12 +3899,12 @@ class FitsImageViewer:
                 messagebox.showinfo("提示", "所选目录下没有FITS文件")
                 return
 
-            # 4. 遍历文件，加载diff结果并导出 GOOD/BAD detection 图像
+            # 4. 遍历文件，加载diff结果并导出 GOOD/BAD 的 reference/aligned 图像
             import shutil
 
             total_files = len(file_nodes)
-            exported_good = 0
-            exported_bad = 0
+            exported_good_pairs = 0
+            exported_bad_pairs = 0
             processed_files = 0
 
             self.logger.info("=" * 60)
@@ -3937,8 +3938,11 @@ class FitsImageViewer:
                         if label_lower not in ("good", "bad"):
                             continue
 
-                        detection_img = (cutout_set or {}).get("detection")
-                        if not detection_img or not os.path.exists(detection_img):
+                        # 只导出 reference/aligned 两张图
+                        ref_img = (cutout_set or {}).get("reference")
+                        aligned_img = (cutout_set or {}).get("aligned")
+                        if (not ref_img or not os.path.exists(ref_img) or
+                                not aligned_img or not os.path.exists(aligned_img)):
                             continue
 
                         subdir = "good" if label_lower == "good" else "bad"
@@ -3948,26 +3952,33 @@ class FitsImageViewer:
                         except Exception:
                             continue
 
-                        src_name = os.path.basename(detection_img)
-                        base_name = f"{fits_basename}_{src_name}"
-                        dst_path = os.path.join(dest_dir, base_name)
+                        def _copy_with_prefix(src_path: str) -> bool:
+                            """以 fits_basename 为前缀复制单个文件，处理重名，成功返回 True。"""
+                            src_name = os.path.basename(src_path)
+                            base_name = f"{fits_basename}_{src_name}"
+                            dst_path = os.path.join(dest_dir, base_name)
 
-                        # 避免文件名冲突，必要时追加序号
-                        if os.path.exists(dst_path):
-                            root_name, ext = os.path.splitext(base_name)
-                            idx = 1
-                            while os.path.exists(os.path.join(dest_dir, f"{root_name}_{idx}{ext}")):
-                                idx += 1
-                            dst_path = os.path.join(dest_dir, f"{root_name}_{idx}{ext}")
+                            if os.path.exists(dst_path):
+                                root_name, ext = os.path.splitext(base_name)
+                                idx = 1
+                                while os.path.exists(os.path.join(dest_dir, f"{root_name}_{idx}{ext}")):
+                                    idx += 1
+                                dst_path = os.path.join(dest_dir, f"{root_name}_{idx}{ext}")
 
-                        try:
-                            shutil.copy2(detection_img, dst_path)
+                            try:
+                                shutil.copy2(src_path, dst_path)
+                                return True
+                            except Exception as e:
+                                self.logger.warning(f"复制图像失败: {src_path} -> {dst_path}, 错误: {e}")
+                                return False
+
+                        ok_ref = _copy_with_prefix(ref_img)
+                        ok_aligned = _copy_with_prefix(aligned_img)
+                        if ok_ref and ok_aligned:
                             if label_lower == "good":
-                                exported_good += 1
+                                exported_good_pairs += 1
                             else:
-                                exported_bad += 1
-                        except Exception as e:
-                            self.logger.warning(f"复制检测图像失败: {detection_img} -> {dst_path}, 错误: {e}")
+                                exported_bad_pairs += 1
 
                     processed_files += 1
 
@@ -3978,13 +3989,16 @@ class FitsImageViewer:
             msg = (
                 f"导出完成！\n\n"
                 f"处理FITS文件数: {processed_files} / {total_files}\n"
-                f"GOOD 图像: {exported_good}\n"
-                f"BAD 图像: {exported_bad}\n\n"
+                f"GOOD 样本(对，ref+aligned): {exported_good_pairs}\n"
+                f"BAD 样本(对，ref+aligned): {exported_bad_pairs}\n\n"
                 f"导出根目录: {export_root}"
             )
             messagebox.showinfo("导出AI训练数据", msg)
             self.logger.info("=" * 60)
-            self.logger.info(f"AI训练数据导出完成: GOOD={exported_good}, BAD={exported_bad}, 文件数={processed_files}")
+            self.logger.info(
+                f"AI训练数据导出完成: GOOD_pairs={exported_good_pairs}, "
+                f"BAD_pairs={exported_bad_pairs}, 文件数={processed_files}"
+            )
 
         except Exception as e:
             err = f"导出AI训练数据失败: {str(e)}"
