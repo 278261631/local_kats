@@ -2171,7 +2171,10 @@ class FitsImageViewer:
 
             # 如果是下载目录的文件，自动检查并加载diff结果
             if is_download_file:
-                self._auto_load_diff_results(file_path)
+                # 若当前是通过“下一个 GOOD/BAD/SUSPECT/FALSE/ERROR”自动跳转，则已经手动加载了diff结果，
+                # 这里不再调用 _auto_load_diff_results，避免覆盖目标cutout的位置。
+                if not getattr(self, '_jumping_to_labeled_next', False):
+                    self._auto_load_diff_results(file_path)
             else:
                 # 模板文件或非下载文件：不应显示上一文件的检测结果，清空显示
                 try:
@@ -6578,12 +6581,19 @@ class FitsImageViewer:
                 # 在该文件中查找第一个匹配的标记
                 for cutout_idx, cutout_set in enumerate(self._all_cutout_sets):
                     if _match_label(cutout_set):
-                        # 在目录树中选中该文件节点
+                        # 在目录树中选中该文件节点（程序自动选择）
                         self._auto_selecting = True
+                        # 标记当前是通过“下一个 GOOD/BAD/SUSPECT/FALSE/ERROR”跳转，用于在 _on_tree_select 中抑制自动加载首个cutout
+                        self._jumping_to_labeled_next = True
                         self.directory_tree.selection_set(node)
                         self.directory_tree.focus(node)
                         self.directory_tree.see(node)
-                        self.parent_frame.after(10, lambda: setattr(self, '_auto_selecting', False))
+
+                        def _clear_auto_select_flags():
+                            setattr(self, '_auto_selecting', False)
+                            setattr(self, '_jumping_to_labeled_next', False)
+
+                        self.parent_frame.after(10, _clear_auto_select_flags)
 
                         # 更新当前文件路径并显示对应cutout
                         self.selected_file_path = file_path
