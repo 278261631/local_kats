@@ -368,9 +368,30 @@ class FitsWebDownloaderGUI:
 
     def _create_advanced_settings_widgets(self):
         """创建高级设置界面"""
-        # 创建主容器
-        main_container = ttk.Frame(self.advanced_settings_frame)
-        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        # 创建主容器（带滚动条）
+        outer_frame = ttk.Frame(self.advanced_settings_frame)
+        outer_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # Canvas + Scrollbar 组成可滚动区域
+        canvas = tk.Canvas(outer_frame, borderwidth=0, highlightthickness=0)
+        v_scrollbar = ttk.Scrollbar(outer_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=v_scrollbar.set)
+
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 在 Canvas 中创建真正的内容容器
+        inner_frame = ttk.Frame(canvas)
+        canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+
+        # 根据内容自动调整滚动区域
+        def _on_inner_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        inner_frame.bind("<Configure>", _on_inner_configure)
+
+        # 将内部容器作为 main_container 使用
+        main_container = inner_frame
 
         # 标题
         title_label = ttk.Label(main_container, text="高级设置", font=("Arial", 14, "bold"))
@@ -386,6 +407,11 @@ class FitsWebDownloaderGUI:
         # 创建设置区域
         settings_container = ttk.Frame(main_container)
         settings_container.pack(fill=tk.BOTH, expand=True)
+        # AI训练导出根目录变量
+        if not hasattr(self, 'ai_export_root_var'):
+            self.ai_export_root_var = tk.StringVar()
+
+
 
         # 第一行：降噪方式和去除亮线
         row1_frame = ttk.LabelFrame(settings_container, text="降噪设置", padding=10)
@@ -668,6 +694,25 @@ class FitsWebDownloaderGUI:
         ttk.Button(local_catalog_frame, text="保存H上限", command=self._save_mpc_h_limit).grid(row=2, column=2, sticky=tk.W, pady=(5, 0))
         self.mpc_h_status_label = ttk.Label(local_catalog_frame, text=f"当前H上限: {current_h}")
         self.mpc_h_status_label.grid(row=2, column=3, sticky=tk.W, padx=(10, 0), pady=(5, 0))
+
+        # AI训练数据导出设置
+        ai_export_frame = ttk.LabelFrame(settings_container, text="AI训练数据导出", padding=10)
+        ai_export_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(ai_export_frame, text="AI训练导出根目录:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        ai_export_entry = ttk.Entry(ai_export_frame, textvariable=self.ai_export_root_var, width=50)
+        ai_export_entry.grid(row=0, column=1, sticky=tk.W, padx=(5, 5))
+
+        ttk.Button(ai_export_frame, text="选择目录", command=self._select_ai_training_export_root).grid(
+            row=0, column=2, sticky=tk.W, padx=(5, 0)
+        )
+
+        ttk.Label(
+            ai_export_frame,
+            text="说明：用于导出当前选择目录下所有标记为 GOOD/BAD 的检测cutout，用于AI训练。",
+            foreground="gray"
+        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(5, 0))
+
 
         # 星历文件选择
         ttk.Button(local_catalog_frame, text="选择星历文件(.bsp)", command=self._update_ephemeris_file).grid(row=3, column=0, sticky=tk.W, pady=(5, 0))
@@ -1853,6 +1898,11 @@ class FitsWebDownloaderGUI:
                 detected_dir = os.path.join(diff_output_dir, "detected")
                 self.detected_dir_var.set(detected_dir)
 
+            # 加载AI训练数据导出根目录
+            ai_export_root = last_selected.get("ai_training_export_root", "")
+            if ai_export_root and hasattr(self, "ai_export_root_var"):
+                self.ai_export_root_var.set(ai_export_root)
+
             # 加载自动链设置
             try:
                 auto_settings = self.config_manager.get_automation_settings()
@@ -2265,6 +2315,23 @@ class FitsWebDownloaderGUI:
             self._log(f"未查询导出目录已设置: {directory}")
             self._log(f"未查询检测结果将导出到: {directory}/系统名/日期/天区/文件名/detection_xxx/")
             self._log(f"此目录也将用于OSS上传")
+
+    def _select_ai_training_export_root(self):
+        """选择AI训练数据导出根目录"""
+        # 获取当前目录作为初始目录
+        current_dir = self.ai_export_root_var.get()
+        initial_dir = current_dir if current_dir and os.path.exists(current_dir) else os.path.expanduser("~")
+
+        directory = filedialog.askdirectory(title="选择AI训练导出根目录", initialdir=initial_dir)
+        if directory:
+            self.ai_export_root_var.set(directory)
+            if self.config_manager:
+                # 保存到配置的 last_selected 中
+                self.config_manager.update_last_selected(ai_training_export_root=directory)
+            self._log(f"AI训练导出根目录已设置: {directory}")
+            self._log("导出AI训练数据时，GOOD/BAD 图像将分别保存到该目录下的子目录中。")
+
+
 
     def _get_selected_files(self):
         """获取选中的文件"""

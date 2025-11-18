@@ -56,7 +56,8 @@ class ConfigManager:
                 "template_directory": "",
                 "diff_output_directory": "",
                 "detected_directory": "",
-                "unqueried_export_directory": ""
+                "unqueried_export_directory": "",
+                "ai_training_export_root": ""
             },
             "download_settings": {
                 "max_workers": 1,

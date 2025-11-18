@@ -344,55 +344,7 @@ class FitsImageViewer:
                                                          command=self._on_flip_dss_config_changed)
         self.flip_dss_horizontal_check.pack(side=tk.LEFT, padx=(0, 0))
 
-        # 检测结果人工标记与跳转
-        ttk.Label(toolbar_frame3, text="  |  ").pack(side=tk.LEFT, padx=(10, 5))
-
-        self.cutout_label_var = tk.StringVar(value="状态: 未标记")
-        self.cutout_label = ttk.Label(toolbar_frame3, textvariable=self.cutout_label_var, foreground="purple")
-        self.cutout_label.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.mark_good_button = ttk.Button(
-            toolbar_frame3, text="标记 GOOD (1)",
-            command=self._mark_detection_good, state="disabled"
-        )
-        self.mark_good_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.mark_bad_button = ttk.Button(
-            toolbar_frame3, text="标记 BAD (2)",
-            command=self._mark_detection_bad, state="disabled"
-        )
-        self.mark_bad_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        # 下一个 GOOD/BAD/SUSPECT/FALSE/ERROR 始终保持可点击，不随cutout加载状态禁用
-        self.next_good_button = ttk.Button(
-            toolbar_frame3, text="下一个 GOOD (3)",
-            command=self._jump_to_next_good
-        )
-        self.next_good_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.next_bad_button = ttk.Button(
-            toolbar_frame3, text="下一个 BAD (4)",
-            command=self._jump_to_next_bad
-        )
-        self.next_bad_button.pack(side=tk.LEFT, padx=(0, 0))
-
-        self.next_suspect_button = ttk.Button(
-            toolbar_frame3, text="下一个 SUSPECT (5)",
-            command=self._jump_to_next_suspect
-        )
-        self.next_suspect_button.pack(side=tk.LEFT, padx=(5, 0))
-
-        self.next_false_button = ttk.Button(
-            toolbar_frame3, text="下一个 FALSE (6)",
-            command=self._jump_to_next_false
-        )
-        self.next_false_button.pack(side=tk.LEFT, padx=(5, 0))
-
-        self.next_error_button = ttk.Button(
-            toolbar_frame3, text="下一个 ERROR (7)",
-            command=self._jump_to_next_error
-        )
-        self.next_error_button.pack(side=tk.LEFT, padx=(5, 0))
+        # 检测结果人工标记与跳转控件已移动到右侧控制面板（保存图像按钮下一行）
 
         # 坐标显示区域（第四行工具栏）
         toolbar_frame4 = ttk.Frame(toolbar_container)
@@ -581,7 +533,7 @@ class FitsImageViewer:
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 5))
         left_frame.configure(width=300)  # 固定宽度
 
-        # 刷新按钮
+        # 刷新/跳转/导出按钮
         refresh_frame = ttk.Frame(left_frame)
         refresh_frame.pack(fill=tk.X, pady=(0, 5))
 
@@ -589,6 +541,7 @@ class FitsImageViewer:
         ttk.Button(refresh_frame, text="跳转高分", command=self._jump_to_next_high_score).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="跳转未查询 (g)", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="批量导出未查询", command=self._batch_export_unqueried).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(refresh_frame, text="导出AI训练数据", command=self._export_ai_training_data).pack(side=tk.LEFT, padx=(5, 0))
 
 
         # 创建目录树
@@ -621,8 +574,8 @@ class FitsImageViewer:
         right_frame = ttk.Frame(parent)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # 创建图像显示区域 - 减小高度以确保控制按钮可见
-        self.figure = Figure(figsize=(8, 5), dpi=100)
+        # 创建图像显示区域 - 进一步减小高度，给下方 GOOD/BAD 按钮留出空间
+        self.figure = Figure(figsize=(8, 4), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.figure, right_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
@@ -692,6 +645,59 @@ class FitsImageViewer:
                                               command=self._open_last_output_directory,
                                               state="disabled")
         self.open_output_dir_btn.pack(side=tk.LEFT, padx=(0, 0))
+
+        # 第三行控制面板：检测结果状态与人工标记/跳转
+        control_frame3 = ttk.Frame(control_container)
+        control_frame3.pack(fill=tk.X, pady=(2, 0))
+
+        # 状态显示
+        self.cutout_label_var = tk.StringVar(value="状态: 未标记")
+        self.cutout_label = ttk.Label(control_frame3, textvariable=self.cutout_label_var, foreground="purple")
+        self.cutout_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 标记 GOOD/BAD 按钮
+        self.mark_good_button = ttk.Button(
+            control_frame3, text="标记 GOOD (1)",
+            command=self._mark_detection_good, state="disabled"
+        )
+        self.mark_good_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        self.mark_bad_button = ttk.Button(
+            control_frame3, text="标记 BAD (2)",
+            command=self._mark_detection_bad, state="disabled"
+        )
+        self.mark_bad_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        # 下一个 GOOD/BAD/SUSPECT/FALSE/ERROR 始终保持可点击，不随cutout加载状态禁用
+        self.next_good_button = ttk.Button(
+            control_frame3, text="下一个 GOOD (3)",
+            command=self._jump_to_next_good
+        )
+        self.next_good_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.next_bad_button = ttk.Button(
+            control_frame3, text="下一个 BAD (4)",
+            command=self._jump_to_next_bad
+        )
+        self.next_bad_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.next_suspect_button = ttk.Button(
+            control_frame3, text="下一个 SUSPECT (5)",
+            command=self._jump_to_next_suspect
+        )
+        self.next_suspect_button.pack(side=tk.LEFT, padx=(10, 5))
+
+        self.next_false_button = ttk.Button(
+            control_frame3, text="下一个 FALSE (6)",
+            command=self._jump_to_next_false
+        )
+        self.next_false_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        self.next_error_button = ttk.Button(
+            control_frame3, text="下一个 ERROR (7)",
+            command=self._jump_to_next_error
+        )
+        self.next_error_button.pack(side=tk.LEFT, padx=(5, 0))
 
     def _load_batch_settings(self):
         """从配置文件加载批量处理参数到控件"""
@@ -3827,6 +3833,165 @@ class FitsImageViewer:
             error_msg = f"批量导出失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
+    def _export_ai_training_data(self):
+        """将当前选择目录/文件下所有手工标记为 GOOD/BAD 的 detection 图像导出到配置的AI训练根目录。
+
+        导出规则：
+        - 仅导出手工标记 manual_label 为 'good' 或 'bad' 的目标；
+        - 分别保存到 <根目录>/good 和 <根目录>/bad；
+        - 文件名采用 "<FITS文件名去扩展>_<原detection文件名>"，如有重名则自动追加序号。
+        """
+        try:
+            # 1. 读取配置中的导出根目录
+            if not self.config_manager:
+                messagebox.showerror("错误", "配置管理器未初始化")
+                return
+
+            last_selected = self.config_manager.get_last_selected()
+            export_root = (last_selected or {}).get("ai_training_export_root", "").strip()
+            if not export_root:
+                messagebox.showwarning(
+                    "警告",
+                    "未设置AI训练导出根目录\n请在【高级设置】中设置 'AI训练导出根目录' 后再尝试导出。",
+                )
+                return
+
+            # 确保根目录存在
+            try:
+                os.makedirs(export_root, exist_ok=True)
+            except Exception as e:
+                messagebox.showerror("错误", f"无法创建AI训练导出根目录: {export_root}\n{str(e)}")
+                return
+
+            # 2. 获取当前目录树选择
+            selection = self.directory_tree.selection()
+            if not selection:
+                messagebox.showwarning("警告", "请先在左侧目录树选择一个目录或文件")
+                return
+
+            root_node = selection[0]
+            root_tags = self.directory_tree.item(root_node, "tags")
+            root_values = self.directory_tree.item(root_node, "values")
+            if not root_values and "fits_file" not in root_tags:
+                messagebox.showwarning("警告", "请选择一个包含FITS文件的目录或FITS文件节点")
+                return
+
+            # 3. 收集该节点下的所有FITS文件节点
+            file_nodes = []
+
+            def collect_file_nodes(node):
+                for child in self.directory_tree.get_children(node):
+                    tags_child = self.directory_tree.item(child, "tags")
+                    if "fits_file" in tags_child:
+                        file_nodes.append(child)
+                    else:
+                        # 仅在目录节点中递归
+                        if any(tag in tags_child for tag in ["region", "date", "telescope", "root_dir", "template_dir"]):
+                            collect_file_nodes(child)
+
+            if "fits_file" in root_tags:
+                file_nodes.append(root_node)
+            else:
+                collect_file_nodes(root_node)
+
+            if not file_nodes:
+                messagebox.showinfo("提示", "所选目录下没有FITS文件")
+                return
+
+            # 4. 遍历文件，加载diff结果并导出 GOOD/BAD detection 图像
+            import shutil
+
+            total_files = len(file_nodes)
+            exported_good = 0
+            exported_bad = 0
+            processed_files = 0
+
+            self.logger.info("=" * 60)
+            self.logger.info(f"开始导出AI训练数据：文件数={total_files}，根目录={export_root}")
+
+            for file_node in file_nodes:
+                try:
+                    values = self.directory_tree.item(file_node, "values")
+                    if not values:
+                        continue
+                    file_path = values[0]
+                    if not os.path.isfile(file_path):
+                        continue
+
+                    region_dir = os.path.dirname(file_path)
+
+                    # 为该文件加载diff结果（包括手工GOOD/BAD标记）
+                    if not self._load_diff_results_for_file(file_path, region_dir):
+                        continue
+
+                    if not hasattr(self, "_all_cutout_sets") or not self._all_cutout_sets:
+                        continue
+
+                    fits_basename = os.path.splitext(os.path.basename(file_path))[0]
+
+                    for cutout_set in self._all_cutout_sets:
+                        label = (cutout_set or {}).get("manual_label")
+                        if not label:
+                            continue
+                        label_lower = str(label).lower()
+                        if label_lower not in ("good", "bad"):
+                            continue
+
+                        detection_img = (cutout_set or {}).get("detection")
+                        if not detection_img or not os.path.exists(detection_img):
+                            continue
+
+                        subdir = "good" if label_lower == "good" else "bad"
+                        dest_dir = os.path.join(export_root, subdir)
+                        try:
+                            os.makedirs(dest_dir, exist_ok=True)
+                        except Exception:
+                            continue
+
+                        src_name = os.path.basename(detection_img)
+                        base_name = f"{fits_basename}_{src_name}"
+                        dst_path = os.path.join(dest_dir, base_name)
+
+                        # 避免文件名冲突，必要时追加序号
+                        if os.path.exists(dst_path):
+                            root_name, ext = os.path.splitext(base_name)
+                            idx = 1
+                            while os.path.exists(os.path.join(dest_dir, f"{root_name}_{idx}{ext}")):
+                                idx += 1
+                            dst_path = os.path.join(dest_dir, f"{root_name}_{idx}{ext}")
+
+                        try:
+                            shutil.copy2(detection_img, dst_path)
+                            if label_lower == "good":
+                                exported_good += 1
+                            else:
+                                exported_bad += 1
+                        except Exception as e:
+                            self.logger.warning(f"复制检测图像失败: {detection_img} -> {dst_path}, 错误: {e}")
+
+                    processed_files += 1
+
+                except Exception as e:
+                    self.logger.error(f"导出AI训练数据时处理文件失败: {e}", exc_info=True)
+
+            # 5. 导出完成提示
+            msg = (
+                f"导出完成！\n\n"
+                f"处理FITS文件数: {processed_files} / {total_files}\n"
+                f"GOOD 图像: {exported_good}\n"
+                f"BAD 图像: {exported_bad}\n\n"
+                f"导出根目录: {export_root}"
+            )
+            messagebox.showinfo("导出AI训练数据", msg)
+            self.logger.info("=" * 60)
+            self.logger.info(f"AI训练数据导出完成: GOOD={exported_good}, BAD={exported_bad}, 文件数={processed_files}")
+
+        except Exception as e:
+            err = f"导出AI训练数据失败: {str(e)}"
+            self.logger.error(err, exc_info=True)
+            messagebox.showerror("错误", err)
+
+
 
     def _has_line_through_center(self, image_path, distance_threshold=50):
         """使用 detect_center_lines 的方法和默认参数判断是否存在过中心直线。
