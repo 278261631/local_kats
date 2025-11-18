@@ -363,15 +363,16 @@ class FitsImageViewer:
         )
         self.mark_bad_button.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 下一个 GOOD/BAD 始终保持可点击，不随cutout加载状态禁用
         self.next_good_button = ttk.Button(
             toolbar_frame3, text="下一个 GOOD (3)",
-            command=self._jump_to_next_good, state="disabled"
+            command=self._jump_to_next_good
         )
         self.next_good_button.pack(side=tk.LEFT, padx=(0, 5))
 
         self.next_bad_button = ttk.Button(
             toolbar_frame3, text="下一个 BAD (4)",
-            command=self._jump_to_next_bad, state="disabled"
+            command=self._jump_to_next_bad
         )
         self.next_bad_button.pack(side=tk.LEFT, padx=(0, 0))
 
@@ -5115,15 +5116,11 @@ class FitsImageViewer:
         if hasattr(self, 'save_detection_button'):
             self.save_detection_button.config(state="disabled")
 
-        # 禁用人工标记与跳转按钮，并重置状态显示
+        # 禁用人工标记按钮，并重置状态显示；"下一个 GOOD/BAD" 始终保持可点击
         if hasattr(self, 'mark_good_button'):
             self.mark_good_button.config(state="disabled")
         if hasattr(self, 'mark_bad_button'):
             self.mark_bad_button.config(state="disabled")
-        if hasattr(self, 'next_good_button'):
-            self.next_good_button.config(state="disabled")
-        if hasattr(self, 'next_bad_button'):
-            self.next_bad_button.config(state="disabled")
         if hasattr(self, 'cutout_label_var'):
             self.cutout_label_var.set("状态: 未标记")
 
@@ -5365,6 +5362,13 @@ class FitsImageViewer:
             for idx, cutout_set in enumerate(self._all_cutout_sets):
                 self._load_query_results_from_file(cutout_set, idx)
 
+            # 从 aligned_comparison_*.txt 加载 GOOD/BAD 手工标记
+            try:
+                self._load_manual_labels_for_current_detection_dir(detection_dir)
+            except Exception:
+                # 读取手工标记失败不影响正常浏览
+                pass
+
             # 检查是否需要自动启用中心距离过滤
             self._check_auto_enable_center_distance_filter()
 
@@ -5486,6 +5490,67 @@ class FitsImageViewer:
                 self.logger.error(f"写入 {aligned_txt_path} 失败: {e}")
         except Exception as e:
             self.logger.error(f"保存手动GOOD/BAD标记到 aligned_comparison 失败: {e}")
+
+    def _load_manual_labels_for_current_detection_dir(self, detection_dir):
+        """从 detection_* 目录下的 aligned_comparison_*.txt 读取 GOOD/BAD 标记填充到当前 cutout 集合。
+
+        detection_dir: detection_XXXX 目录的路径（字符串或 Path）。
+        """
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                return
+            if not detection_dir:
+                return
+
+            detection_dir = str(detection_dir)
+            if not os.path.isdir(detection_dir):
+                return
+
+            candidates = [
+                f for f in os.listdir(detection_dir)
+                if f.startswith("aligned_comparison_") and f.endswith(".txt")
+            ]
+            if not candidates:
+                return
+
+            aligned_txt_path = os.path.join(detection_dir, sorted(candidates)[0])
+
+            try:
+                with open(aligned_txt_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+            except Exception as e:
+                self.logger.error(f"读取 {aligned_txt_path} 失败(加载GOOD/BAD): {e}")
+                return
+
+            import re
+            for line in lines:
+                if "[GOOD]" not in line and "[BAD]" not in line:
+                    continue
+
+                label = 'good' if "[GOOD]" in line else 'bad'
+
+                idx = None
+                m = re.search(r"cutout\s*#\s*(\d+)", line, re.IGNORECASE)
+                if m:
+                    idx = int(m.group(1))
+                else:
+                    m = re.search(r"#\s*(\d+)\b", line)
+                    if m:
+                        idx = int(m.group(1))
+                    else:
+                        m = re.search(r"\b(\d+)\s*[:：]", line)
+                        if m:
+                            idx = int(m.group(1))
+
+                if idx is None:
+                    continue
+
+                zero_based = idx - 1
+                if 0 <= zero_based < len(self._all_cutout_sets):
+                    self._all_cutout_sets[zero_based]['manual_label'] = label
+        except Exception as e:
+            self.logger.error(f"从 aligned_comparison 加载GOOD/BAD标记失败: {e}")
+
 
     def _display_cutout_by_index(self, index):
         """
@@ -6094,52 +6159,135 @@ class FitsImageViewer:
             self.logger.error(f"标记检测结果为BAD失败: {e}")
 
     def _jump_to_next_good(self):
-        """跳转到下一个被标记为 GOOD 的检测结果"""
-        try:
-            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
-                messagebox.showinfo("提示", "没有检测结果")
-                return
-            if not hasattr(self, '_current_cutout_index'):
-                messagebox.showinfo("提示", "没有当前显示的检测结果")
-                return
-
-            start_index = self._current_cutout_index
-            total = len(self._all_cutout_sets)
-
-            for step in range(1, total + 1):
-                idx = (start_index + step) % total
-                cutout_set = self._all_cutout_sets[idx]
-                if cutout_set.get('manual_label') == 'good':
-                    self._display_cutout_by_index(idx)
-                    return
-
-            messagebox.showinfo("提示", "没有找到下一个标记为 GOOD 的检测结果")
-        except Exception as e:
-            self.logger.error(f"跳转到下一个GOOD失败: {e}")
+        """从目录树当前选中节点开始，向下单向查找下一个标记为 GOOD 的检测结果"""
+        self._jump_to_next_manual_label('good')
 
     def _jump_to_next_bad(self):
-        """跳转到下一个被标记为 BAD 的检测结果"""
+        """从目录树当前选中节点开始，向下单向查找下一个标记为 BAD 的检测结果"""
+        self._jump_to_next_manual_label('bad')
+
+    def _jump_to_next_manual_label(self, target_label: str):
+        """从左侧目录树的当前选中节点开始，按可见顺序向下单向查找下一个指定手工标记(GOOD/BAD)的检测结果。
+
+        - 起点：当前选中的目录树节点；如果没有选中，则从根节点开始。
+        - 顺序：目录树的先序遍历顺序（与用户看到的顺序一致），不循环。
+        - 行为：找到后选中文件节点并显示对应检测目标的 cutout。
+        """
         try:
-            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
-                messagebox.showinfo("提示", "没有检测结果")
-                return
-            if not hasattr(self, '_current_cutout_index'):
-                messagebox.showinfo("提示", "没有当前显示的检测结果")
+            if not hasattr(self, 'directory_tree'):
+                messagebox.showinfo("提示", "目录树未初始化")
                 return
 
-            start_index = self._current_cutout_index
-            total = len(self._all_cutout_sets)
+            # 构造整棵树的遍历顺序（与可见顺序一致）
+            order = []
 
-            for step in range(1, total + 1):
-                idx = (start_index + step) % total
-                cutout_set = self._all_cutout_sets[idx]
-                if cutout_set.get('manual_label') == 'bad':
-                    self._display_cutout_by_index(idx)
-                    return
+            def walk(parent):
+                for child in self.directory_tree.get_children(parent):
+                    order.append(child)
+                    walk(child)
 
-            messagebox.showinfo("提示", "没有找到下一个标记为 BAD 的检测结果")
+            for root in self.directory_tree.get_children(""):
+                order.append(root)
+                walk(root)
+
+            if not order:
+                messagebox.showinfo("提示", "目录树为空")
+                return
+
+            # 起始节点：当前选中，否则树的第一个根节点
+            selection = self.directory_tree.selection()
+            start_node = selection[0] if selection else order[0]
+
+            try:
+                start_index = order.index(start_node)
+            except ValueError:
+                start_index = 0
+
+            current_file_path = getattr(self, 'selected_file_path', None)
+            current_has_cutouts = hasattr(self, '_all_cutout_sets') and bool(self._all_cutout_sets)
+            current_index = getattr(self, '_current_cutout_index', -1)
+
+            # 辅助函数：从文件节点向上找到所属的天区目录(region)路径
+            def get_region_dir_for_node(node, file_path):
+                parent = self.directory_tree.parent(node)
+                while parent:
+                    tags_parent = self.directory_tree.item(parent, "tags")
+                    vals_parent = self.directory_tree.item(parent, "values")
+                    if "region" in tags_parent and vals_parent:
+                        return vals_parent[0]
+                    parent = self.directory_tree.parent(parent)
+                # 兜底：找不到region节点时，使用文件所在目录
+                return os.path.dirname(file_path)
+
+            # 1）如果当前选中的是文件节点，优先在该文件中从当前索引之后查找
+            if selection and "fits_file" in self.directory_tree.item(start_node, "tags"):
+                values = self.directory_tree.item(start_node, "values")
+                if values:
+                    start_file_path = values[0]
+                    if current_file_path and os.path.normpath(start_file_path) == os.path.normpath(current_file_path) and current_has_cutouts:
+                        start_cutout_idx = max(current_index + 1, 0)
+                        total = len(self._all_cutout_sets)
+                        for idx in range(start_cutout_idx, total):
+                            cutout_set = self._all_cutout_sets[idx]
+                            if cutout_set.get('manual_label') == target_label:
+                                self._display_cutout_by_index(idx)
+                                label_str = "GOOD" if target_label == 'good' else "BAD"
+                                self.logger.info(
+                                    f"跳转到下一个 {label_str}: {os.path.basename(current_file_path)} - 检测 #{idx + 1} (同一文件)"
+                                )
+                                return
+
+            # 2）从起始节点在树中向下查找后续文件
+            for idx_tree in range(start_index, len(order)):
+                node = order[idx_tree]
+                tags = self.directory_tree.item(node, "tags")
+
+                # 只处理FITS文件节点
+                if "fits_file" not in tags:
+                    continue
+
+                values = self.directory_tree.item(node, "values")
+                if not values:
+                    continue
+                file_path = values[0]
+
+                # 避免在同一调用中再次从当前文件开头搜索，防止“下一个”跳回前面的GOOD/BAD
+                if current_file_path and os.path.normpath(file_path) == os.path.normpath(current_file_path):
+                    continue
+
+                # 为该文件加载diff检测结果（包括GOOD/BAD手工标记）
+                region_dir = get_region_dir_for_node(node, file_path)
+                if not self._load_diff_results_for_file(file_path, region_dir):
+                    continue
+                if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                    continue
+
+                # 在该文件中查找第一个匹配的手工标记
+                for cutout_idx, cutout_set in enumerate(self._all_cutout_sets):
+                    if cutout_set.get('manual_label') == target_label:
+                        # 在目录树中选中该文件节点
+                        self._auto_selecting = True
+                        self.directory_tree.selection_set(node)
+                        self.directory_tree.focus(node)
+                        self.directory_tree.see(node)
+                        self.parent_frame.after(10, lambda: setattr(self, '_auto_selecting', False))
+
+                        # 更新当前文件路径并显示对应cutout
+                        self.selected_file_path = file_path
+                        self._display_cutout_by_index(cutout_idx)
+
+                        label_str = "GOOD" if target_label == 'good' else "BAD"
+                        self.logger.info(
+                            f"跳转到下一个 {label_str}: {os.path.basename(file_path)} - 检测 #{cutout_idx + 1}"
+                        )
+                        return
+
+            # 没有找到
+            label_str = "GOOD" if target_label == 'good' else "BAD"
+            messagebox.showinfo("提示", f"从当前节点开始，后续没有标记为 {label_str} 的检测结果")
         except Exception as e:
-            self.logger.error(f"跳转到下一个BAD失败: {e}")
+            label_str = "GOOD" if target_label == 'good' else "BAD"
+            self.logger.error(f"跳转到下一个{label_str}失败: {e}", exc_info=True)
 
 
     def _on_tree_left_key(self, event):
@@ -10867,7 +11015,8 @@ class FitsImageViewer:
                     'skybot_results': None,
                     'vsx_results': None,
                     'skybot_queried': False,
-                    'vsx_queried': False
+                    'vsx_queried': False,
+                    'manual_label': None
                 }
                 self._all_cutout_sets.append(cutout_set)
 
@@ -10877,6 +11026,12 @@ class FitsImageViewer:
             # 加载每个cutout的查询结果
             for idx, cutout_set in enumerate(self._all_cutout_sets):
                 self._load_query_results_from_file(cutout_set, idx)
+
+            # 从 aligned_comparison_*.txt 加载 GOOD/BAD 手工标记
+            try:
+                self._load_manual_labels_for_current_detection_dir(detection_dir_path)
+            except Exception:
+                pass
 
             self.logger.info(f"成功加载 {self._total_cutouts} 个检测目标")
             return True
