@@ -344,6 +344,37 @@ class FitsImageViewer:
                                                          command=self._on_flip_dss_config_changed)
         self.flip_dss_horizontal_check.pack(side=tk.LEFT, padx=(0, 0))
 
+        # 检测结果人工标记与跳转
+        ttk.Label(toolbar_frame3, text="  |  ").pack(side=tk.LEFT, padx=(10, 5))
+
+        self.cutout_label_var = tk.StringVar(value="状态: 未标记")
+        self.cutout_label = ttk.Label(toolbar_frame3, textvariable=self.cutout_label_var, foreground="purple")
+        self.cutout_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.mark_good_button = ttk.Button(
+            toolbar_frame3, text="标记 GOOD (1)",
+            command=self._mark_detection_good, state="disabled"
+        )
+        self.mark_good_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.mark_bad_button = ttk.Button(
+            toolbar_frame3, text="标记 BAD (2)",
+            command=self._mark_detection_bad, state="disabled"
+        )
+        self.mark_bad_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.next_good_button = ttk.Button(
+            toolbar_frame3, text="下一个 GOOD (3)",
+            command=self._jump_to_next_good, state="disabled"
+        )
+        self.next_good_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.next_bad_button = ttk.Button(
+            toolbar_frame3, text="下一个 BAD (4)",
+            command=self._jump_to_next_bad, state="disabled"
+        )
+        self.next_bad_button.pack(side=tk.LEFT, padx=(0, 0))
+
         # 坐标显示区域（第四行工具栏）
         toolbar_frame4 = ttk.Frame(toolbar_container)
         toolbar_frame4.pack(fill=tk.X, pady=2)
@@ -509,6 +540,10 @@ class FitsImageViewer:
         top.bind('=', lambda e: self._show_next_cutout())
         top.bind(']', lambda e: self._show_next_cutout())
         top.bind('l', lambda e: self._show_next_cutout())
+
+        # N - 下一个 GOOD
+        top.bind('n', lambda e: self._jump_to_next_good())
+        top.bind('N', lambda e: self._jump_to_next_good())
 
         # i - 查询小行星
         top.bind('i', lambda e: self._query_skybot())
@@ -5080,6 +5115,18 @@ class FitsImageViewer:
         if hasattr(self, 'save_detection_button'):
             self.save_detection_button.config(state="disabled")
 
+        # 禁用人工标记与跳转按钮，并重置状态显示
+        if hasattr(self, 'mark_good_button'):
+            self.mark_good_button.config(state="disabled")
+        if hasattr(self, 'mark_bad_button'):
+            self.mark_bad_button.config(state="disabled")
+        if hasattr(self, 'next_good_button'):
+            self.next_good_button.config(state="disabled")
+        if hasattr(self, 'next_bad_button'):
+            self.next_bad_button.config(state="disabled")
+        if hasattr(self, 'cutout_label_var'):
+            self.cutout_label_var.set("状态: 未标记")
+
         # 清除输出目录
         self.last_output_dir = None
 
@@ -5305,7 +5352,8 @@ class FitsImageViewer:
                     'skybot_results': None,  # 小行星查询结果
                     'vsx_results': None,     # 变星查询结果
                     'skybot_queried': False, # 是否已查询小行星
-                    'vsx_queried': False     # 是否已查询变星
+                    'vsx_queried': False,     # 是否已查询变星
+                    'manual_label': None      # 人工质量标记: None/good/bad
                 })
 
             self._current_cutout_index = 0
@@ -5349,41 +5397,95 @@ class FitsImageViewer:
 
             # 检查小行星查询状态
             import re
-            skybot_match = re.search(r'小行星列表:\n((?:  - .*\n)+)', content)
+            skybot_match = re.search(r"Skybot查询结果: (.+)", content)
             if skybot_match:
-                result_lines = skybot_match.group(1).strip()
-                if '(未查询)' not in result_lines:
-                    cutout_set['skybot_queried'] = True
-                    # 检查是否有实际结果
-                    if '(已查询，未找到)' not in result_lines:
-                        # 有实际结果,创建一个模拟的结果列表(用于按钮颜色显示)
-                        # 计算结果数量
-                        result_count = len([line for line in result_lines.split('\n') if line.strip().startswith('-')])
-                        # 创建一个简单的列表来表示有结果(长度表示数量)
-                        cutout_set['skybot_results'] = [None] * result_count
-                    else:
-                        # 已查询但未找到
-                        cutout_set['skybot_results'] = []
+                cutout_set['skybot_results'] = skybot_match.group(1)
+                cutout_set['skybot_queried'] = True
 
-            # 检查变星查询状态
-            vsx_match = re.search(r'变星列表:\n((?:  - .*\n)+)', content)
+            # 检查VSX查询状态
+            vsx_match = re.search(r"VSX查询结果: (.+)", content)
             if vsx_match:
-                result_lines = vsx_match.group(1).strip()
-                if '(未查询)' not in result_lines:
-                    cutout_set['vsx_queried'] = True
-                    # 检查是否有实际结果
-                    if '(已查询，未找到)' not in result_lines:
-                        # 有实际结果,创建一个模拟的结果列表(用于按钮颜色显示)
-                        # 计算结果数量
-                        result_count = len([line for line in result_lines.split('\n') if line.strip().startswith('-')])
-                        # 创建一个简单的列表来表示有结果(长度表示数量)
-                        cutout_set['vsx_results'] = [None] * result_count
-                    else:
-                        # 已查询但未找到
-                        cutout_set['vsx_results'] = []
+                cutout_set['vsx_results'] = vsx_match.group(1)
+                cutout_set['vsx_queried'] = True
 
         except Exception as e:
-            self.logger.error(f"加载查询结果失败: {str(e)}")
+            self.logger.error(f"从query_results文件加载查询结果失败: {e}")
+
+    def _save_manual_labels_to_aligned_comparison(self):
+        """将当前cutout的 GOOD/BAD 标记写入 aligned_comparison_*.txt
+
+        约定：在 detection_*/cutouts 同级目录中，存在 aligned_comparison_*.txt；
+        对应当前cutout序号的行（含 "#编号" 或类似信息）后追加 "  [GOOD]" / "  [BAD]" 标记。
+        如果找不到文件或匹配行，则静默返回，仅写日志。
+        """
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                return
+
+            current_set = self._all_cutout_sets[self._current_cutout_index]
+            label = current_set.get('manual_label', None)
+            # 未标记则不写文件
+            if label not in ('good', 'bad'):
+                return
+
+            detection_img = current_set.get('detection')
+            if not detection_img or not os.path.exists(detection_img):
+                return
+
+            cutout_dir = os.path.dirname(detection_img)
+            detection_dir = os.path.dirname(cutout_dir)
+
+            # 在 detection_* 目录中查找 aligned_comparison_*.txt
+            candidates = [
+                f for f in os.listdir(detection_dir)
+                if f.startswith("aligned_comparison_") and f.endswith(".txt")
+            ]
+            if not candidates:
+                self.logger.info("未找到 aligned_comparison_*.txt，跳过手动标记写入")
+                return
+
+            aligned_txt_path = os.path.join(detection_dir, sorted(candidates)[0])
+
+            # 当前cutout的编号（从1开始）
+            idx = self._current_cutout_index + 1
+            mark_str = "[GOOD]" if label == 'good' else "[BAD]"
+
+            try:
+                with open(aligned_txt_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+            except Exception as e:
+                self.logger.error(f"读取 {aligned_txt_path} 失败: {e}")
+                return
+
+            # 简单策略：找到包含 "#{idx}" 或 "序号 idx" 的第一行，在行尾追加标记
+            import re
+            pattern = re.compile(rf"(#+\s*{idx}\b|\b{idx}\s*[:：])")
+            modified = False
+            for i, line in enumerate(lines):
+                if pattern.search(line):
+                    if mark_str in line:
+                        modified = True
+                        break
+                    # 去掉行尾换行，追加标记
+                    line_stripped = line.rstrip("\n")
+                    lines[i] = f"{line_stripped}  {mark_str}\n"
+                    modified = True
+                    break
+
+            if not modified:
+                # 如果没找到匹配行，就在文件末尾追加一行简单记录
+                lines.append(f"cutout #{idx}: {mark_str}\n")
+
+            try:
+                with open(aligned_txt_path, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+                self.logger.info(f"已将手动标记 {mark_str} 写入 {os.path.basename(aligned_txt_path)} (cutout #{idx})")
+            except Exception as e:
+                self.logger.error(f"写入 {aligned_txt_path} 失败: {e}")
+        except Exception as e:
+            self.logger.error(f"保存手动GOOD/BAD标记到 aligned_comparison 失败: {e}")
 
     def _display_cutout_by_index(self, index):
         """
@@ -5457,6 +5559,30 @@ class FitsImageViewer:
         # 启用保存检测结果按钮（只要有cutout就可以启用）
         if hasattr(self, 'save_detection_button'):
             self.save_detection_button.config(state="normal")
+
+
+        # 启用人工标记与跳转按钮，并更新当前标记状态显示
+        if hasattr(self, 'mark_good_button'):
+            self.mark_good_button.config(state="normal")
+        if hasattr(self, 'mark_bad_button'):
+            self.mark_bad_button.config(state="normal")
+        if hasattr(self, 'next_good_button'):
+            self.next_good_button.config(state="normal")
+        if hasattr(self, 'next_bad_button'):
+            self.next_bad_button.config(state="normal")
+        if hasattr(self, '_all_cutout_sets'):
+            # 根据当前cutout的manual_label更新状态标签
+            try:
+                label = cutout_set.get('manual_label', None)
+                if hasattr(self, 'cutout_label_var'):
+                    if label == 'good':
+                        self.cutout_label_var.set("状态: GOOD")
+                    elif label == 'bad':
+                        self.cutout_label_var.set("状态: BAD")
+                    else:
+                        self.cutout_label_var.set("状态: 未标记")
+            except Exception as e:
+                self.logger.error(f"更新检测标记状态显示失败: {e}")
 
         # 提取文件信息（使用左侧选中的文件名）
         selected_filename = ""
@@ -5852,6 +5978,7 @@ class FitsImageViewer:
 
             self.logger.info(f"时间已更新: UTC={utc_formatted}, 北京={beijing_formatted}, 本地={local_formatted} (UTC{timezone_offset:+d})")
 
+
         except Exception as e:
             self.logger.error(f"更新时间显示失败: {e}")
 
@@ -5899,6 +6026,121 @@ class FitsImageViewer:
         # 如果所有检测结果都不符合条件，显示提示
         messagebox.showinfo("提示", f"没有找到距离中心小于 {max_distance} 像素的检测结果")
         self.logger.warning(f"所有检测结果都超过最大中心距离阈值 {max_distance} 像素")
+
+
+
+    def _mark_detection_good(self):
+        """将当前检测结果标记为 GOOD；如已是 GOOD，则恢复为未标记"""
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                messagebox.showinfo("提示", "没有可标记的检测结果")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                messagebox.showinfo("提示", "没有当前显示的检测结果")
+                return
+
+            cutout_set = self._all_cutout_sets[self._current_cutout_index]
+            current = cutout_set.get('manual_label', None)
+
+            # 再次点击同一状态 -> 取消标记
+            new_label = None if current == 'good' else 'good'
+            cutout_set['manual_label'] = new_label
+
+            if hasattr(self, 'cutout_label_var'):
+                if new_label == 'good':
+                    self.cutout_label_var.set("状态: GOOD")
+                else:
+                    self.cutout_label_var.set("状态: 未标记")
+
+            self.logger.info(f"检测目标 {self._current_cutout_index + 1} 标记为: {new_label or '未标记'}")
+            # 将手动标记写入 aligned_comparison_*.txt
+            try:
+                self._save_manual_labels_to_aligned_comparison()
+            except Exception as inner_e:
+                self.logger.error(f"写入aligned_comparison手动标记失败(GOOD): {inner_e}")
+        except Exception as e:
+            self.logger.error(f"标记检测结果为GOOD失败: {e}")
+
+    def _mark_detection_bad(self):
+        """将当前检测结果标记为 BAD；如已是 BAD，则恢复为未标记"""
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                messagebox.showinfo("提示", "没有可标记的检测结果")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                messagebox.showinfo("提示", "没有当前显示的检测结果")
+                return
+
+            cutout_set = self._all_cutout_sets[self._current_cutout_index]
+            current = cutout_set.get('manual_label', None)
+
+            # 再次点击同一状态 -> 取消标记
+            new_label = None if current == 'bad' else 'bad'
+            cutout_set['manual_label'] = new_label
+
+            if hasattr(self, 'cutout_label_var'):
+                if new_label == 'bad':
+                    self.cutout_label_var.set("状态: BAD")
+                else:
+                    self.cutout_label_var.set("状态: 未标记")
+
+            self.logger.info(f"检测目标 {self._current_cutout_index + 1} 标记为: {new_label or '未标记'}")
+            # 将手动标记写入 aligned_comparison_*.txt
+            try:
+                self._save_manual_labels_to_aligned_comparison()
+            except Exception as inner_e:
+                self.logger.error(f"写入aligned_comparison手动标记失败(BAD): {inner_e}")
+        except Exception as e:
+            self.logger.error(f"标记检测结果为BAD失败: {e}")
+
+    def _jump_to_next_good(self):
+        """跳转到下一个被标记为 GOOD 的检测结果"""
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                messagebox.showinfo("提示", "没有检测结果")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                messagebox.showinfo("提示", "没有当前显示的检测结果")
+                return
+
+            start_index = self._current_cutout_index
+            total = len(self._all_cutout_sets)
+
+            for step in range(1, total + 1):
+                idx = (start_index + step) % total
+                cutout_set = self._all_cutout_sets[idx]
+                if cutout_set.get('manual_label') == 'good':
+                    self._display_cutout_by_index(idx)
+                    return
+
+            messagebox.showinfo("提示", "没有找到下一个标记为 GOOD 的检测结果")
+        except Exception as e:
+            self.logger.error(f"跳转到下一个GOOD失败: {e}")
+
+    def _jump_to_next_bad(self):
+        """跳转到下一个被标记为 BAD 的检测结果"""
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                messagebox.showinfo("提示", "没有检测结果")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                messagebox.showinfo("提示", "没有当前显示的检测结果")
+                return
+
+            start_index = self._current_cutout_index
+            total = len(self._all_cutout_sets)
+
+            for step in range(1, total + 1):
+                idx = (start_index + step) % total
+                cutout_set = self._all_cutout_sets[idx]
+                if cutout_set.get('manual_label') == 'bad':
+                    self._display_cutout_by_index(idx)
+                    return
+
+            messagebox.showinfo("提示", "没有找到下一个标记为 BAD 的检测结果")
+        except Exception as e:
+            self.logger.error(f"跳转到下一个BAD失败: {e}")
+
 
     def _on_tree_left_key(self, event):
         """处理目录树的左键事件 - 对应"上一组"按钮"""
