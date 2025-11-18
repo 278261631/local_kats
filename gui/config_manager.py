@@ -101,7 +101,8 @@ class ConfigManager:
                 "mpc_code": "N87"  # MPC观测站代码（默认值：N87）
             },
             "query_settings": {
-                "search_radius": 0.01  # 搜索半径（度）（默认值：0.01）
+                "search_radius": 0.01,                  # 搜索半径（度）（默认值：0.01）
+                "batch_query_interval_seconds": 2.0     # 批量查询之间的间隔时间（秒）（默认值：2秒）
             },
             "detection_filter_settings": {
                 "enable_center_distance_filter": False,  # 是否启用中心距离过滤（默认值：False）
@@ -374,6 +375,16 @@ class ConfigManager:
         if "query_settings" not in self.config:
             self.config["query_settings"] = self.default_config["query_settings"].copy()
             self.save_config()
+
+        # 确保所有默认键都存在（兼容旧配置文件）
+        changed = False
+        for key, default_value in self.default_config["query_settings"].items():
+            if key not in self.config["query_settings"]:
+                self.config["query_settings"][key] = default_value
+                changed = True
+        if changed:
+            self.save_config()
+
         return self.config["query_settings"]
 
     def update_query_settings(self, **kwargs):
@@ -382,8 +393,8 @@ class ConfigManager:
             self.config["query_settings"] = self.default_config["query_settings"].copy()
 
         for key, value in kwargs.items():
-            if key == "search_radius":
-                self.config["query_settings"][key] = value
+            # 允许更新所有已知的查询设置键（包括搜索半径和批量查询间隔）
+            self.config["query_settings"][key] = value
         self.save_config()
 
     def get_detection_filter_settings(self) -> Dict[str, Any]:

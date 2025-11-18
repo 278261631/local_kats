@@ -455,7 +455,12 @@ class FitsWebDownloaderGUI:
             ttk.Label(display_row, text="搜索半径(°):").grid(row=1, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
             sr_entry = ttk.Entry(display_row, textvariable=self.fits_viewer.search_radius_var, width=8)
             sr_entry.grid(row=1, column=1, sticky=tk.W, padx=(0, 5), pady=(10, 0))
-            ttk.Button(display_row, text="保存半径", command=self.fits_viewer._save_query_settings).grid(row=1, column=2, sticky=tk.W, padx=(5, 0), pady=(10, 0))
+            ttk.Button(display_row, text="保存查询设置", command=self.fits_viewer._save_query_settings).grid(row=1, column=2, sticky=tk.W, padx=(5, 0), pady=(10, 0))
+
+            # 批量查询间隔（秒）
+            ttk.Label(display_row, text="批量查询间隔(s):").grid(row=1, column=3, sticky=tk.W, padx=(20, 5), pady=(10, 0))
+            interval_entry = ttk.Entry(display_row, textvariable=self.fits_viewer.batch_query_interval_var, width=8)
+            interval_entry.grid(row=1, column=4, sticky=tk.W, padx=(0, 5), pady=(10, 0))
 
         row3_frame = ttk.LabelFrame(settings_container, text="检测参数", padding=10)
         row3_frame.pack(fill=tk.X, pady=(0, 10))

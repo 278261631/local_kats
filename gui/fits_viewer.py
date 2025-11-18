@@ -363,7 +363,7 @@ class FitsImageViewer:
         )
         self.mark_bad_button.pack(side=tk.LEFT, padx=(0, 5))
 
-        # 下一个 GOOD/BAD 始终保持可点击，不随cutout加载状态禁用
+        # 下一个 GOOD/BAD/SUSPECT/FALSE/ERROR 始终保持可点击，不随cutout加载状态禁用
         self.next_good_button = ttk.Button(
             toolbar_frame3, text="下一个 GOOD (3)",
             command=self._jump_to_next_good
@@ -375,6 +375,24 @@ class FitsImageViewer:
             command=self._jump_to_next_bad
         )
         self.next_bad_button.pack(side=tk.LEFT, padx=(0, 0))
+
+        self.next_suspect_button = ttk.Button(
+            toolbar_frame3, text="下一个 SUSPECT (5)",
+            command=self._jump_to_next_suspect
+        )
+        self.next_suspect_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.next_false_button = ttk.Button(
+            toolbar_frame3, text="下一个 FALSE (6)",
+            command=self._jump_to_next_false
+        )
+        self.next_false_button.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.next_error_button = ttk.Button(
+            toolbar_frame3, text="下一个 ERROR (7)",
+            command=self._jump_to_next_error
+        )
+        self.next_error_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # 坐标显示区域（第四行工具栏）
         toolbar_frame4 = ttk.Frame(toolbar_container)
@@ -436,6 +454,8 @@ class FitsImageViewer:
 
         # 搜索半径变量（控件移至“高级设置”标签页）
         self.search_radius_var = tk.StringVar(value="0.01")
+        # 批量查询间隔（秒），在高级设置中配置
+        self.batch_query_interval_var = tk.StringVar(value="2.0")
 
         # 批量检测对齐按钮（移动至此，位于“批量本地查询(离线)”左侧）
         self.batch_alignment_button = ttk.Button(
@@ -1253,7 +1273,7 @@ class FitsImageViewer:
             self.logger.error(f"保存MPC代码设置失败: {str(e)}")
 
     def _load_query_settings(self):
-        """从配置文件加载查询设置"""
+        """从配置文件加载查询设置（搜索半径、批量查询间隔等）"""
         if not self.config_manager:
             return
 
@@ -1262,37 +1282,78 @@ class FitsImageViewer:
 
             # 加载搜索半径，默认值：0.01度
             search_radius = query_settings.get('search_radius', 0.01)
-
             self.search_radius_var.set(str(search_radius))
 
-            self.logger.info(f"查询设置已加载: 搜索半径={search_radius}°")
+            # 加载批量查询间隔（秒），默认值：2秒
+            interval = query_settings.get('batch_query_interval_seconds', 2.0)
+            self.batch_query_interval_var.set(str(interval))
+
+            self.logger.info(f"查询设置已加载: 搜索半径={search_radius}°, 批量查询间隔={interval}s")
 
         except Exception as e:
             self.logger.error(f"加载查询设置失败: {str(e)}")
             # 使用默认值
             self.search_radius_var.set("0.01")
+            self.batch_query_interval_var.set("2.0")
 
     def _save_query_settings(self):
-        """保存查询设置到配置文件"""
+        """保存查询设置到配置文件（搜索半径与批量查询间隔）"""
         if not self.config_manager:
             return
 
         try:
             search_radius = float(self.search_radius_var.get())
-
             if search_radius <= 0:
                 self.logger.error("搜索半径必须大于0")
                 return
 
-            # 保存到配置文件
-            self.config_manager.update_query_settings(search_radius=search_radius)
+            try:
+                interval = float(self.batch_query_interval_var.get())
+            except ValueError:
+                self.logger.error(f"无效的批量查询间隔: {self.batch_query_interval_var.get()}")
+                return
 
-            self.logger.info(f"查询设置已保存: 搜索半径={search_radius}°")
+            if interval < 0:
+                self.logger.error(f"批量查询间隔不能为负数: {interval}")
+                return
+
+            # 保存到配置文件
+            self.config_manager.update_query_settings(
+                search_radius=search_radius,
+                batch_query_interval_seconds=interval,
+            )
+
+            self.logger.info(f"查询设置已保存: 搜索半径={search_radius}°, 批量查询间隔={interval}s")
 
         except ValueError:
             self.logger.error(f"无效的搜索半径: {self.search_radius_var.get()}")
         except Exception as e:
             self.logger.error(f"保存查询设置失败: {str(e)}")
+
+    def _get_batch_query_interval_seconds(self) -> float:
+        """获取批量查询间隔（秒），优先从配置读取，失败时返回默认值2秒"""
+        # 默认值
+        default_interval = 2.0
+
+        # 优先从配置读取
+        if self.config_manager:
+            try:
+                settings = self.config_manager.get_query_settings()
+                val = float(settings.get('batch_query_interval_seconds', default_interval))
+                if val < 0:
+                    return default_interval
+                return val
+            except Exception:
+                pass
+
+        # 其次从界面变量读取
+        try:
+            val = float(self.batch_query_interval_var.get())
+            if val < 0:
+                return default_interval
+            return val
+        except Exception:
+            return default_interval
 
     def _load_detection_filter_settings(self):
         """从配置文件加载检测过滤设置"""
@@ -5346,11 +5407,14 @@ class FitsImageViewer:
                     'reference': str(ref),
                     'aligned': str(aligned),
                     'detection': str(det),
-                    'skybot_results': None,  # 小行星查询结果
-                    'vsx_results': None,     # 变星查询结果
-                    'skybot_queried': False, # 是否已查询小行星
+                    'skybot_results': None,   # 小行星查询结果（表格或简要文本）
+                    'vsx_results': None,      # 变星查询结果
+                    'skybot_queried': False,  # 是否已查询小行星
                     'vsx_queried': False,     # 是否已查询变星
-                    'manual_label': None      # 人工质量标记: None/good/bad
+                    'manual_label': None,     # 人工质量标记: None/good/bad
+                    'auto_class_label': None, # 自动分类标记: None/suspect/false/error
+                    'skybot_error': False,    # 小行星查询是否出错
+                    'vsx_error': False        # 变星查询是否出错
                 })
 
             self._current_cutout_index = 0
@@ -5382,7 +5446,16 @@ class FitsImageViewer:
             return False
 
     def _load_query_results_from_file(self, cutout_set, cutout_index):
-        """从query_results_XXX.txt文件加载查询结果到cutout字典"""
+        """从query_results_XXX.txt文件加载查询结果到cutout字典
+
+        说明：
+        - 早期版本在txt中写入 "Skybot查询结果: ..." / "VSX查询结果: ..."，
+          现在统一使用 "小行星列表:/变星列表:/卫星列表:" 结构，并在其中写入
+          "(未查询)"、"(已查询，未找到)" 或具体目标行。
+        - 这里根据当前格式解析出是否已查询及是否有结果，并把结果简化为
+          一组文本行列表，用于按钮着色和日志展示；标记绘制仍然从txt里
+          直接解析RA/DEC，不依赖这里的结果内容。
+        """
         try:
             detection_img = cutout_set.get('detection')
             if not detection_img or not os.path.exists(detection_img):
@@ -5395,22 +5468,91 @@ class FitsImageViewer:
             if not os.path.exists(query_results_file):
                 return
 
+            # 如果本次会话中已经有内存中的查询结果（例如刚刚在线查询过），
+            # 则不从文件覆盖，避免把 Astropy Table 覆盖成纯文本列表。
+            if cutout_set.get('skybot_queried') or cutout_set.get('skybot_results') not in (None, []):
+                pass
+            if cutout_set.get('vsx_queried') or cutout_set.get('vsx_results') not in (None, []):
+                pass
+
             # 读取文件内容
             with open(query_results_file, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # 检查小行星查询状态
             import re
-            skybot_match = re.search(r"Skybot查询结果: (.+)", content)
-            if skybot_match:
-                cutout_set['skybot_results'] = skybot_match.group(1)
-                cutout_set['skybot_queried'] = True
 
-            # 检查VSX查询状态
-            vsx_match = re.search(r"VSX查询结果: (.+)", content)
-            if vsx_match:
-                cutout_set['vsx_results'] = vsx_match.group(1)
-                cutout_set['vsx_queried'] = True
+            # ---------- 小行星（Skybot） ----------
+            try:
+                skybot_match = re.search(r'小行星列表:\n((?:  - .*\n)+)', content)
+                if skybot_match:
+                    lines = skybot_match.group(1).strip().split('\n')
+                    joined = '\n'.join(lines)
+
+                    if '(未查询)' in joined:
+                        # 保持默认：未查询
+                        pass
+                    else:
+                        # 至少执行过一次查询
+                        cutout_set['skybot_queried'] = True
+                        # 已查询但未找到
+                        if '(已查询，未找到)' in joined and not any('小行星' in ln for ln in lines):
+                            cutout_set['skybot_results'] = []
+                        else:
+                            # 提取每一条 "- 小行星X: ..." 行，作为简单结果列表
+                            results = []
+                            for ln in lines:
+                                ln_strip = ln.strip()
+                                if ln_strip.startswith('-'):
+                                    results.append(ln_strip)
+                            cutout_set['skybot_results'] = results
+            except Exception:
+                pass
+
+            # ---------- 变星（VSX） ----------
+            try:
+                vsx_match = re.search(r'变星列表:\n((?:  - .*\n)+)', content)
+                if vsx_match:
+                    lines = vsx_match.group(1).strip().split('\n')
+                    joined = '\n'.join(lines)
+
+                    if '(未查询)' in joined:
+                        pass
+                    else:
+                        cutout_set['vsx_queried'] = True
+                        if '(已查询，未找到)' in joined and not any('变星' in ln for ln in lines):
+                            cutout_set['vsx_results'] = []
+                        else:
+                            results = []
+                            for ln in lines:
+                                ln_strip = ln.strip()
+                                if ln_strip.startswith('-'):
+                                    results.append(ln_strip)
+                            cutout_set['vsx_results'] = results
+            except Exception:
+                pass
+
+            # ---------- 卫星 ----------
+            try:
+                sat_match = re.search(r'卫星列表:\n((?:  - .*\n)+)', content)
+                if sat_match:
+                    lines = sat_match.group(1).strip().split('\n')
+                    joined = '\n'.join(lines)
+
+                    if '(未查询)' in joined:
+                        pass
+                    else:
+                        cutout_set['satellite_queried'] = True
+                        if '(已查询，未找到)' in joined and not any('卫星' in ln for ln in lines):
+                            cutout_set['satellite_results'] = []
+                        else:
+                            results = []
+                            for ln in lines:
+                                ln_strip = ln.strip()
+                                if ln_strip.startswith('-'):
+                                    results.append(ln_strip)
+                            cutout_set['satellite_results'] = results
+            except Exception:
+                pass
 
         except Exception as e:
             self.logger.error(f"从query_results文件加载查询结果失败: {e}")
@@ -5635,19 +5777,9 @@ class FitsImageViewer:
             self.next_good_button.config(state="normal")
         if hasattr(self, 'next_bad_button'):
             self.next_bad_button.config(state="normal")
-        if hasattr(self, '_all_cutout_sets'):
-            # 根据当前cutout的manual_label更新状态标签
-            try:
-                label = cutout_set.get('manual_label', None)
-                if hasattr(self, 'cutout_label_var'):
-                    if label == 'good':
-                        self.cutout_label_var.set("状态: GOOD")
-                    elif label == 'bad':
-                        self.cutout_label_var.set("状态: BAD")
-                    else:
-                        self.cutout_label_var.set("状态: 未标记")
-            except Exception as e:
-                self.logger.error(f"更新检测标记状态显示失败: {e}")
+
+        # 刷新当前cutout的状态标签（GOOD/BAD + SUSPECT/FALSE/ERROR）
+        self._refresh_cutout_status_label()
 
         # 提取文件信息（使用左侧选中的文件名）
         selected_filename = ""
@@ -6092,6 +6224,40 @@ class FitsImageViewer:
         messagebox.showinfo("提示", f"没有找到距离中心小于 {max_distance} 像素的检测结果")
         self.logger.warning(f"所有检测结果都超过最大中心距离阈值 {max_distance} 像素")
 
+    def _refresh_cutout_status_label(self):
+        """根据当前cutout的手动标记(manual_label)和自动分类(auto_class_label)更新状态标签"""
+        if not hasattr(self, 'cutout_label_var'):
+            return
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                self.cutout_label_var.set("状态: 未标记")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                self.cutout_label_var.set("状态: 未标记")
+                return
+
+            cutout_set = self._all_cutout_sets[self._current_cutout_index]
+            manual = cutout_set.get('manual_label')
+            auto = cutout_set.get('auto_class_label')
+
+            parts = []
+            if manual == 'good':
+                parts.append("GOOD")
+            elif manual == 'bad':
+                parts.append("BAD")
+
+            if auto in ('suspect', 'false', 'error'):
+                parts.append(auto.upper())
+
+            if parts:
+                self.cutout_label_var.set("状态: " + " | ".join(parts))
+            else:
+                self.cutout_label_var.set("状态: 未标记")
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"更新检测状态标签失败: {e}")
+
+
 
 
     def _mark_detection_good(self):
@@ -6111,11 +6277,8 @@ class FitsImageViewer:
             new_label = None if current == 'good' else 'good'
             cutout_set['manual_label'] = new_label
 
-            if hasattr(self, 'cutout_label_var'):
-                if new_label == 'good':
-                    self.cutout_label_var.set("状态: GOOD")
-                else:
-                    self.cutout_label_var.set("状态: 未标记")
+            # 刷新状态标签（包含GOOD/BAD及自动分类）
+            self._refresh_cutout_status_label()
 
             self.logger.info(f"检测目标 {self._current_cutout_index + 1} 标记为: {new_label or '未标记'}")
             # 将手动标记写入 aligned_comparison_*.txt
@@ -6143,11 +6306,8 @@ class FitsImageViewer:
             new_label = None if current == 'bad' else 'bad'
             cutout_set['manual_label'] = new_label
 
-            if hasattr(self, 'cutout_label_var'):
-                if new_label == 'bad':
-                    self.cutout_label_var.set("状态: BAD")
-                else:
-                    self.cutout_label_var.set("状态: 未标记")
+            # 刷新状态标签（包含GOOD/BAD及自动分类）
+            self._refresh_cutout_status_label()
 
             self.logger.info(f"检测目标 {self._current_cutout_index + 1} 标记为: {new_label or '未标记'}")
             # 将手动标记写入 aligned_comparison_*.txt
@@ -6158,6 +6318,20 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"标记检测结果为BAD失败: {e}")
 
+    def _jump_to_next_suspect(self):
+        """从目录树当前选中节点开始，向下单向查找下一个自动标记为 SUSPECT 的检测结果"""
+        self._jump_to_next_manual_label('suspect')
+
+
+    def _jump_to_next_false(self):
+        """从目录树当前选中节点开始，向下单向查找下一个自动标记为 FALSE 的检测结果"""
+        self._jump_to_next_manual_label('false')
+
+    def _jump_to_next_error(self):
+        """从目录树当前选中节点开始，向下单向查找下一个自动标记为 ERROR 的检测结果"""
+        self._jump_to_next_manual_label('error')
+
+
     def _jump_to_next_good(self):
         """从目录树当前选中节点开始，向下单向查找下一个标记为 GOOD 的检测结果"""
         self._jump_to_next_manual_label('good')
@@ -6167,16 +6341,42 @@ class FitsImageViewer:
         self._jump_to_next_manual_label('bad')
 
     def _jump_to_next_manual_label(self, target_label: str):
-        """从左侧目录树的当前选中节点开始，按可见顺序向下单向查找下一个指定手工标记(GOOD/BAD)的检测结果。
+        """从左侧目录树的当前选中节点开始，按可见顺序向下单向查找下一个指定标记的检测结果。
 
         - 起点：当前选中的目录树节点；如果没有选中，则从根节点开始。
         - 顺序：目录树的先序遍历顺序（与用户看到的顺序一致），不循环。
         - 行为：找到后选中文件节点并显示对应检测目标的 cutout。
+
+        说明：
+        - target_label 为 'good'/'bad' 时，匹配 manual_label；
+        - target_label 为 'suspect'/'false'/'error' 时，匹配 auto_class_label；
         """
         try:
             if not hasattr(self, 'directory_tree'):
                 messagebox.showinfo("提示", "目录树未初始化")
                 return
+
+            def _match_label(cutout_set):
+                if target_label in ('good', 'bad'):
+                    return cutout_set.get('manual_label') == target_label
+                if target_label in ('suspect', 'false', 'error'):
+                    return cutout_set.get('auto_class_label') == target_label
+                return False
+
+            def _label_str():
+                if target_label == 'good':
+                    return "GOOD"
+                if target_label == 'bad':
+                    return "BAD"
+                if target_label == 'suspect':
+                    return "SUSPECT"
+                if target_label == 'false':
+                    return "FALSE"
+                if target_label == 'error':
+                    return "ERROR"
+                return str(target_label)
+
+            label_str = _label_str()
 
             # 构造整棵树的遍历顺序（与可见顺序一致）
             order = []
@@ -6229,9 +6429,8 @@ class FitsImageViewer:
                         total = len(self._all_cutout_sets)
                         for idx in range(start_cutout_idx, total):
                             cutout_set = self._all_cutout_sets[idx]
-                            if cutout_set.get('manual_label') == target_label:
+                            if _match_label(cutout_set):
                                 self._display_cutout_by_index(idx)
-                                label_str = "GOOD" if target_label == 'good' else "BAD"
                                 self.logger.info(
                                     f"跳转到下一个 {label_str}: {os.path.basename(current_file_path)} - 检测 #{idx + 1} (同一文件)"
                                 )
@@ -6251,20 +6450,20 @@ class FitsImageViewer:
                     continue
                 file_path = values[0]
 
-                # 避免在同一调用中再次从当前文件开头搜索，防止“下一个”跳回前面的GOOD/BAD
+                # 避免在同一调用中再次从当前文件开头搜索，防止“下一个”跳回前面的结果
                 if current_file_path and os.path.normpath(file_path) == os.path.normpath(current_file_path):
                     continue
 
-                # 为该文件加载diff检测结果（包括GOOD/BAD手工标记）
+                # 为该文件加载diff检测结果（包括手工/自动标记）
                 region_dir = get_region_dir_for_node(node, file_path)
                 if not self._load_diff_results_for_file(file_path, region_dir):
                     continue
                 if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
                     continue
 
-                # 在该文件中查找第一个匹配的手工标记
+                # 在该文件中查找第一个匹配的标记
                 for cutout_idx, cutout_set in enumerate(self._all_cutout_sets):
-                    if cutout_set.get('manual_label') == target_label:
+                    if _match_label(cutout_set):
                         # 在目录树中选中该文件节点
                         self._auto_selecting = True
                         self.directory_tree.selection_set(node)
@@ -6276,17 +6475,14 @@ class FitsImageViewer:
                         self.selected_file_path = file_path
                         self._display_cutout_by_index(cutout_idx)
 
-                        label_str = "GOOD" if target_label == 'good' else "BAD"
                         self.logger.info(
                             f"跳转到下一个 {label_str}: {os.path.basename(file_path)} - 检测 #{cutout_idx + 1}"
                         )
                         return
 
             # 没有找到
-            label_str = "GOOD" if target_label == 'good' else "BAD"
             messagebox.showinfo("提示", f"从当前节点开始，后续没有标记为 {label_str} 的检测结果")
         except Exception as e:
-            label_str = "GOOD" if target_label == 'good' else "BAD"
             self.logger.error(f"跳转到下一个{label_str}失败: {e}", exc_info=True)
 
 
@@ -7675,6 +7871,8 @@ class FitsImageViewer:
 
             # 获取当前cutout的信息
             current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            # 每次查询前重置小行星查询错误标记，由后续逻辑重新设置
+            current_cutout['skybot_error'] = False
             reference_img = current_cutout['reference']
             aligned_img = current_cutout['aligned']
             detection_img = current_cutout['detection']
@@ -7771,6 +7969,7 @@ class FitsImageViewer:
                 current_cutout = self._all_cutout_sets[self._current_cutout_index]
                 current_cutout['skybot_queried'] = True
                 current_cutout['skybot_results'] = results
+                current_cutout['skybot_error'] = False
 
                 # 同时保存到成员变量（兼容旧代码）
                 self._skybot_queried = True
@@ -7896,9 +8095,17 @@ class FitsImageViewer:
 
                     # 重新绘制图像（虽然没有结果，但确保界面一致性）
                     self._refresh_current_cutout_display()
+
+                # 每次成功完成Skybot查询后，更新自动分类（suspect/false/error）
+                self._update_auto_classification_for_current_cutout()
             else:
                 # 查询失败，不保存到cutout（保持未查询状态）
                 self._skybot_query_results = None  # 兼容旧代码
+                try:
+                    current_cutout = self._all_cutout_sets[self._current_cutout_index]
+                    current_cutout['skybot_error'] = True
+                except Exception:
+                    pass
 
                 self.skybot_result_label.config(text="查询失败", foreground="red")
                 error_msg = f"{source}查询失败"
@@ -7906,12 +8113,23 @@ class FitsImageViewer:
                 if self.log_callback:
                     self.log_callback(error_msg, "ERROR")
 
+                # 查询失败也更新一次自动分类
+                self._update_auto_classification_for_current_cutout()
+
         except Exception as e:
             exception_msg = f"{source}查询失败: {str(e)}"
             self.logger.error(exception_msg, exc_info=True)
             if self.log_callback:
                 self.log_callback(exception_msg, "ERROR")
             self.skybot_result_label.config(text="查询出错", foreground="red")
+            # 异常情况下标记为错误并更新分类
+            try:
+                if hasattr(self, '_all_cutout_sets') and hasattr(self, '_current_cutout_index'):
+                    current_cutout = self._all_cutout_sets[self._current_cutout_index]
+                    current_cutout['skybot_error'] = True
+                    self._update_auto_classification_for_current_cutout()
+            except Exception:
+                pass
 
     def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.01):
         """
@@ -8043,6 +8261,8 @@ class FitsImageViewer:
 
             # 获取当前cutout的信息
             current_cutout = self._all_cutout_sets[self._current_cutout_index]
+            # 每次查询前重置变星查询错误标记，由后续逻辑重新设置
+            current_cutout['vsx_error'] = False
             reference_img = current_cutout['reference']
             aligned_img = current_cutout['aligned']
             detection_img = current_cutout['detection']
@@ -8108,6 +8328,7 @@ class FitsImageViewer:
                 current_cutout = self._all_cutout_sets[self._current_cutout_index]
                 current_cutout['vsx_queried'] = True
                 current_cutout['vsx_results'] = results
+                current_cutout['vsx_error'] = False
 
                 # 同时保存到成员变量（兼容旧代码）
                 self._vsx_queried = True
@@ -8228,9 +8449,17 @@ class FitsImageViewer:
 
                     # 重新绘制图像（虽然没有结果，但确保界面一致性）
                     self._refresh_current_cutout_display()
+
+                # 每次成功完成VSX查询后，更新一次自动分类
+                self._update_auto_classification_for_current_cutout()
             else:
                 # 查询失败，不保存到cutout（保持未查询状态）
                 self._vsx_query_results = None  # 兼容旧代码
+                try:
+                    current_cutout = self._all_cutout_sets[self._current_cutout_index]
+                    current_cutout['vsx_error'] = True
+                except Exception:
+                    pass
 
                 self.vsx_result_label.config(text="查询失败", foreground="red")
                 error_msg = "VSX查询失败"
@@ -8238,12 +8467,24 @@ class FitsImageViewer:
                 if self.log_callback:
                     self.log_callback(error_msg, "ERROR")
 
+                # 查询失败也更新一次自动分类
+                self._update_auto_classification_for_current_cutout()
+
         except Exception as e:
             exception_msg = f"VSX查询失败: {str(e)}"
             self.logger.error(exception_msg, exc_info=True)
             if self.log_callback:
                 self.log_callback(exception_msg, "ERROR")
             self.vsx_result_label.config(text="查询出错", foreground="red")
+
+            # 异常情况下标记为错误并更新分类
+            try:
+                if hasattr(self, '_all_cutout_sets') and hasattr(self, '_current_cutout_index'):
+                    current_cutout = self._all_cutout_sets[self._current_cutout_index]
+                    current_cutout['vsx_error'] = True
+                    self._update_auto_classification_for_current_cutout()
+            except Exception:
+                pass
 
     def _perform_vsx_query(self, ra, dec, mag_limit=16.0, search_radius=0.01):
         """
@@ -10348,6 +10589,96 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"更新txt文件失败: {str(e)}", exc_info=True)
 
+
+    def _update_auto_classification_for_current_cutout(self):
+        """根据查询结果文件 query_results_*.txt 中的像素距离对当前cutout做自动分类: error / suspect / false
+
+        规则:
+        - 如果小行星或变星查询任意一个失败 -> error
+        - 否则, 若至少有一条结果距离中心像素<=3 -> false
+        - 否则, 若至少执行过一次查询(即有查询但所有结果都>3像素或无结果) -> suspect
+        - 若完全未查询 -> 不修改现有auto_class_label
+
+        像素距离优先从 query_results_XXX.txt 中已经写好的“像素距离=...px”解析,
+        避免在此处重复进行WCS反算, 保证和文本文件一致。
+        """
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                return
+
+            cutout = self._all_cutout_sets[self._current_cutout_index]
+
+            skybot_error = bool(cutout.get('skybot_error'))
+            vsx_error = bool(cutout.get('vsx_error'))
+
+            # 1) 任何一个查询失败 -> ERROR
+            if skybot_error or vsx_error:
+                cutout['auto_class_label'] = 'error'
+                self.logger.info("自动分类: ERROR (查询失败)")
+                self._refresh_cutout_status_label()
+                return
+
+            skybot_queried = bool(cutout.get('skybot_queried'))
+            vsx_queried = bool(cutout.get('vsx_queried'))
+
+            # 如果完全未查询, 保持现状
+            if not (skybot_queried or vsx_queried):
+                return
+
+            # 2) 从 query_results_XXX.txt 中解析像素距离
+            distances: list[float] = []
+            detection_img = cutout.get('detection')
+            query_file = None
+            try:
+                if detection_img:
+                    cutout_dir = os.path.dirname(detection_img)
+                    query_file = os.path.join(
+                        cutout_dir,
+                        f"query_results_{self._current_cutout_index + 1:03d}.txt",
+                    )
+            except Exception:
+                query_file = None
+
+            if query_file and os.path.exists(query_file):
+                try:
+                    with open(query_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            if "像素距离=" in line:
+                                try:
+                                    # 形如 "像素距离=1.2px"，只取数字部分
+                                    part = line.split("像素距离=", 1)[1]
+                                    part = part.split("px", 1)[0]
+                                    dist = float(part.strip())
+                                    distances.append(dist)
+                                except Exception:
+                                    continue
+                except Exception as e:
+                    self.logger.warning(f"自动分类: 读取 {query_file} 失败: {e}")
+            else:
+                # 没有query_results文件时, 但有查询记录; 不再额外计算, 直接走无距离逻辑
+                self.logger.info("自动分类: 未找到query_results_*.txt, 使用无像素距离的规则")
+
+            # 3) 根据距离阈值3像素进行分类
+            new_label = cutout.get('auto_class_label')
+            if distances:
+                min_dist = min(distances)
+                self.logger.info(f"自动分类: 最小像素距离 = {min_dist:.2f} px")
+                if min_dist <= 3.0:
+                    new_label = 'false'
+                else:
+                    new_label = 'suspect'
+            else:
+                # 有查询但完全没有候选体或缺少距离信息 -> suspect
+                new_label = 'suspect'
+
+            cutout['auto_class_label'] = new_label
+            self.logger.info(f"自动分类结果: {new_label}")
+            self._refresh_cutout_status_label()
+        except Exception as e:
+            self.logger.error(f"更新自动分类(auto_class_label)失败: {e}")
+
     def _save_detection_parameters(self, params_file, detection_num, timestamp):
         """保存检测参数到文本文件"""
         try:
@@ -10634,13 +10965,14 @@ class FitsImageViewer:
                     self.logger.warning("该文件没有检测结果，跳过批量查询")
                     return
 
-                # 检查high_score_count
-                high_score_count = self._get_high_score_count_from_current_detection()
-                if high_score_count >= 8:
-                    self.logger.info(f"该文件的high_score_count为{high_score_count}，不符合批量查询条件（需要<8）")
-                    return
+                # 以前这里会检查 high_score_count 并阻止 high_score>=8 的文件进入批量查询，
+                # 现在改为：只要有检测结果，就允许用户批量查询；具体要查哪些目标由手动 GOOD 标记控制。
+                # high_score_count = self._get_high_score_count_from_current_detection()
+                # if high_score_count >= 8:
+                #     self.logger.info(f"该文件的high_score_count为{high_score_count}，不符合批量查询条件（需要<8）")
+                #     return
 
-                # 执行单文件批量查询
+                # 执行单文件批量查询（内部只对手动标记为 GOOD 的目标发起查询）
                 self._execute_single_file_batch_query()
 
             else:
@@ -10669,14 +11001,24 @@ class FitsImageViewer:
                 self.logger.warning("没有检测结果")
                 return
 
-            # 获取high_score_count，只查询高分目标
-            high_score_count = self._get_high_score_count_from_current_detection()
-            if high_score_count is None or high_score_count == 0:
-                self.logger.info("没有高分检测目标")
+            # 以前这里按 high_score_count 过滤高分目标，现在取消该限制，
+            # 单文件批量查询完全由手动 GOOD 标记控制。
+            # high_score_count = self._get_high_score_count_from_current_detection()
+            # if high_score_count is None or high_score_count == 0:
+            #     self.logger.info("没有高分检测目标")
+            #     return
+
+            # 仅查询手动标记为 GOOD 的检测目标
+            good_indices = [
+                idx for idx, c in enumerate(self._all_cutout_sets)
+                if c.get('manual_label') == 'good'
+            ]
+            if not good_indices:
+                self.logger.info("当前文件没有标记为 GOOD 的检测目标，跳过批量查询")
+                messagebox.showinfo("提示", "当前文件没有标记为 GOOD 的检测目标")
                 return
 
-            # 只处理前 high_score_count 个检测目标
-            total = min(high_score_count, len(self._all_cutout_sets))
+            total = len(good_indices)
             success_count = 0
             skip_count = 0
 
@@ -10709,31 +11051,37 @@ class FitsImageViewer:
                 stats_label.config(text=f"成功: {success_count} | 跳过: {skip_count}")
                 progress_window.update()
 
+            interval = self._get_batch_query_interval_seconds()
+
             try:
-                for cutout_idx in range(total):
+                for step, cutout_idx in enumerate(good_indices, start=1):
                     self._current_cutout_index = cutout_idx
 
                     # 检查是否已经查询过
                     skybot_queried, skybot_result = self._check_existing_query_results('skybot')
                     vsx_queried, vsx_result = self._check_existing_query_results('vsx')
 
-                    self.logger.info(f"目标 {cutout_idx + 1}: skybot_queried={skybot_queried}, skybot_result={skybot_result}")
-                    self.logger.info(f"目标 {cutout_idx + 1}: vsx_queried={vsx_queried}, vsx_result={vsx_result}")
+                    human_idx = cutout_idx + 1  # 人类可读的检测编号
+                    self.logger.info(f"目标 {human_idx}: skybot_queried={skybot_queried}, skybot_result={skybot_result}")
+                    self.logger.info(f"目标 {human_idx}: vsx_queried={vsx_queried}, vsx_result={vsx_result}")
 
                     # 如果都已查询过，跳过
                     if skybot_queried and vsx_queried:
                         skip_count += 1
-                        update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 已全部查询过")
+                        update_progress(step, f"目标 {human_idx}: 已全部查询过")
                         continue
+
+                    did_query = False
 
                     # 查询小行星
                     if not skybot_queried:
-                        update_progress(cutout_idx + 0.3, f"目标 {cutout_idx + 1}: 查询小行星...")
+                        update_progress(step, f"目标 {human_idx}: 查询小行星...")
                         self._query_skybot()
+                        did_query = True
 
                         # 检查小行星查询结果
                         skybot_queried, skybot_result = self._check_existing_query_results('skybot')
-                        self.logger.info(f"目标 {cutout_idx + 1}: 小行星查询后 skybot_queried={skybot_queried}, skybot_result={skybot_result}")
+                        self.logger.info(f"目标 {human_idx}: 小行星查询后 skybot_queried={skybot_queried}, skybot_result={skybot_result}")
 
                     # 判断是否需要查询变星
                     # 只有当小行星找到结果时才跳过变星查询
@@ -10743,31 +11091,35 @@ class FitsImageViewer:
                         # 小行星有结果，跳过变星查询
                         should_query_vsx = False
                         success_count += 1
-                        update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 找到小行星，跳过变星查询")
-                        self.logger.info(f"目标 {cutout_idx + 1}: 找到小行星，跳过变星查询")
+                        update_progress(step, f"目标 {human_idx}: 找到小行星，跳过变星查询")
+                        self.logger.info(f"目标 {human_idx}: 找到小行星，跳过变星查询")
 
-                    self.logger.info(f"目标 {cutout_idx + 1}: should_query_vsx={should_query_vsx}, vsx_queried={vsx_queried}")
+                    self.logger.info(f"目标 {human_idx}: should_query_vsx={should_query_vsx}, vsx_queried={vsx_queried}")
 
                     # 查询变星（只有在小行星无有效结果时才查询）
                     if should_query_vsx and not vsx_queried:
-                        self.logger.info(f"目标 {cutout_idx + 1}: 开始查询变星...")
-                        update_progress(cutout_idx + 0.7, f"目标 {cutout_idx + 1}: 查询变星...")
+                        self.logger.info(f"目标 {human_idx}: 开始查询变星...")
+                        update_progress(step, f"目标 {human_idx}: 查询变星...")
                         self._query_vsx()
+                        did_query = True
                         success_count += 1
-                        update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 完成")
+                        update_progress(step, f"目标 {human_idx}: 完成")
                     elif not should_query_vsx:
                         # 已经跳过变星查询
-                        self.logger.info(f"目标 {cutout_idx + 1}: 跳过变星查询（小行星已找到）")
-                        pass
+                        self.logger.info(f"目标 {human_idx}: 跳过变星查询（小行星已找到）")
                     else:
                         # 变星已查询过
-                        self.logger.info(f"目标 {cutout_idx + 1}: 变星已查询过")
+                        self.logger.info(f"目标 {human_idx}: 变星已查询过")
                         success_count += 1
-                        update_progress(cutout_idx + 1, f"目标 {cutout_idx + 1}: 完成")
+                        update_progress(step, f"目标 {human_idx}: 完成")
+
+                    # 查询间隔
+                    if did_query and interval > 0 and step < total:
+                        time.sleep(interval)
 
                 # 完成
                 progress_label.config(text="批量查询完成！")
-                detail_label.config(text=f"总计: {total} 个检测目标")
+                detail_label.config(text=f"总计: {total} 个检测目标（均为标记为 GOOD 的目标）")
                 self.logger.info(f"批量查询完成！成功: {success_count}, 跳过: {skip_count}")
 
             except Exception as e:
@@ -10796,15 +11148,15 @@ class FitsImageViewer:
                         if detection_info and detection_info.get('has_result'):
                             high_score_count = detection_info.get('high_score_count', 0)
 
-                            # 只处理 high_score_count < 8 的文件
-                            if high_score_count < 8:
-                                files_to_process.append({
-                                    'file_path': file_path,
-                                    'region_dir': root,
-                                    'high_score_count': high_score_count,
-                                    'detection_info': detection_info
-                                })
-                                self.logger.info(f"添加到批量查询列表: {filename} (high_score={high_score_count})")
+                            # 以前这里限制 high_score_count < 8，现在改为：只要有diff检测结果就纳入批量查询，
+                            # 后续仅按手动 GOOD 标记筛选具体目标
+                            files_to_process.append({
+                                'file_path': file_path,
+                                'region_dir': root,
+                                'high_score_count': high_score_count,
+                                'detection_info': detection_info
+                            })
+                            self.logger.info(f"添加到批量查询列表: {filename} (high_score={high_score_count})")
 
             self.logger.info(f"共收集到 {len(files_to_process)} 个文件需要批量查询")
 
@@ -10869,17 +11221,29 @@ class FitsImageViewer:
                         update_progress(idx, filename, "跳过（无检测结果）")
                         continue
 
-                    # 获取high_score_count，只查询高分目标
-                    high_score_count = self._get_high_score_count_from_current_detection()
-                    if high_score_count is None or high_score_count == 0:
+                    # 以前这里按 high_score_count 过滤，现在取消该限制，只依赖手动 GOOD 标记
+                    # high_score_count = self._get_high_score_count_from_current_detection()
+                    # if high_score_count is None or high_score_count == 0:
+                    #     skip_count += 1
+                    #     update_progress(idx, filename, "跳过（无高分目标）")
+                    #     continue
+
+                    # 仅查询手动标记为 GOOD 的检测目标
+                    good_indices = [
+                        ci for ci, c in enumerate(self._all_cutout_sets)
+                        if c.get('manual_label') == 'good'
+                    ]
+                    if not good_indices:
                         skip_count += 1
-                        update_progress(idx, filename, "跳过（无高分目标）")
+                        update_progress(idx, filename, "跳过（无 GOOD 标记目标）")
                         continue
 
-                    # 只遍历前 high_score_count 个检测目标
-                    total_to_query = min(high_score_count, len(self._all_cutout_sets))
+                    total_to_query = len(good_indices)
                     queried_count = 0
-                    for cutout_idx in range(total_to_query):
+
+                    interval = self._get_batch_query_interval_seconds()
+
+                    for local_step, cutout_idx in enumerate(good_indices, start=1):
                         self._current_cutout_index = cutout_idx
 
                         # 检查是否已经查询过
@@ -10890,11 +11254,14 @@ class FitsImageViewer:
                         if skybot_queried and vsx_queried:
                             continue
 
+                        did_query = False
+
                         # 查询小行星
                         if not skybot_queried:
-                            update_progress(idx - 0.3, filename, f"查询小行星 ({cutout_idx + 1}/{total_to_query})...")
+                            update_progress(idx - 0.3, filename, f"查询小行星 ({local_step}/{total_to_query})...")
                             self._query_skybot()
                             queried_count += 1
+                            did_query = True
 
                             # 检查小行星查询结果
                             skybot_queried, skybot_result = self._check_existing_query_results('skybot')
@@ -10909,16 +11276,21 @@ class FitsImageViewer:
 
                         # 查询变星（只有在小行星无有效结果时才查询）
                         if should_query_vsx and not vsx_queried:
-                            update_progress(idx - 0.1, filename, f"查询变星 ({cutout_idx + 1}/{total_to_query})...")
+                            update_progress(idx - 0.1, filename, f"查询变星 ({local_step}/{total_to_query})...")
                             self._query_vsx()
                             queried_count += 1
+                            did_query = True
+
+                        # 查询间隔
+                        if did_query and interval > 0 and local_step < total_to_query:
+                            time.sleep(interval)
 
                     if queried_count > 0:
                         success_count += 1
-                        update_progress(idx, filename, f"完成（查询了 {queried_count} 个目标）")
+                        update_progress(idx, filename, f"完成（查询了 {queried_count} 个 GOOD 目标）")
                     else:
                         skip_count += 1
-                        update_progress(idx, filename, "跳过（已全部查询过）")
+                        update_progress(idx, filename, "跳过（已全部查询过或无 GOOD 标记目标）")
 
                 except Exception as e:
                     error_count += 1
@@ -11016,7 +11388,10 @@ class FitsImageViewer:
                     'vsx_results': None,
                     'skybot_queried': False,
                     'vsx_queried': False,
-                    'manual_label': None
+                    'manual_label': None,
+                    'auto_class_label': None,
+                    'skybot_error': False,
+                    'vsx_error': False,
                 }
                 self._all_cutout_sets.append(cutout_set)
 
