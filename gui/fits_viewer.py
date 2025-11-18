@@ -5695,7 +5695,8 @@ class FitsImageViewer:
             auto_tokens = ["[SUSPECT]", "[FALSE]", "[ERROR]"]
 
             for i, line in enumerate(lines):
-                if pattern.search(line):
+                # 为了兼容各种格式，除了正则匹配，还额外判断是否包含 "cutout #idx" 关键字
+                if pattern.search(line) or f"cutout #{idx}".lower() in line.lower():
                     line_stripped = line.rstrip("\n")
                     # 移除旧的自动分类标记
                     for tok in auto_tokens:
@@ -5706,15 +5707,22 @@ class FitsImageViewer:
                     modified = True
                     break
 
-            # 对于自动标记，如果找不到对应行，则不追加新行，避免产生大量重复的
-            # "cutout #N: [FALSE]" 记录；仅在已有行上更新自动分类标记。
+            # 对于自动标记：
+            # - 如果找到对应行(modified=True)，则写回文件并输出成功日志；
+            # - 如果找不到对应行(modified=False)，则不改动文件，只输出一条调试日志，避免产生大量重复的
+            #   "cutout #N: [FALSE]" 记录，后续可根据日志再调整解析规则。
+            if not modified:
+                self.logger.warning(
+                    f"在 {os.path.basename(aligned_txt_path)} 中未找到 cutout #{idx} 对应行，自动标记 {auto_mark} 未写入"
+                )
 
             try:
                 with open(aligned_txt_path, 'w', encoding='utf-8') as f:
                     f.writelines(lines)
-                self.logger.info(
-                    f"已将自动标记 {auto_mark} 写入 {os.path.basename(aligned_txt_path)} (cutout #{idx})"
-                )
+                if modified:
+                    self.logger.info(
+                        f"已将自动标记 {auto_mark} 写入 {os.path.basename(aligned_txt_path)} (cutout #{idx})"
+                    )
             except Exception as e:
                 self.logger.error(f"写入 {aligned_txt_path} 失败(自动标记): {e}")
         except Exception as e:
