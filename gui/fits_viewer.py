@@ -5422,9 +5422,16 @@ class FitsImageViewer:
 
             self.logger.info(f"找到 {self._total_cutouts} 组检测结果")
 
-            # 加载每个cutout的查询结果
+            # 加载每个cutout的查询结果，并基于 query_results_*.txt 重新计算自动分类
             for idx, cutout_set in enumerate(self._all_cutout_sets):
                 self._load_query_results_from_file(cutout_set, idx)
+                # 这里临时设置当前索引，以便复用统一的自动分类逻辑
+                self._current_cutout_index = idx
+                try:
+                    self._update_auto_classification_for_current_cutout()
+                except Exception:
+                    # 自动分类失败不影响浏览
+                    pass
 
             # 从 aligned_comparison_*.txt 加载 GOOD/BAD 手工标记
             try:
@@ -5605,17 +5612,20 @@ class FitsImageViewer:
                 self.logger.error(f"读取 {aligned_txt_path} 失败: {e}")
                 return
 
-            # 简单策略：找到包含 "#{idx}" 或 "序号 idx" 的第一行，在行尾追加标记
+            # 策略：优先在同一行上更新/追加标记，匹配形式包括：
+            #   - "# idx ..."  （原始 aligned_comparison 行）
+            #   - "idx:"       （简化行号形式）
+            #   - "cutout #idx"（本工具追加的兼容行）
             import re
-            pattern = re.compile(rf"(#+\s*{idx}\b|\b{idx}\s*[:：])")
+            pattern = re.compile(rf"(#+\s*{idx}\\b|\\b{idx}\s*[:：]|cutout\s*#\s*{idx}\\b)", re.IGNORECASE)
             modified = False
             for i, line in enumerate(lines):
                 if pattern.search(line):
-                    if mark_str in line:
-                        modified = True
-                        break
-                    # 去掉行尾换行，追加标记
                     line_stripped = line.rstrip("\n")
+                    # 清理旧的 GOOD/BAD 标记，防止同时存在 [GOOD][BAD]
+                    for tok in ("[GOOD]", "[BAD]"):
+                        line_stripped = line_stripped.replace(tok, "")
+                    line_stripped = line_stripped.rstrip()
                     lines[i] = f"{line_stripped}  {mark_str}\n"
                     modified = True
                     break
@@ -5632,6 +5642,83 @@ class FitsImageViewer:
                 self.logger.error(f"写入 {aligned_txt_path} 失败: {e}")
         except Exception as e:
             self.logger.error(f"保存手动GOOD/BAD标记到 aligned_comparison 失败: {e}")
+
+
+    def _save_auto_label_to_aligned_comparison(self):
+        """将当前cutout的自动分类(SUSPECT/FALSE/ERROR)标记写入 aligned_comparison_*.txt。
+
+        - 不修改 GOOD/BAD 标记（仅追加/更新 SUSPECT/FALSE/ERROR）。
+        - 同一行上只保留一个自动分类标记，写入新标记前会移除旧的 SUSPECT/FALSE/ERROR。
+        """
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                return
+
+            current_set = self._all_cutout_sets[self._current_cutout_index]
+            auto_label = current_set.get('auto_class_label', None)
+            if auto_label not in ('suspect', 'false', 'error'):
+                return
+
+            detection_img = current_set.get('detection')
+            if not detection_img or not os.path.exists(detection_img):
+                return
+
+            cutout_dir = os.path.dirname(detection_img)
+            detection_dir = os.path.dirname(cutout_dir)
+
+            # 在 detection_* 目录中查找 aligned_comparison_*.txt
+            candidates = [
+                f for f in os.listdir(detection_dir)
+                if f.startswith("aligned_comparison_") and f.endswith(".txt")
+            ]
+            if not candidates:
+                # 没有对齐比较文件时，静默跳过
+                return
+
+            aligned_txt_path = os.path.join(detection_dir, sorted(candidates)[0])
+
+            idx = self._current_cutout_index + 1  # 1-based
+            auto_mark = f"[{auto_label.upper()}]"
+
+            try:
+                with open(aligned_txt_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+            except Exception as e:
+                self.logger.error(f"读取 {aligned_txt_path} 失败(写入自动标记): {e}")
+                return
+
+            import re
+            pattern = re.compile(rf"(#+\s*{idx}\\b|\\b{idx}\s*[:：]|cutout\s*#\s*{idx}\\b)", re.IGNORECASE)
+            modified = False
+            auto_tokens = ["[SUSPECT]", "[FALSE]", "[ERROR]"]
+
+            for i, line in enumerate(lines):
+                if pattern.search(line):
+                    line_stripped = line.rstrip("\n")
+                    # 移除旧的自动分类标记
+                    for tok in auto_tokens:
+                        line_stripped = line_stripped.replace(tok, "")
+                    # 避免尾部多余空格
+                    line_stripped = line_stripped.rstrip()
+                    lines[i] = f"{line_stripped}  {auto_mark}\n"
+                    modified = True
+                    break
+
+            # 对于自动标记，如果找不到对应行，则不追加新行，避免产生大量重复的
+            # "cutout #N: [FALSE]" 记录；仅在已有行上更新自动分类标记。
+
+            try:
+                with open(aligned_txt_path, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+                self.logger.info(
+                    f"已将自动标记 {auto_mark} 写入 {os.path.basename(aligned_txt_path)} (cutout #{idx})"
+                )
+            except Exception as e:
+                self.logger.error(f"写入 {aligned_txt_path} 失败(自动标记): {e}")
+        except Exception as e:
+            self.logger.error(f"保存自动 SUSPECT/FALSE/ERROR 标记到 aligned_comparison 失败: {e}")
 
     def _load_manual_labels_for_current_detection_dir(self, detection_dir):
         """从 detection_* 目录下的 aligned_comparison_*.txt 读取 GOOD/BAD 标记填充到当前 cutout 集合。
@@ -5666,10 +5753,25 @@ class FitsImageViewer:
 
             import re
             for line in lines:
-                if "[GOOD]" not in line and "[BAD]" not in line:
+                # 既可能有 GOOD/BAD，也可能有 SUSPECT/FALSE/ERROR
+                has_manual = ("[GOOD]" in line) or ("[BAD]" in line)
+                has_auto = ("[SUSPECT]" in line) or ("[FALSE]" in line) or ("[ERROR]" in line)
+                if not has_manual and not has_auto:
                     continue
 
-                label = 'good' if "[GOOD]" in line else 'bad'
+                manual_label = None
+                if "[GOOD]" in line:
+                    manual_label = 'good'
+                elif "[BAD]" in line:
+                    manual_label = 'bad'
+
+                auto_label = None
+                if "[SUSPECT]" in line:
+                    auto_label = 'suspect'
+                elif "[FALSE]" in line:
+                    auto_label = 'false'
+                elif "[ERROR]" in line:
+                    auto_label = 'error'
 
                 idx = None
                 m = re.search(r"cutout\s*#\s*(\d+)", line, re.IGNORECASE)
@@ -5689,7 +5791,11 @@ class FitsImageViewer:
 
                 zero_based = idx - 1
                 if 0 <= zero_based < len(self._all_cutout_sets):
-                    self._all_cutout_sets[zero_based]['manual_label'] = label
+                    if manual_label is not None:
+                        self._all_cutout_sets[zero_based]['manual_label'] = manual_label
+                    if auto_label is not None and not self._all_cutout_sets[zero_based].get('auto_class_label'):
+                        # 仅在尚未根据 query_results_*.txt 计算自动分类时，从文件恢复自动标记
+                        self._all_cutout_sets[zero_based]['auto_class_label'] = auto_label
         except Exception as e:
             self.logger.error(f"从 aligned_comparison 加载GOOD/BAD标记失败: {e}")
 
@@ -10676,6 +10782,12 @@ class FitsImageViewer:
             cutout['auto_class_label'] = new_label
             self.logger.info(f"自动分类结果: {new_label}")
             self._refresh_cutout_status_label()
+
+            # 将自动分类(SUSPECT/FALSE/ERROR)持久化到 aligned_comparison_*.txt
+            try:
+                self._save_auto_label_to_aligned_comparison()
+            except Exception as inner_e:
+                self.logger.error(f"写入自动分类到 aligned_comparison 失败: {inner_e}")
         except Exception as e:
             self.logger.error(f"更新自动分类(auto_class_label)失败: {e}")
 
@@ -11398,9 +11510,14 @@ class FitsImageViewer:
             self._current_cutout_index = 0
             self._total_cutouts = len(self._all_cutout_sets)
 
-            # 加载每个cutout的查询结果
+            # 加载每个cutout的查询结果，并基于 query_results_*.txt 重新计算自动分类
             for idx, cutout_set in enumerate(self._all_cutout_sets):
                 self._load_query_results_from_file(cutout_set, idx)
+                self._current_cutout_index = idx
+                try:
+                    self._update_auto_classification_for_current_cutout()
+                except Exception:
+                    pass
 
             # 从 aligned_comparison_*.txt 加载 GOOD/BAD 手工标记
             try:
