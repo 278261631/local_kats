@@ -497,15 +497,26 @@ class FitsImageViewer:
         # g - 跳转未查询
         top.bind('g', lambda e: self._jump_to_next_unqueried())
 
-        # - 和 [ - 上一组
+        # j - 跳转高分
+        top.bind('j', lambda e: self._jump_to_next_high_score())
+
+        # - / [ / k - 上一组
         top.bind('-', lambda e: self._show_previous_cutout())
         top.bind('[', lambda e: self._show_previous_cutout())
+        top.bind('k', lambda e: self._show_previous_cutout())
 
-        # = 和 ] - 下一组
+        # = / ] / l - 下一组
         top.bind('=', lambda e: self._show_next_cutout())
         top.bind(']', lambda e: self._show_next_cutout())
+        top.bind('l', lambda e: self._show_next_cutout())
 
-        self.logger.info("已绑定全局快捷键: g(跳转未查询), -/[(上一组), =/](下一组)")
+        # i - 查询小行星
+        top.bind('i', lambda e: self._query_skybot())
+
+        # o - 查询变星
+        top.bind('o', lambda e: self._query_vsx())
+
+        self.logger.info("已绑定全局快捷键: g(跳转未查询), j(跳转高分), -/[ /k(上一组), =/]/l(下一组), i(查询小行星), o(查询变星)")
 
     def _create_directory_tree(self, parent):
         """创建左侧目录树"""
