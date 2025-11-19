@@ -18,9 +18,11 @@ def check_dependencies():
         'requests',
         'bs4',  # beautifulsoup4
         'scipy',
-        'cv2'   # opencv-python
+        'cv2',  # opencv-python
+        'torch',
+        'PIL',  # pillow
     ]
-    
+
     missing_packages = []
     
     for package in required_packages:

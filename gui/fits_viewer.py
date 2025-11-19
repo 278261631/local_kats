@@ -46,6 +46,12 @@ try:
 except ImportError:
     WCSChecker = None
 
+# AI GOOD/BAD 质量自动标记分类器（可选依赖）
+try:
+    from ai_filter.classifier import AIPairQualityClassifier
+except Exception:
+    AIPairQualityClassifier = None
+
 
 class FitsImageViewer:
     """FITS图像查看器"""
@@ -85,7 +91,8 @@ class FitsImageViewer:
         # MPCORB缓存：存储(dataframe, ts, eph)以避免重复加载
         self._mpcorb_cache = None  # (path, df, ts, eph)
 
-
+        # AI GOOD/BAD 
+        self._ai_classifier = None
 
         # 设置日志
         self.logger = logging.getLogger(__name__)
@@ -247,6 +254,9 @@ class FitsImageViewer:
 
         # 显著性阈值（用于直线检测过滤/绘制），默认与CLI一致：0.65
         self.saliency_thresh_var = tk.DoubleVar(value=0.65)
+
+        # AI GOOD/BAD 自动标记置信度阈值（在高级设置中可调）
+        self.ai_confidence_threshold_var = tk.DoubleVar(value=0.7)
 
 
         # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
@@ -559,6 +569,12 @@ class FitsImageViewer:
             command=self._jump_to_next_unlabeled_high_score
         ).pack(side=tk.LEFT)
 
+        ttk.Button(
+            high_score_frame,
+            text="AI标记 GOOD/BAD",
+            command=self._ai_mark_detections
+        ).pack(side=tk.LEFT, padx=(5, 0))
+
 
         # 创建目录树
         tree_frame = ttk.Frame(left_frame)
@@ -800,7 +816,7 @@ class FitsImageViewer:
             self.sort_by_var.set(sort_by)
 
             # WCS稀疏采样优化
-            # 直线检测与对齐调优设置
+            # 直线检测与对齐调优设置，以及AI自动标记相关设置
             try:
                 lds = self.config_manager.get_line_detection_settings()
                 self.line_sensitivity_var.set(int(lds.get('sensitivity', 50)))
@@ -812,6 +828,10 @@ class FitsImageViewer:
                 self.align_tri_inlier_thr_var.set(float(ats.get('tri_inlier_thr_px', 4.0)))
                 self.align_tri_bin_scale_var.set(int(ats.get('tri_bin_scale', 60)))
                 self.align_tri_topk_var.set(int(ats.get('tri_topk', 5)))
+
+                # AI GOOD/BAD 自动标记相关设置
+                ais = self.config_manager.get_ai_classification_settings()
+                self.ai_confidence_threshold_var.set(float(ais.get('confidence_threshold', 0.7)))
             except Exception:
                 pass
 
@@ -883,6 +903,9 @@ class FitsImageViewer:
 
             # 绑定Aligned SNR阈值输入框
             self.aligned_snr_threshold_var.trace('w', self._on_aligned_snr_threshold_change)
+
+            # 绑定AI置信度阈值输入框
+            self.ai_confidence_threshold_var.trace('w', self._on_ai_confidence_threshold_change)
 
             # 绑定排序方式下拉框
             self.sort_by_var.trace('w', self._on_batch_settings_change)
@@ -1076,6 +1099,32 @@ class FitsImageViewer:
             self.logger.warning(f"无效的综合得分阈值值: {self.score_threshold_var.get()}")
         except Exception as e:
             self.logger.error(f"保存综合得分阈值参数失败: {str(e)}")
+
+    def _on_ai_confidence_threshold_change(self, *args):
+        """AI置信度阈值变化时保存到配置文件（延迟保存）"""
+        if not self.config_manager:
+            return
+
+        # 取消之前的延迟保存任务
+        if hasattr(self, '_ai_conf_save_timer'):
+            self.parent_frame.after_cancel(self._ai_conf_save_timer)
+
+        # 设置新的延迟保存任务（1秒后保存）
+        self._ai_conf_save_timer = self.parent_frame.after(1000, self._save_ai_confidence_threshold)
+
+    def _save_ai_confidence_threshold(self):
+        """保存AI置信度阈值到配置文件"""
+        if not self.config_manager:
+            return
+
+        try:
+            thr = float(self.ai_confidence_threshold_var.get())
+            self.config_manager.update_ai_classification_settings(confidence_threshold=thr)
+            self.logger.info(f"AI置信度阈值已保存: {thr}")
+        except ValueError:
+            self.logger.warning(f"无效的AI置信度阈值: {self.ai_confidence_threshold_var.get()}")
+        except Exception as e:
+            self.logger.error(f"保存AI置信度阈值失败: {str(e)}")
 
     def _on_aligned_snr_threshold_change(self, *args):
         """Aligned SNR阈值参数变化时保存到配置文件（延迟保存）"""
@@ -4172,6 +4221,236 @@ class FitsImageViewer:
             err = f"导出AI训练数据失败: {str(e)}"
             self.logger.error(err, exc_info=True)
             messagebox.showerror("错误", err)
+
+
+
+
+    def _get_ai_classifier(self):
+        """懒加载 AI GOOD/BAD 分类器实例。
+
+        如果缺少依赖（如 torch）或模型文件，将给出友好提示并返回 None。
+        """
+        try:
+            if getattr(self, "_ai_classifier", None) is not None:
+                return self._ai_classifier
+
+            if AIPairQualityClassifier is None:
+                msg = "当前环境未安装AI分类依赖（torch/torchvision 等），AI标记功能不可用。"
+                if hasattr(self, "logger"):
+                    self.logger.error(msg)
+                messagebox.showerror("AI标记不可用", msg)
+                self._ai_classifier = None
+                return None
+
+            # 实例化模型（默认使用 gui/ai_filter/pair_quality_cnn.pth）
+            self._ai_classifier = AIPairQualityClassifier()
+            if hasattr(self, "logger"):
+                self.logger.info("AI GOOD/BAD 分类模型已加载完成")
+            return self._ai_classifier
+
+        except FileNotFoundError as e:
+            msg = f"未找到AI模型文件: {e}"
+            if hasattr(self, "logger"):
+                self.logger.error(msg)
+            messagebox.showerror("AI模型缺失", msg)
+            self._ai_classifier = None
+            return None
+        except Exception as e:
+            msg = f"加载AI模型失败: {e}"
+            if hasattr(self, "logger"):
+                self.logger.error(msg, exc_info=True)
+            messagebox.showerror("AI标记不可用", msg)
+            self._ai_classifier = None
+            return None
+
+
+    def _ai_mark_detections(self):
+        """使用AI模型自动为当前目录树选中范围内的检测结果打 GOOD/BAD 标记。
+
+        只对置信度 >= 高级设置中阈值的预测结果进行标记，且不会覆盖已有的手工 GOOD/BAD 标记。
+        """
+        try:
+            classifier = self._get_ai_classifier()
+            if classifier is None:
+                return
+
+            # 读取置信度阈值
+            try:
+                threshold = float(self.ai_confidence_threshold_var.get())
+            except Exception:
+                threshold = 0.7
+
+            # 获取当前目录树选择
+            selection = self.directory_tree.selection()
+            if not selection:
+                messagebox.showwarning("警告", "请先在左侧目录树选择一个目录或文件")
+                return
+
+            root_node = selection[0]
+            root_tags = self.directory_tree.item(root_node, "tags")
+            root_values = self.directory_tree.item(root_node, "values")
+            if not root_values and "fits_file" not in root_tags:
+                messagebox.showwarning("警告", "请选择一个包含FITS文件的目录或FITS文件节点")
+                return
+
+            # 收集该节点下的所有FITS文件节点
+            file_nodes = []
+
+            def collect_file_nodes(node):
+                for child in self.directory_tree.get_children(node):
+                    tags_child = self.directory_tree.item(child, "tags")
+                    if "fits_file" in tags_child:
+                        file_nodes.append(child)
+                    else:
+                        # 仅在目录节点中递归
+                        if any(tag in tags_child for tag in [
+                            "region",
+                            "date",
+                            "telescope",
+                            "root_dir",
+                            "template_dir",
+                        ]):
+                            collect_file_nodes(child)
+
+            if "fits_file" in root_tags:
+                file_nodes.append(root_node)
+            else:
+                collect_file_nodes(root_node)
+
+            if not file_nodes:
+                messagebox.showinfo("提示", "所选目录下没有FITS文件")
+                return
+
+            total_files = len(file_nodes)
+            total_cutouts = 0
+            marked_good = 0
+            marked_bad = 0
+            skipped_labeled = 0
+            skipped_low_conf = 0
+            skipped_missing_img = 0
+
+            if hasattr(self, "logger"):
+                self.logger.info("=" * 60)
+                self.logger.info(
+                    f"开始AI自动标记 GOOD/BAD: 文件数={total_files}, 置信度阈值={threshold}"
+                )
+
+            # 记录并在结束后恢复当前cutout索引
+            original_idx = getattr(self, "_current_cutout_index", None)
+
+            for file_node in file_nodes:
+                try:
+                    values = self.directory_tree.item(file_node, "values")
+                    if not values:
+                        continue
+                    file_path = values[0]
+                    if not os.path.isfile(file_path):
+                        continue
+
+                    region_dir = os.path.dirname(file_path)
+
+                    # 为该文件加载diff结果
+                    if not self._load_diff_results_for_file(file_path, region_dir):
+                        continue
+                    if not hasattr(self, "_all_cutout_sets") or not self._all_cutout_sets:
+                        continue
+
+                    for idx, cutout_set in enumerate(self._all_cutout_sets):
+                        if not cutout_set:
+                            continue
+
+                        total_cutouts += 1
+
+                        # 跳过已有的手工 GOOD/BAD 标记
+                        existing_label = str((cutout_set or {}).get("manual_label") or "").lower()
+                        if existing_label in ("good", "bad"):
+                            skipped_labeled += 1
+                            continue
+
+                        ref_img = (cutout_set or {}).get("reference")
+                        aligned_img = (cutout_set or {}).get("aligned")
+                        if (
+                            not ref_img
+                            or not os.path.exists(ref_img)
+                            or not aligned_img
+                            or not os.path.exists(aligned_img)
+                        ):
+                            skipped_missing_img += 1
+                            continue
+
+                        try:
+                            label, prob = classifier.predict_pair(ref_img, aligned_img)
+                        except Exception as e:
+                            if hasattr(self, "logger"):
+                                self.logger.error(
+                                    f"AI标记失败，文件={file_path}, cutout_idx={idx + 1}: {e}",
+                                    exc_info=True,
+                                )
+                            continue
+
+                        if prob < threshold:
+                            skipped_low_conf += 1
+                            continue
+
+                        new_label = "good" if str(label).lower() == "good" else "bad"
+                        cutout_set["manual_label"] = new_label
+
+                        if new_label == "good":
+                            marked_good += 1
+                        else:
+                            marked_bad += 1
+
+                        # 将该标记写入 aligned_comparison_*.txt
+                        try:
+                            self._current_cutout_index = idx
+                            self._save_manual_labels_to_aligned_comparison()
+                        except Exception as e:
+                            if hasattr(self, "logger"):
+                                self.logger.error(
+                                    f"写入aligned_comparison手动标记失败(AI, {new_label}): {e}",
+                                    exc_info=True,
+                                )
+
+                except Exception as e:
+                    if hasattr(self, "logger"):
+                        self.logger.error(f"AI自动标记处理文件失败: {e}", exc_info=True)
+
+            # 恢复当前cutout索引
+            if original_idx is not None:
+                self._current_cutout_index = original_idx
+
+            # 尝试刷新当前cutout状态显示
+            try:
+                self._refresh_cutout_status_label()
+            except Exception:
+                pass
+
+            msg = (
+                "AI自动标记完成！\n\n"
+                f"总目标数: {total_cutouts}\n"
+                f"新标记 GOOD: {marked_good}\n"
+                f"新标记 BAD: {marked_bad}\n"
+                f"跳过(已有手工标记): {skipped_labeled}\n"
+                f"跳过(低于置信度阈值): {skipped_low_conf}\n"
+                f"跳过(缺少图像文件): {skipped_missing_img}"
+            )
+            messagebox.showinfo("AI自动标记", msg)
+
+            if hasattr(self, "logger"):
+                self.logger.info(
+                    "AI自动标记完成: "
+                    f"total={total_cutouts}, good={marked_good}, bad={marked_bad}, "
+                    f"skipped_labeled={skipped_labeled}, "
+                    f"skipped_low_conf={skipped_low_conf}, "
+                    f"skipped_missing_img={skipped_missing_img}"
+                )
+
+        except Exception as e:
+            err = f"AI自动标记失败: {e}"
+            if hasattr(self, "logger"):
+                self.logger.error(err, exc_info=True)
+            messagebox.showerror("错误", err)
+
 
 
 

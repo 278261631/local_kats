@@ -110,6 +110,9 @@ class ConfigManager:
                 "max_center_distance": 2400,  # 检测结果距离中心像素的最大距离（默认值：2400）
                 "auto_enable_threshold": 50  # 检测目标超过此数量时自动启用过滤（默认值：50）
             },
+            "ai_classification_settings": {
+                "confidence_threshold": 0.7  # AI GOOD/BAD 自动标记置信度阈值（默认：0.7）
+            },
             "line_detection_settings": {
                 "sensitivity": 50,                # 直线检测灵敏度(1-100)，越大越敏感
                 "center_distance_px": 3,         # 判定“过中心”的距离阈值（像素）
@@ -433,6 +436,21 @@ class ConfigManager:
             self.config["alignment_tuning_settings"] = self.default_config.get("alignment_tuning_settings", {}).copy()
         for key, value in kwargs.items():
             self.config["alignment_tuning_settings"][key] = value
+        self.save_config()
+
+    def get_ai_classification_settings(self) -> Dict[str, Any]:
+        """获取AI GOOD/BAD 自动标记相关设置"""
+        if "ai_classification_settings" not in self.config:
+            self.config["ai_classification_settings"] = self.default_config.get("ai_classification_settings", {}).copy()
+            self.save_config()
+        return self.config["ai_classification_settings"]
+
+    def update_ai_classification_settings(self, **kwargs):
+        """更新AI GOOD/BAD 自动标记相关设置"""
+        if "ai_classification_settings" not in self.config:
+            self.config["ai_classification_settings"] = self.default_config.get("ai_classification_settings", {}).copy()
+        for key, value in kwargs.items():
+            self.config["ai_classification_settings"][key] = value
         self.save_config()
 
 

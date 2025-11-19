@@ -713,6 +713,21 @@ class FitsWebDownloaderGUI:
             foreground="gray"
         ).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(5, 0))
 
+        # AI GOOD/BAD 自动标记设置
+        ai_mark_frame = ttk.LabelFrame(settings_container, text="AI自动标记(GOOD/BAD)", padding=10)
+        ai_mark_frame.pack(fill=tk.X, pady=(0, 10))
+
+        if hasattr(self, 'fits_viewer') and self.fits_viewer:
+            ttk.Label(ai_mark_frame, text="置信度阈值:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+            ai_thr_entry = ttk.Entry(ai_mark_frame, textvariable=self.fits_viewer.ai_confidence_threshold_var, width=8)
+            ai_thr_entry.grid(row=0, column=1, sticky=tk.W, padx=(0, 5))
+            ttk.Label(
+                ai_mark_frame,
+                text="取值范围 0~1，默认 0.7。仅当AI预测置信度 ≥ 该值时才自动标记为 GOOD/BAD。",
+                foreground="gray",
+            ).grid(row=0, column=2, sticky=tk.W, padx=(10, 0))
+
+
 
         # 星历文件选择
         ttk.Button(local_catalog_frame, text="选择星历文件(.bsp)", command=self._update_ephemeris_file).grid(row=3, column=0, sticky=tk.W, pady=(5, 0))

@@ -20,6 +20,12 @@ pathlib2>=2.3.0  # Python 3.4+兼容性
 # 可选：更好的HTTP客户端
 urllib3>=1.26.0
 
+
+# AI GOOD/BAD 模型依赖（如需使用AI自动标记功能，请安装）
+torch>=2.0.0
+torchvision>=0.15.0
+Pillow>=9.0.0
+
 # 开发和测试（可选）
 pytest>=6.0.0
 pytest-cov>=2.10.0
