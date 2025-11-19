@@ -498,10 +498,14 @@ class FitsImageViewer:
         # 获取顶层窗口
         top = self.parent_frame.winfo_toplevel()
 
-        # g - 跳转未查询
-        top.bind('g', lambda e: self._jump_to_next_unqueried())
+        # g/b - 标记 GOOD/BAD
+        top.bind('g', lambda e: self._mark_detection_good())
+        top.bind('b', lambda e: self._mark_detection_bad())
 
-        # j - 跳转高分
+        # ` - 下一个未标记高分检测
+        top.bind('`', lambda e: self._jump_to_next_unlabeled_high_score())
+
+        # j - 跳转高分文件
         top.bind('j', lambda e: self._jump_to_next_high_score())
 
         # - / [ / k - 上一组
@@ -514,7 +518,7 @@ class FitsImageViewer:
         top.bind(']', lambda e: self._show_next_cutout())
         top.bind('l', lambda e: self._show_next_cutout())
 
-        # N - 下一个 GOOD
+        # n/N - 下一个 GOOD
         top.bind('n', lambda e: self._jump_to_next_good())
         top.bind('N', lambda e: self._jump_to_next_good())
 
@@ -524,7 +528,10 @@ class FitsImageViewer:
         # o - 查询变星
         top.bind('o', lambda e: self._query_vsx())
 
-        self.logger.info("已绑定全局快捷键: g(跳转未查询), j(跳转高分), -/[ /k(上一组), =/]/l(下一组), i(查询小行星), o(查询变星)")
+        self.logger.info(
+            "已绑定全局快捷键: g(标记GOOD), b(标记BAD), ` (下一个未标记高分检测), j(跳转高分文件), "
+            "-/[ /k(上一组), =/]/l(下一组), n/N(下一个GOOD), i(查询小行星), o(查询变星)"
+        )
 
     def _create_directory_tree(self, parent):
         """创建左侧目录树"""
@@ -539,9 +546,18 @@ class FitsImageViewer:
 
         ttk.Button(refresh_frame, text="刷新目录", command=self._refresh_directory_tree).pack(side=tk.LEFT)
         ttk.Button(refresh_frame, text="跳转高分", command=self._jump_to_next_high_score).pack(side=tk.LEFT, padx=(5, 0))
-        ttk.Button(refresh_frame, text="跳转未查询 (g)", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(refresh_frame, text="跳转未查询", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="批量导出未查询", command=self._batch_export_unqueried).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="导出AI训练数据", command=self._export_ai_training_data).pack(side=tk.LEFT, padx=(5, 0))
+
+        # 高分检测结果跳转按钮（单独一行）
+        high_score_frame = ttk.Frame(left_frame)
+        high_score_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(
+            high_score_frame,
+            text="下一个未标记高分检测 (`)",
+            command=self._jump_to_next_unlabeled_high_score
+        ).pack(side=tk.LEFT)
 
 
         # 创建目录树
@@ -574,8 +590,8 @@ class FitsImageViewer:
         right_frame = ttk.Frame(parent)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # 创建图像显示区域 - 进一步减小高度，给下方 GOOD/BAD 按钮留出空间
-        self.figure = Figure(figsize=(8, 4), dpi=100)
+        # 创建图像显示区域 - 进一步减小高度，给下方 GOOD/BAD 按钮留出更多空间
+        self.figure = Figure(figsize=(8, 3), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.figure, right_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
@@ -655,15 +671,15 @@ class FitsImageViewer:
         self.cutout_label = ttk.Label(control_frame3, textvariable=self.cutout_label_var, foreground="purple")
         self.cutout_label.pack(side=tk.LEFT, padx=(0, 5))
 
-        # 标记 GOOD/BAD 按钮
+        # 标记 GOOD/BAD 按钮 (支持 g/b 快捷键)
         self.mark_good_button = ttk.Button(
-            control_frame3, text="标记 GOOD (1)",
+            control_frame3, text="标记 GOOD (g)",
             command=self._mark_detection_good, state="disabled"
         )
         self.mark_good_button.pack(side=tk.LEFT, padx=(5, 5))
 
         self.mark_bad_button = ttk.Button(
-            control_frame3, text="标记 BAD (2)",
+            control_frame3, text="标记 BAD (b)",
             command=self._mark_detection_bad, state="disabled"
         )
         self.mark_bad_button.pack(side=tk.LEFT, padx=(0, 10))
@@ -3422,7 +3438,6 @@ class FitsImageViewer:
                     self.directory_tree.focus(node)
                     self.directory_tree.see(node)
                     self.parent_frame.after(10, lambda: setattr(self, '_auto_selecting', False))
-
                     try:
                         text = self.directory_tree.item(node, 'text')
                         self.logger.info(f"跳转到下一个高分文件: {text}")
@@ -3434,6 +3449,150 @@ class FitsImageViewer:
             messagebox.showinfo("提示", "已到末尾，后续没有高分项")
         except Exception as e:
             self.logger.error(f"跳转高分失败: {e}", exc_info=True)
+    def _jump_to_next_unlabeled_high_score(self):
+        """从目录树当前选中节点开始，向下查找下一个“高分”且未被 GOOD/BAD 标记的检测结果。
+
+        - 起点：当前选中的目录树节点；如果没有选中，则从根节点开始；
+        - 仅遍历带 diff_gold_red 标记的高分文件；
+        - 仅在高分检测列表（analysis 中的前 N 个条目）内查找 manual_label 不是 'good'/'bad' 的 cutout；
+        - 找到后选中文件节点并显示对应检测目标。
+        """
+        try:
+            if not hasattr(self, 'directory_tree'):
+                messagebox.showinfo("提示", "目录树未初始化")
+                return
+
+            # 构造整棵树的遍历顺序（与可见顺序一致）
+            order = []
+
+            def walk(parent):
+                for child in self.directory_tree.get_children(parent):
+                    order.append(child)
+                    walk(child)
+
+            for root in self.directory_tree.get_children(""):
+                order.append(root)
+                walk(root)
+
+            if not order:
+                messagebox.showinfo("提示", "目录树为空")
+                return
+
+            # 起始节点：当前选中，否则树的第一个根节点
+            selection = self.directory_tree.selection()
+            start_node = selection[0] if selection else order[0]
+
+            try:
+                start_index = order.index(start_node)
+            except ValueError:
+                start_index = 0
+
+            current_file_path = getattr(self, 'selected_file_path', None)
+            current_has_cutouts = hasattr(self, '_all_cutout_sets') and bool(self._all_cutout_sets)
+            current_index = getattr(self, '_current_cutout_index', -1)
+
+            # 辅助函数：从文件节点向上找到所属的天区目录(region)路径
+            def get_region_dir_for_node(node, file_path):
+                parent = self.directory_tree.parent(node)
+                while parent:
+                    tags_parent = self.directory_tree.item(parent, "tags")
+                    vals_parent = self.directory_tree.item(parent, "values")
+                    if "region" in tags_parent and vals_parent:
+                        return vals_parent[0]
+                    parent = self.directory_tree.parent(parent)
+                # 兜底：找不到 region 节点时，使用文件所在目录
+                return os.path.dirname(file_path)
+
+            # 1）如果当前选中的是文件节点，优先在该文件中从当前索引之后查找
+            if selection and "fits_file" in self.directory_tree.item(start_node, "tags"):
+                values = self.directory_tree.item(start_node, "values")
+                if values:
+                    start_file_path = values[0]
+                    tags = self.directory_tree.item(start_node, "tags")
+                    text = self.directory_tree.item(start_node, "text")
+                    high_score_count = self._extract_high_score_count_from_text(text)
+
+                    if (
+                        "diff_gold_red" in tags
+                        and high_score_count is not None
+                        and high_score_count > 0
+                        and current_file_path
+                        and os.path.normpath(start_file_path) == os.path.normpath(current_file_path)
+                        and current_has_cutouts
+                    ):
+                        end_idx = min(len(self._all_cutout_sets), high_score_count)
+                        start_cutout_idx = max(current_index + 1, 0)
+                        for idx in range(start_cutout_idx, end_idx):
+                            cutout_set = self._all_cutout_sets[idx]
+                            manual_label = cutout_set.get('manual_label')
+                            if manual_label not in ('good', 'bad'):
+                                self._display_cutout_by_index(idx)
+                                self.logger.info(
+                                    f"跳转到下一个未标记高分检测: {os.path.basename(current_file_path)} - 检测 #{idx + 1} (同一文件)"
+                                )
+                                return
+
+            # 2）从起始节点在树中向下查找后续文件
+            for idx_tree in range(start_index, len(order)):
+                node = order[idx_tree]
+                tags = self.directory_tree.item(node, "tags")
+
+                # 只处理带高分标记的 FITS 文件节点
+                if "fits_file" not in tags or "diff_gold_red" not in tags:
+                    continue
+
+                values = self.directory_tree.item(node, "values")
+                if not values:
+                    continue
+                file_path = values[0]
+
+                # 避免在同一调用中再次从当前文件开头搜索
+                if current_file_path and os.path.normpath(file_path) == os.path.normpath(current_file_path):
+                    continue
+
+                text = self.directory_tree.item(node, "text")
+                high_score_count = self._extract_high_score_count_from_text(text)
+                if high_score_count is None or high_score_count <= 0:
+                    continue
+
+                region_dir = get_region_dir_for_node(node, file_path)
+                if not self._load_diff_results_for_file(file_path, region_dir):
+                    continue
+                if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                    continue
+
+                end_idx = min(len(self._all_cutout_sets), high_score_count)
+                for cutout_idx in range(end_idx):
+                    cutout_set = self._all_cutout_sets[cutout_idx]
+                    manual_label = cutout_set.get('manual_label')
+                    if manual_label in ('good', 'bad'):
+                        continue
+
+                    # 在目录树中选中该文件节点（程序自动选择）
+                    self._auto_selecting = True
+                    # 复用 _jumping_to_labeled_next 标志，抑制 _on_tree_select 中的自动加载首个 cutout
+                    self._jumping_to_labeled_next = True
+                    self.directory_tree.selection_set(node)
+                    self.directory_tree.focus(node)
+                    self.directory_tree.see(node)
+
+                    def _clear_auto_select_flags():
+                        setattr(self, '_auto_selecting', False)
+                        setattr(self, '_jumping_to_labeled_next', False)
+
+                    self.parent_frame.after(10, _clear_auto_select_flags)
+
+                    self.selected_file_path = file_path
+                    self._display_cutout_by_index(cutout_idx)
+
+                    self.logger.info(
+                        f"跳转到下一个未标记高分检测: {os.path.basename(file_path)} - 检测 #{cutout_idx + 1}"
+                    )
+                    return
+
+            messagebox.showinfo("提示", "从当前节点开始，后续没有未标记的高分检测结果")
+        except Exception as e:
+            self.logger.error(f"跳转到下一个未标记高分检测失败: {e}", exc_info=True)
 
     def _check_all_distances_far(self, section_text, min_distance):
         """检查文本中所有像素距离是否都>=指定距离
