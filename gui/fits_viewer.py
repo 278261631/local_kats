@@ -684,6 +684,15 @@ class FitsImageViewer:
         )
         self.mark_bad_button.pack(side=tk.LEFT, padx=(0, 10))
 
+        # 标记后自动跳转到下一个未标记高分检测（选项，默认不勾选）
+        self.auto_jump_unlabeled_high_score_var = tk.BooleanVar(value=False)
+        self.auto_jump_unlabeled_high_score_check = ttk.Checkbutton(
+            control_frame3,
+            text="标记后自动跳未标记高分",
+            variable=self.auto_jump_unlabeled_high_score_var
+        )
+        self.auto_jump_unlabeled_high_score_check.pack(side=tk.LEFT, padx=(0, 10))
+
         # 下一个 GOOD/BAD/SUSPECT/FALSE/ERROR 始终保持可点击，不随cutout加载状态禁用
         self.next_good_button = ttk.Button(
             control_frame3, text="下一个 GOOD (3)",
@@ -6741,6 +6750,18 @@ class FitsImageViewer:
                 self._save_manual_labels_to_aligned_comparison()
             except Exception as inner_e:
                 self.logger.error(f"写入aligned_comparison手动标记失败(GOOD): {inner_e}")
+
+            # 如果启用了选项，且当前确实标记为 GOOD，则自动跳转到下一个未标记高分检测
+            try:
+                if (
+                    new_label == 'good'
+                    and hasattr(self, 'auto_jump_unlabeled_high_score_var')
+                    and self.auto_jump_unlabeled_high_score_var.get()
+                ):
+                    self._jump_to_next_unlabeled_high_score()
+            except Exception as jump_e:
+                if hasattr(self, 'logger'):
+                    self.logger.error(f"自动跳转到下一个未标记高分检测失败(GOOD): {jump_e}", exc_info=True)
         except Exception as e:
             self.logger.error(f"标记检测结果为GOOD失败: {e}")
 
@@ -6770,6 +6791,18 @@ class FitsImageViewer:
                 self._save_manual_labels_to_aligned_comparison()
             except Exception as inner_e:
                 self.logger.error(f"写入aligned_comparison手动标记失败(BAD): {inner_e}")
+
+            # 如果启用了选项，且当前确实标记为 BAD，则自动跳转到下一个未标记高分检测
+            try:
+                if (
+                    new_label == 'bad'
+                    and hasattr(self, 'auto_jump_unlabeled_high_score_var')
+                    and self.auto_jump_unlabeled_high_score_var.get()
+                ):
+                    self._jump_to_next_unlabeled_high_score()
+            except Exception as jump_e:
+                if hasattr(self, 'logger'):
+                    self.logger.error(f"自动跳转到下一个未标记高分检测失败(BAD): {jump_e}", exc_info=True)
         except Exception as e:
             self.logger.error(f"标记检测结果为BAD失败: {e}")
 
