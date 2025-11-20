@@ -8966,7 +8966,7 @@ class FitsImageViewer:
                 delay = 6
                 if self.config_manager:
                     qs = self.config_manager.get_query_settings()
-                    delay = float((qs or {}).get('online_query_delay', 0.5))
+                    delay = float((qs or {}).get('online_query_delay', 5))
                 if delay > 0:
                     try:
                         self.logger.info(f"在线查询延时: {delay}s")
@@ -9281,7 +9281,7 @@ class FitsImageViewer:
                 delay = 6
                 if self.config_manager:
                     qs = self.config_manager.get_query_settings()
-                    delay = float((qs or {}).get('online_query_delay', 0.5))
+                    delay = float((qs or {}).get('online_query_delay', 5))
                 if delay > 0:
                     try:
                         self.logger.info(f"在线查询延时: {delay}s")
