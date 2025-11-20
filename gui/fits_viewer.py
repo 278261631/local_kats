@@ -8963,7 +8963,7 @@ class FitsImageViewer:
 
             # 在线查询短延时，降低请求频率
             try:
-                delay = 0.5
+                delay = 6
                 if self.config_manager:
                     qs = self.config_manager.get_query_settings()
                     delay = float((qs or {}).get('online_query_delay', 0.5))
@@ -9278,7 +9278,7 @@ class FitsImageViewer:
             from astropy.coordinates import SkyCoord
             # 在线查询短延时，降低请求频率
             try:
-                delay = 0.5
+                delay = 6
                 if self.config_manager:
                     qs = self.config_manager.get_query_settings()
                     delay = float((qs or {}).get('online_query_delay', 0.5))
