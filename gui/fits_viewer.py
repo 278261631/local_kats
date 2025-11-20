@@ -1364,8 +1364,8 @@ class FitsImageViewer:
             search_radius = query_settings.get('search_radius', 0.01)
             self.search_radius_var.set(str(search_radius))
 
-            # 加载批量查询间隔（秒），默认值：2秒
-            interval = query_settings.get('batch_query_interval_seconds', 2.0)
+            # 加载批量查询间隔（秒），默认值：5秒
+            interval = query_settings.get('batch_query_interval_seconds', 5.0)
             self.batch_query_interval_var.set(str(interval))
 
             self.logger.info(f"查询设置已加载: 搜索半径={search_radius}°, 批量查询间隔={interval}s")
@@ -1374,7 +1374,7 @@ class FitsImageViewer:
             self.logger.error(f"加载查询设置失败: {str(e)}")
             # 使用默认值
             self.search_radius_var.set("0.01")
-            self.batch_query_interval_var.set("2.0")
+            self.batch_query_interval_var.set("5.0")
 
     def _save_query_settings(self):
         """保存查询设置到配置文件（搜索半径与批量查询间隔）"""
@@ -1411,9 +1411,9 @@ class FitsImageViewer:
             self.logger.error(f"保存查询设置失败: {str(e)}")
 
     def _get_batch_query_interval_seconds(self) -> float:
-        """获取批量查询间隔（秒），优先从配置读取，失败时返回默认值2秒"""
+        """获取批量查询间隔（秒），优先从配置读取，失败时返回默认值5秒"""
         # 默认值
-        default_interval = 2.0
+        default_interval = 5.0
 
         # 优先从配置读取
         if self.config_manager:
@@ -8966,7 +8966,7 @@ class FitsImageViewer:
                 delay = 6
                 if self.config_manager:
                     qs = self.config_manager.get_query_settings()
-                    delay = float((qs or {}).get('online_query_delay', 5))
+                    delay = float((qs or {}).get('batch_query_interval_seconds', 5))
                 if delay > 0:
                     try:
                         self.logger.info(f"在线查询延时: {delay}s")
@@ -9281,7 +9281,7 @@ class FitsImageViewer:
                 delay = 6
                 if self.config_manager:
                     qs = self.config_manager.get_query_settings()
-                    delay = float((qs or {}).get('online_query_delay', 5))
+                    delay = float((qs or {}).get('batch_query_interval_seconds', 5))
                 if delay > 0:
                     try:
                         self.logger.info(f"在线查询延时: {delay}s")
