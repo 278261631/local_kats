@@ -94,6 +94,21 @@ class FitsWebDownloaderGUI:
         except Exception:
             _btn_local_default = False
         self.buttons_use_local_query_var = tk.BooleanVar(value=_btn_local_default)
+        # 小行星查询方式（初始化为配置中的值）
+        try:
+            _local_settings = self.config_manager.get_local_catalog_settings()
+            _method_default = str(_local_settings.get("asteroid_query_method", "auto"))
+        except Exception:
+            _method_default = "auto"
+        self.asteroid_query_method_var = tk.StringVar(value=_method_default)
+        # pympc 是否使用观测站代码（初始化为配置中的值，默认 False）
+        try:
+            _local_settings = self.config_manager.get_local_catalog_settings()
+            _pympc_use_obs_default = bool(_local_settings.get("pympc_use_observatory", False))
+        except Exception:
+            _pympc_use_obs_default = False
+        self.pympc_use_observatory_var = tk.BooleanVar(value=_pympc_use_obs_default)
+
 
 
 
@@ -668,6 +683,53 @@ class FitsWebDownloaderGUI:
         )
         auto_local_chk.grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
 
+        # 小行星查询方式设置
+        asteroid_method_frame = ttk.LabelFrame(settings_container, text="小行星查询方式", padding=10)
+        asteroid_method_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(asteroid_method_frame, text="选择小行星查询后端:").grid(row=0, column=0, sticky=tk.W)
+
+        ttk.Radiobutton(
+            asteroid_method_frame,
+            text="自动(推荐)",
+            value="auto",
+            variable=self.asteroid_query_method_var,
+            command=self._on_change_asteroid_query_method,
+        ).grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+
+        ttk.Radiobutton(
+            asteroid_method_frame,
+            text="Skybot(在线)",
+            value="skybot",
+            variable=self.asteroid_query_method_var,
+            command=self._on_change_asteroid_query_method,
+        ).grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=(5, 0))
+
+        ttk.Radiobutton(
+            asteroid_method_frame,
+            text="本地MPCORB(离线)",
+            value="local",
+            variable=self.asteroid_query_method_var,
+            command=self._on_change_asteroid_query_method,
+        ).grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+
+        ttk.Radiobutton(
+            asteroid_method_frame,
+            text="pympc(轨道库)",
+            value="pympc",
+            variable=self.asteroid_query_method_var,
+            command=self._on_change_asteroid_query_method,
+        ).grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=(5, 0))
+
+        # pympc 观测站代码使用开关（仅在选择 pympc 时生效）
+        ttk.Checkbutton(
+            asteroid_method_frame,
+            text="pympc 使用观测站代码(N87)",
+            variable=self.pympc_use_observatory_var,
+            command=self._on_toggle_pympc_use_observatory,
+        ).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+
+
         # 本地查询资源设置
         local_catalog_frame = ttk.LabelFrame(settings_container, text="本地查询资源", padding=10)
         local_catalog_frame.pack(fill=tk.X, pady=(0, 10))
@@ -733,6 +795,14 @@ class FitsWebDownloaderGUI:
         ttk.Button(local_catalog_frame, text="选择星历文件(.bsp)", command=self._update_ephemeris_file).grid(row=3, column=0, sticky=tk.W, pady=(5, 0))
         self.ephemeris_status_label = ttk.Label(local_catalog_frame, text="星历: 未设置")
         self.ephemeris_status_label.grid(row=3, column=1, sticky=tk.W, padx=(10, 0), pady=(5, 0))
+
+        # pympc 轨道目录更新
+        ttk.Button(local_catalog_frame, text="更新pympc轨道目录", command=self._update_pympc_catalogue).grid(
+            row=4, column=0, sticky=tk.W, pady=(5, 0)
+        )
+        self.pympc_status_label = ttk.Label(local_catalog_frame, text="pympc目录: 未下载")
+        self.pympc_status_label.grid(row=4, column=1, sticky=tk.W, padx=(10, 0), pady=(5, 0))
+
 
 
         # 初始化状态显示
@@ -1719,6 +1789,26 @@ class FitsWebDownloaderGUI:
             self._log(f"保存手动按钮本地查询设置失败: {e}")
 
 
+    def _on_toggle_pympc_use_observatory(self):
+        """高级设置：切换使用pympc时是否使用观测站代码（立即保存到配置）"""
+        try:
+            enabled = bool(self.pympc_use_observatory_var.get())
+            self.config_manager.update_local_catalog_settings(pympc_use_observatory=enabled)
+            self._log(f"[设置] pympc 使用观测站代码: {'开启' if enabled else '关闭'}")
+        except Exception as e:
+            self._log(f"保存 pympc 观测站代码设置失败: {e}")
+
+    def _on_change_asteroid_query_method(self):
+        """高级设置：切换小行星查询方式（立即保存到配置）"""
+        try:
+            method = str(self.asteroid_query_method_var.get() or "auto")
+            self.config_manager.update_local_catalog_settings(asteroid_query_method=method)
+            self._log(f"[设置] 小行星查询方式: {method}")
+        except Exception as e:
+            self._log(f"保存小行星查询方式失败: {e}")
+
+
+
     def _refresh_local_catalog_status_labels(self):
         """刷新本地库状态标签"""
         try:
@@ -1729,6 +1819,9 @@ class FitsWebDownloaderGUI:
         vsx_path = settings.get("vsx_catalog_path", "") or ""
         ast_ts = settings.get("last_asteroid_update", "") or ""
         vsx_ts = settings.get("last_vsx_update", "") or ""
+        pympc_path = settings.get("pympc_catalog_path", "") or ""
+        pympc_ts = settings.get("last_pympc_update", "") or ""
+
         if hasattr(self, 'local_asteroid_status_label'):
             name = Path(ast_path).name if ast_path else "未设置"
             ts = ast_ts or "未知"
@@ -1737,6 +1830,21 @@ class FitsWebDownloaderGUI:
             name = Path(vsx_path).name if vsx_path else "未设置"
             ts = vsx_ts or "未知"
             self.local_vsx_status_label.config(text=f"变星库: {name} | 更新时间: {ts}")
+        if hasattr(self, 'pympc_status_label'):
+            name = Path(pympc_path).name if pympc_path else "默认目录"
+            ts = pympc_ts or "未知"
+            self.pympc_status_label.config(text=f"pympc目录: {name} | 更新时间: {ts}")
+
+        ephem_path = settings.get("ephemeris_file_path", "") or ""
+        if hasattr(self, 'ephemeris_status_label'):
+            ephem_name = Path(ephem_path).name if ephem_path else "未设置"
+            self.ephemeris_status_label.config(text=f"星历: {ephem_name}")
+        if hasattr(self, 'mpc_h_status_label'):
+            try:
+                h_val = str(settings.get("mpc_h_limit", "")) or (self.mpc_h_limit_var.get() if hasattr(self, 'mpc_h_limit_var') else "20")
+            except Exception:
+                h_val = "20"
+            self.mpc_h_status_label.config(text=f"当前H上限: {h_val}")
 
     def _update_local_asteroid_catalog(self):
         """选择/更新本地小行星库文件（本地CSV/TSV/自定义分隔文本）"""
@@ -1766,6 +1874,30 @@ class FitsWebDownloaderGUI:
             self._log(f"[设置] 已更新本地小行星库: {file_path}")
         except Exception as e:
             self._log(f"更新本地小行星库失败: {e}")
+
+
+    def _update_pympc_catalogue(self):
+        """使用 pympc.update_catalogue() 下载/更新 Minor Planet Center 轨道目录"""
+        try:
+            try:
+                import pympc  # type: ignore
+            except ImportError:
+                messagebox.showerror("缺少依赖", "未安装 pympc 库，请先使用 pip install pympc 安装。")
+                self._log("更新pympc轨道目录失败: 未安装 pympc")
+                return
+
+            self._log("开始更新 pympc Minor Planet Center 轨道目录...")
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            xephem_cat = pympc.update_catalogue()
+            cat_path = str(xephem_cat) if xephem_cat else ""
+            self.config_manager.update_local_catalog_settings(
+                pympc_catalog_path=cat_path,
+                last_pympc_update=ts,
+            )
+            self._refresh_local_catalog_status_labels()
+            self._log(f"[设置] 已更新pympc轨道目录: {cat_path or '未返回路径'}")
+        except Exception as e:
+            self._log(f"更新pympc轨道目录失败: {e}")
 
     def _save_mpc_h_limit(self):
         """保存MPC H上限到配置"""

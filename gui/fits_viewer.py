@@ -80,7 +80,8 @@ class FitsImageViewer:
         self.log_callback = log_callback  # 日志回调函数，用于输出到日志标签页
         self.get_unqueried_export_dir_callback = get_unqueried_export_dir_callback  # 未查询导出目录回调函数（也用于OSS上传）
         # 强制在线查询开关（临时搁置本地库时置为True）
-        self._force_online_query = True
+        # 默认关闭，由需要的功能显式开启；否则会覆盖本地/MPC/pympc 等设置
+        self._force_online_query = False
 
         # Local query override flag (used by batch-local button/auto-chain)
         self._use_local_query_override = False
@@ -91,7 +92,7 @@ class FitsImageViewer:
         # MPCORB缓存：存储(dataframe, ts, eph)以避免重复加载
         self._mpcorb_cache = None  # (path, df, ts, eph)
 
-        # AI GOOD/BAD 
+        # AI GOOD/BAD
         self._ai_classifier = None
 
         # 设置日志
@@ -8704,7 +8705,8 @@ class FitsImageViewer:
                 self.logger.warning(f"无效的搜索半径: {self.search_radius_var.get()}，使用默认值0.01")
                 search_radius = 0.01
 
-            query_info = f"准备查询Skybot: RA={ra}°, Dec={dec}°, UTC={utc_time}, MPC={mpc_code}, GPS=({latitude}°N, {longitude}°E), 半径={search_radius}°"
+            # 先记录基础查询参数，具体使用的后端在后续的“查询模式”日志中给出
+            query_info = f"准备查询小行星: RA={ra}°, Dec={dec}°, UTC={utc_time}, MPC={mpc_code}, GPS=({latitude}°N, {longitude}°E), 半径={search_radius}°"
             self.logger.info(query_info)
             # 输出到日志标签页
             if self.log_callback:
@@ -8713,27 +8715,62 @@ class FitsImageViewer:
             self.skybot_result_label.config(text="查询中...", foreground="orange")
             self.skybot_result_label.update_idletasks()  # 强制刷新界面
 
-            # 执行Skybot查询（根据设置/覆盖开关选择本地/在线）
-            force_online = getattr(self, '_force_online_query', False)
-            use_local = getattr(self, '_use_local_query_override', False)
-            if force_online:
-                use_local = False
-            elif (not use_local) and self.config_manager:
+            # 执行小行星查询（根据设置/覆盖开关和高级选项选择后端）
+            # 1) 先读取配置中的小行星查询方式: auto / skybot / local / pympc
+            method = "auto"
+            if self.config_manager:
                 try:
-                    _ls = self.config_manager.get_local_catalog_settings()
-                    if bool((_ls or {}).get("buttons_use_local_query", False)):
-                        use_local = True
+                    ls = self.config_manager.get_local_catalog_settings() or {}
+                    method_cfg = str(ls.get("asteroid_query_method", "auto")).lower()
+                    if method_cfg in ("auto", "skybot", "local", "pympc"):
+                        method = method_cfg
                 except Exception:
                     pass
-            # 依据设置决定查询模式，并输出模式日志
-            source = "离线MPCORB" if use_local else "Skybot"
+
+            # 2) 应用临时覆盖开关
+            force_online = getattr(self, '_force_online_query', False)
+            use_local_override = getattr(self, '_use_local_query_override', False)
+
+            if force_online:
+                # 强制在线: 一律使用 Skybot
+                method_effective = "skybot"
+            elif use_local_override:
+                # 临时强制本地: auto -> local，其它保持用户显式选择
+                if method == "auto":
+                    method_effective = "local"
+                else:
+                    method_effective = method
+            else:
+                method_effective = method
+
+            # 3) auto 模式下沿用原有逻辑: 按钮"手动按钮本地查询"为 True 时走本地MPCORB，否则走Skybot
+            if method_effective == "auto" and self.config_manager:
+                try:
+                    ls = self.config_manager.get_local_catalog_settings() or {}
+                    if bool(ls.get("buttons_use_local_query", False)):
+                        method_effective = "local"
+                    else:
+                        method_effective = "skybot"
+                except Exception:
+                    method_effective = "skybot"
+
+            # 4) 根据最终方式选择后端并输出模式日志
+            if method_effective == "local":
+                source = "离线MPCORB"
+            elif method_effective == "pympc":
+                source = "pympc"
+            else:
+                source = "Skybot"
+
             mode_msg = f"查询模式: {source}"
             self.logger.info(mode_msg)
             if self.log_callback:
                 self.log_callback(mode_msg, "INFO")
 
-            if use_local:
+            if method_effective == "local":
                 results = self._perform_local_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
+            elif method_effective == "pympc":
+                results = self._perform_pympc_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
             else:
                 results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
 
@@ -8906,20 +8943,20 @@ class FitsImageViewer:
                 pass
 
     def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.01):
-        """
-        执行Skybot查询
+        """执行 Skybot 小行星查询。
 
-        Args:
+        参数：
             ra: 赤经（度）
             dec: 赤纬（度）
-            utc_time: UTC时间（datetime对象）
-            mpc_code: MPC观测站代码
+            utc_time: UTC 时间（datetime 对象）
+            mpc_code: MPC 观测站代码
             latitude: 纬度（度，仅用于日志）
             longitude: 经度（度，仅用于日志）
-            search_radius: 搜索半径（度，默认0.01）
+            search_radius: 搜索半径（度，默认 0.01）
 
-        Returns:
-            查询结果表，如果失败返回None
+        返回：
+            查询结果表（astropy.table.Table）。查询失败或异常时返回 None；
+            若 Skybot 正常返回 "No solar system object was found"，则返回空表。
         """
         try:
             from astroquery.imcce import Skybot
@@ -8927,19 +8964,19 @@ class FitsImageViewer:
             from astropy.coordinates import SkyCoord
             import astropy.units as u
 
-            # 转换时间格式（统一为UTC且带时区）
+            # 转换时间格式（统一为 UTC 且带时区）
             from datetime import timezone
-            if getattr(utc_time, 'tzinfo', None) is None:
+            if getattr(utc_time, "tzinfo", None) is None:
                 utc_time = utc_time.replace(tzinfo=timezone.utc)
             obs_time = Time(utc_time)
 
             # 创建坐标对象
-            coord = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
+            coord = SkyCoord(ra=ra * u.degree, dec=dec * u.degree, frame="icrs")
 
             # 设置搜索半径
             search_radius_u = search_radius * u.degree
 
-            param_header = f"Skybot查询参数:"
+            param_header = "Skybot 查询参数:"
             param_coord = f"  坐标: RA={ra}°, Dec={dec}°"
             param_time = f"  时间: {obs_time.iso}"
             param_station = f"  观测站: MPC code {mpc_code}"
@@ -8966,7 +9003,7 @@ class FitsImageViewer:
                 delay = 6
                 if self.config_manager:
                     qs = self.config_manager.get_query_settings()
-                    delay = float((qs or {}).get('batch_query_interval_seconds', 5))
+                    delay = float((qs or {}).get("batch_query_interval_seconds", 5))
                 if delay > 0:
                     try:
                         self.logger.info(f"在线查询延时: {delay}s")
@@ -8978,31 +9015,32 @@ class FitsImageViewer:
             except Exception:
                 pass
 
-            # 执行查询，使用MPC观测站代码
+            # 执行查询，使用 MPC 观测站代码
             try:
                 results = Skybot.cone_search(coord, search_radius_u, obs_time, location=mpc_code)
                 return results
             except RuntimeError as e:
-                # RuntimeError通常表示"未找到小行星"，这是正常情况
+                # RuntimeError 通常表示 "No solar system object was found"，这是正常情况
                 error_msg = str(e)
                 if "No solar system object was found" in error_msg:
-                    no_result_msg = "Skybot查询完成：在指定区域未找到小行星"
+                    no_result_msg = "Skybot 查询完成：在指定区域未找到小行星"
                     self.logger.info(no_result_msg)
                     if self.log_callback:
                         self.log_callback(no_result_msg, "INFO")
-                    # 返回空表而不是None，表示查询成功但无结果
+                    # 返回空表而不是 None，表示查询成功但无结果
                     from astropy.table import Table
+
                     return Table()
                 else:
-                    # 其他RuntimeError仍然作为错误处理
-                    error_msg_full = f"Skybot查询失败: {error_msg}"
+                    # 其他 RuntimeError 仍然作为错误处理
+                    error_msg_full = f"Skybot 查询失败: {error_msg}"
                     self.logger.error(error_msg_full)
                     if self.log_callback:
                         self.log_callback(error_msg_full, "ERROR")
                     return None
 
         except ImportError as e:
-            import_error_msg = "astroquery未安装或导入失败，请安装: pip install astroquery"
+            import_error_msg = "astroquery 未安装或导入失败，请安装: pip install astroquery"
             detail_error_msg = f"详细错误: {e}"
             self.logger.error(import_error_msg)
             self.logger.error(detail_error_msg)
@@ -9011,11 +9049,151 @@ class FitsImageViewer:
                 self.log_callback(detail_error_msg, "ERROR")
             return None
         except Exception as e:
-            exec_error_msg = f"Skybot查询执行失败: {str(e)}"
+            exec_error_msg = f"Skybot 查询执行失败: {str(e)}"
             self.logger.error(exec_error_msg, exc_info=True)
             if self.log_callback:
                 self.log_callback(exec_error_msg, "ERROR")
             return None
+
+    def _perform_pympc_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.01):
+        """使用 pympc.minor_planet_check 进行小行星查询。
+
+        参数说明与 _perform_skybot_query 一致，search_radius 为度，将在此处转为角秒。
+        返回值为 astropy.table.Table；查询失败返回 None。
+        """
+        try:
+            try:
+                import pympc  # type: ignore
+            except ImportError as e:  # noqa: F841
+                msg = "pympc 未安装或导入失败，请先安装: pip install pympc"
+                self.logger.error(msg)
+                if self.log_callback:
+                    self.log_callback(msg, "ERROR")
+                return None
+
+            try:
+                from astropy.time import Time
+            except ImportError as e:  # noqa: F841
+                msg = "astropy 未安装或导入失败，请先安装: pip install astropy"
+                self.logger.error(msg)
+                if self.log_callback:
+                    self.log_callback(msg, "ERROR")
+                return None
+
+            # 将 UTC datetime 转为 MJD（pympc 对 float epoch 默认按 MJD 解释）
+            t = Time(utc_time)
+            epoch_mjd = float(t.mjd)
+
+            # 将搜索半径从度转换为角秒
+            try:
+                search_radius_deg = float(search_radius)
+            except Exception:
+                search_radius_deg = 0.01
+            search_radius_arcsec = search_radius_deg * 3600.0
+
+            # 读取 pympc 轨道目录路径（如果用户在高级设置中指定了自定义目录）
+            xephem_path = None
+            if self.config_manager:
+                try:
+                    ls = self.config_manager.get_local_catalog_settings() or {}
+                    xephem_path = (ls.get("pympc_catalog_path") or "") or None
+                except Exception:
+                    xephem_path = None
+
+            # 记录参数到日志
+            param_header = "pympc 查询参数:"
+            param_coord = f"  坐标: RA={ra}°, Dec={dec}°"
+            param_time = f"  时间: MJD {epoch_mjd}"
+
+            # 读取配置，决定是否实际使用观测站代码
+            use_observatory = False
+            if self.config_manager:
+                try:
+                    _ls_cfg = self.config_manager.get_local_catalog_settings() or {}
+                    use_observatory = bool(_ls_cfg.get("pympc_use_observatory", False))
+                except Exception:
+                    use_observatory = False
+
+            if use_observatory and mpc_code:
+                param_station = f"  观测站: {mpc_code} (将用于顶点改正)"
+            elif mpc_code:
+                param_station = f"  观测站: {mpc_code} (配置为不在pympc中使用，按地心模式处理)"
+            else:
+                param_station = "  观测站: 未指定(将使用地心)"
+            param_gps = f"  (GPS参考: 经度={longitude}°, 纬度={latitude}°)"
+            param_radius = f"  搜索半径: {search_radius_arcsec} arcsec"
+            param_cat = f"  目录文件: {xephem_path or '默认缓存路径'}"
+
+            self.logger.info(param_header)
+            self.logger.info(param_coord)
+            self.logger.info(param_time)
+            self.logger.info(param_station)
+            self.logger.info(param_gps)
+            self.logger.info(param_radius)
+            self.logger.info(param_cat)
+            if self.log_callback:
+                for _msg in (param_header, param_coord, param_time, param_station, param_gps, param_radius, param_cat):
+                    self.log_callback(_msg, "INFO")
+
+            kwargs = dict(
+                ra=ra,
+                dec=dec,
+                epoch=epoch_mjd,
+                search_radius=search_radius_arcsec,
+                max_mag=22.0,
+            )
+            if xephem_path:
+                kwargs["xephem_filepath"] = xephem_path
+
+            # 根据高级设置决定是否在 pympc 中实际使用观测站代码
+            results = None
+            if use_observatory and mpc_code:
+                try:
+                    kwargs_with_obs = dict(kwargs)
+                    kwargs_with_obs["observatory"] = mpc_code
+                    results = pympc.minor_planet_check(**kwargs_with_obs)
+                except Exception as e:  # noqa: F841
+                    # 当无法从 MPC 获取观测站代码表时，pympc 会在内部抛出与 obscodes 相关的异常
+                    err_text = str(e)
+                    if "obscode" in err_text.lower() or "obscodes" in err_text.lower():
+                        warn_msg = "pympc 获取观测站代码表失败，已退化为地心观测站(500) 模式。"
+                        self.logger.warning(warn_msg, exc_info=True)
+                        if self.log_callback:
+                            self.log_callback(warn_msg, "WARNING")
+                        # 不再传 observatory 参数，等价于使用默认地心站
+                        results = pympc.minor_planet_check(**kwargs)
+                    else:
+                        # 其它错误仍然向外抛，由外层捕获并记录
+                        raise
+            else:
+                # 未启用观测站代码或未设置 MPC 代码时，直接使用地心模式调用
+                results = pympc.minor_planet_check(**kwargs)
+
+            if results is None:
+                msg = "pympc 查询未返回结果（None）"
+                self.logger.error(msg)
+                if self.log_callback:
+                    self.log_callback(msg, "ERROR")
+                return None
+
+            # pympc 按文档应返回 astropy.table.Table，这里只做极简防御式检查
+            if not hasattr(results, "colnames"):
+                msg = f"pympc 返回了非表格结果类型: {type(results)}"
+                self.logger.error(msg)
+                if self.log_callback:
+                    self.log_callback(msg, "ERROR")
+                return None
+
+            return results
+
+        except Exception as e:
+            exec_error_msg = f"pympc 查询执行失败: {str(e)}"
+            self.logger.error(exec_error_msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(exec_error_msg, "ERROR")
+            return None
+
+
 
     def _query_vsx(self):
         """使用VSX查询变星数据"""

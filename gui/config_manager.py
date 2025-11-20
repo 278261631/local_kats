@@ -146,7 +146,11 @@ class ConfigManager:
                 "last_vsx_update": "",
                 "mpc_h_limit": 20,
                 "ephemeris_file_path": "",
-                "last_ephemeris_update": ""
+                "last_ephemeris_update": "",
+                "asteroid_query_method": "auto",  # 小行星查询方式: auto/skybot/local/pympc
+                "pympc_catalog_path": "",
+                "last_pympc_update": "",
+                "pympc_use_observatory": False  # 使用pympc时是否使用观测站代码，默认不使用
             },
             "url_template_type": "standard",  # "standard" 或 "with_year"
             # URL模板现在从独立的URL配置文件中读取
@@ -280,6 +284,28 @@ class ConfigManager:
                     changed = True
         except Exception:
             pass
+
+        # 兼容旧版本: 填充小行星查询方式和pympc相关字段
+        valid_methods = ("auto", "skybot", "local", "pympc")
+        method = settings.get("asteroid_query_method")
+        if method not in valid_methods:
+            try:
+                buttons_local = bool(settings.get("buttons_use_local_query", False))
+            except Exception:
+                buttons_local = False
+            settings["asteroid_query_method"] = "local" if buttons_local else "auto"
+            changed = True
+
+        if "pympc_catalog_path" not in settings:
+            settings["pympc_catalog_path"] = ""
+            changed = True
+        if "last_pympc_update" not in settings:
+            settings["last_pympc_update"] = ""
+            changed = True
+        if "pympc_use_observatory" not in settings:
+            settings["pympc_use_observatory"] = False
+            changed = True
+
         if changed:
             self.save_config()
         return settings
