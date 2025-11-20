@@ -9073,6 +9073,7 @@ class FitsImageViewer:
 
             try:
                 from astropy.time import Time
+                from astropy.table import Table
             except ImportError as e:  # noqa: F841
                 msg = "astropy 未安装或导入失败，请先安装: pip install astropy"
                 self.logger.error(msg)
@@ -9176,15 +9177,28 @@ class FitsImageViewer:
                     self.log_callback(msg, "ERROR")
                 return None
 
-            # pympc 按文档应返回 astropy.table.Table，这里只做极简防御式检查
-            if not hasattr(results, "colnames"):
+            # pympc 按文档通常返回 astropy.table.Table，但某些版本/调用可能返回 list
+            # 这里进行类型兼容处理：优先直接使用表格，否则尝试从列表构造 Table
+            table_result = None
+            if hasattr(results, "colnames"):
+                table_result = results
+            elif isinstance(results, (list, tuple)):
+                try:
+                    table_result = Table(rows=results)
+                except Exception as e:  # noqa: F841
+                    msg = f"pympc 结果列表无法转换为表格: {e}"
+                    self.logger.error(msg, exc_info=True)
+                    if self.log_callback:
+                        self.log_callback(msg, "ERROR")
+                    return None
+            else:
                 msg = f"pympc 返回了非表格结果类型: {type(results)}"
                 self.logger.error(msg)
                 if self.log_callback:
                     self.log_callback(msg, "ERROR")
                 return None
 
-            return results
+            return table_result
 
         except Exception as e:
             exec_error_msg = f"pympc 查询执行失败: {str(e)}"
