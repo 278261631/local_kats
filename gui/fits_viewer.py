@@ -672,6 +672,29 @@ class FitsImageViewer:
         save_btn = ttk.Button(control_frame2, text="保存图像", command=self._save_image)
         save_btn.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 自动分类手动标记按钮：直接标记为 SUSPECT / FALSE / ERROR
+        self.mark_suspect_button = ttk.Button(
+            control_frame2,
+            text="SUSPECT",
+            command=lambda: self._mark_auto_class_label_manual('suspect'),
+        )
+        self.mark_suspect_button.pack(side=tk.LEFT, padx=(0, 2))
+
+        self.mark_false_button = ttk.Button(
+            control_frame2,
+            text="FALSE",
+            command=lambda: self._mark_auto_class_label_manual('false'),
+        )
+        self.mark_false_button.pack(side=tk.LEFT, padx=(0, 2))
+
+        self.mark_error_button = ttk.Button(
+            control_frame2,
+            text="ERROR",
+            command=lambda: self._mark_auto_class_label_manual('error'),
+        )
+        self.mark_error_button.pack(side=tk.LEFT, padx=(0, 5))
+
+
         # 打开输出目录按钮
         self.last_output_dir = None  # 保存最后一次的输出目录
         self.open_output_dir_btn = ttk.Button(control_frame2, text="打开输出目录",
@@ -7086,6 +7109,35 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"标记检测结果为BAD失败: {e}")
 
+    def _mark_auto_class_label_manual(self, label: str):
+        """手动将当前检测结果的 auto_class_label 直接标记为给定值（suspect/false/error）。"""
+        try:
+            if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                messagebox.showinfo("提示", "没有可标记的检测结果")
+                return
+            if not hasattr(self, '_current_cutout_index'):
+                messagebox.showinfo("提示", "没有当前显示的检测结果")
+                return
+
+            cutout_set = self._all_cutout_sets[self._current_cutout_index]
+            cutout_set['auto_class_label'] = label
+            self.logger.info(f"手动设置自动分类标签为: {label}")
+
+            # 刷新状态标签（显示 GOOD/BAD + SUSPECT/FALSE/ERROR）
+            try:
+                self._refresh_cutout_status_label()
+            except Exception as inner_e:
+                self.logger.error(f"刷新检测状态标签失败(手动自动分类): {inner_e}")
+
+            # 将自动分类标签写入 aligned_comparison_*.txt
+            try:
+                self._save_auto_label_to_aligned_comparison()
+            except Exception as inner_e:
+                self.logger.error(f"写入自动分类到 aligned_comparison 失败(手动): {inner_e}")
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"手动标记自动分类(SUSPECT/FALSE/ERROR)失败: {e}", exc_info=True)
+
     def _jump_to_next_suspect(self):
         """从目录树当前选中节点开始，向下单向查找下一个自动标记为 SUSPECT 的检测结果"""
         self._jump_to_next_manual_label('suspect')
@@ -11582,7 +11634,8 @@ class FitsImageViewer:
             # 1) 任何一个查询失败 -> ERROR
             if skybot_error or vsx_error:
                 cutout['auto_class_label'] = 'error'
-                self.logger.info("自动分类: ERROR (查询失败)")
+                reason = f"skybot_error={skybot_error}, vsx_error={vsx_error}"
+                self.logger.info(f"自动分类结果: error ({reason})")
                 self._refresh_cutout_status_label()
                 return
 
@@ -11607,6 +11660,8 @@ class FitsImageViewer:
             except Exception:
                 query_file = None
 
+            query_file_used = query_file  # 仅用于日志
+
             if query_file and os.path.exists(query_file):
                 try:
                     with open(query_file, 'r', encoding='utf-8') as f:
@@ -11626,21 +11681,29 @@ class FitsImageViewer:
                 # 没有query_results文件时, 但有查询记录; 不再额外计算, 直接走无距离逻辑
                 self.logger.info("自动分类: 未找到query_results_*.txt, 使用无像素距离的规则")
 
-            # 3) 根据距离阈值3像素进行分类
+            # 3) 根据距离阈值3像素进行分类，并记录原因
             new_label = cutout.get('auto_class_label')
+            reason = ""
             if distances:
                 min_dist = min(distances)
                 self.logger.info(f"自动分类: 最小像素距离 = {min_dist:.2f} px")
                 if min_dist <= 3.0:
                     new_label = 'false'
+                    reason = f"min_dist={min_dist:.2f}<=3.00px, skybot_queried={skybot_queried}, vsx_queried={vsx_queried}"
                 else:
                     new_label = 'suspect'
+                    reason = f"min_dist={min_dist:.2f}>3.00px, skybot_queried={skybot_queried}, vsx_queried={vsx_queried}"
             else:
                 # 有查询但完全没有候选体或缺少距离信息 -> suspect
                 new_label = 'suspect'
+                reason = (
+                    "有查询记录但query_results文件缺失或不含像素距离; "
+                    f"skybot_queried={skybot_queried}, vsx_queried={vsx_queried}, "
+                    f"query_file={query_file_used!r}"
+                )
 
             cutout['auto_class_label'] = new_label
-            self.logger.info(f"自动分类结果: {new_label}")
+            self.logger.info(f"自动分类结果: {new_label} ({reason})")
             self._refresh_cutout_status_label()
 
             # 将自动分类(SUSPECT/FALSE/ERROR)持久化到 aligned_comparison_*.txt
