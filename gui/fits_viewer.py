@@ -7139,8 +7139,8 @@ class FitsImageViewer:
                 self.logger.error(f"手动标记自动分类(SUSPECT/FALSE/ERROR)失败: {e}", exc_info=True)
 
     def _jump_to_next_suspect(self):
-        """从目录树当前选中节点开始，向下单向查找下一个自动标记为 SUSPECT 的检测结果"""
-        self._jump_to_next_manual_label('suspect')
+        """从目录树当前选中节点开始，向下单向查找下一个自动标记为 SUSPECT 且手工标记为 GOOD 的检测结果"""
+        self._jump_to_next_manual_label('suspect', good_only_for_suspect=True)
 
 
     def _jump_to_next_false(self):
@@ -7160,7 +7160,7 @@ class FitsImageViewer:
         """从目录树当前选中节点开始，向下单向查找下一个标记为 BAD 的检测结果"""
         self._jump_to_next_manual_label('bad')
 
-    def _jump_to_next_manual_label(self, target_label: str):
+    def _jump_to_next_manual_label(self, target_label: str, good_only_for_suspect: bool = False):
         """从左侧目录树的当前选中节点开始，按可见顺序向下单向查找下一个指定标记的检测结果。
 
         - 起点：当前选中的目录树节点；如果没有选中，则从根节点开始。
@@ -7170,6 +7170,7 @@ class FitsImageViewer:
         说明：
         - target_label 为 'good'/'bad' 时，匹配 manual_label；
         - target_label 为 'suspect'/'false'/'error' 时，匹配 auto_class_label；
+        - 当前实现中，“下一个 SUSPECT”按钮只会在 manual_label 为 'good' 的目标中查找 SUSPECT。
         """
         try:
             if not hasattr(self, 'directory_tree'):
@@ -7177,10 +7178,14 @@ class FitsImageViewer:
                 return
 
             def _match_label(cutout_set):
+                manual = cutout_set.get('manual_label')
+                auto = cutout_set.get('auto_class_label')
                 if target_label in ('good', 'bad'):
-                    return cutout_set.get('manual_label') == target_label
+                    return manual == target_label
                 if target_label in ('suspect', 'false', 'error'):
-                    return cutout_set.get('auto_class_label') == target_label
+                    if target_label == 'suspect' and good_only_for_suspect:
+                        return auto == 'suspect' and manual == 'good'
+                    return auto == target_label
                 return False
 
             def _label_str():
