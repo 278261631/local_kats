@@ -1,18 +1,33 @@
-python -m pip install numpy>=1.21.0
-python -m pip install scipy>=1.7.0
-python -m pip install astropy>=5.0.0
-python -m pip install photutils>=1.5.0
-python -m pip install sep>=1.2.0
-python -m pip install matplotlib>=3.5.0
-python -m pip install opencv-python>=4.5.0
-python -m pip install opencv-contrib-python>=4.5.0
-python -m pip install scikit-image>=0.18.0
-python -m pip install Pillow>=8.0.0
-python -m pip install requests>=2.25.0
-python -m pip install beautifulsoup4>=4.9.0
-python -m pip install pandas>=1.3.0
-python -m pip install urllib3>=1.26.0
-python -m pip install watchdog>=2.1.
-python -m pip install pathlib2>=2.3.0
-python -m pip install pytest>=6.0.0
-python -m pip install pytest-cov>=2.10.0
+@echo off
+
+
+python -m pip install numpy
+python -m pip install scipy
+python -m pip install astropy
+python -m pip install photutils
+python -m pip install sep
+python -m pip install matplotlib
+python -m pip install opencv-python
+python -m pip install opencv-contrib-python
+python -m pip install scikit-image
+python -m pip install Pillow
+python -m pip install requests
+python -m pip install beautifulsoup4
+python -m pip install pandas
+python -m pip install urllib3
+python -m pip install watchdog
+python -m pip install pathlib2
+python -m pip install pytest
+python -m pip install pytest-cov
+
+
+python -m pip install torch torchvision timm
+python -m pip install oss2 py7zr
+python -m pip install gradio
+python -m pip install skyfield
+python -m pip install astroquery
+python -m pip install pympc
+python -m pip install pywin32
+
+
+
