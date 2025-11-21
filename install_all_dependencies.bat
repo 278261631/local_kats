@@ -23,8 +23,6 @@ python -m pip install pytest-cov    -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 python -m pip install torch torchvision timm   -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m pip install oss2 py7zr   -i https://pypi.tuna.tsinghua.edu.cn/simple
-python -m pip install gradio   -i https://pypi.tuna.tsinghua.edu.cn/simple
-python -m pip install skyfield   -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m pip install astroquery   -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m pip install pympc   -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m pip install pywin32   -i https://pypi.tuna.tsinghua.edu.cn/simple
