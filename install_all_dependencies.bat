@@ -1,5 +1,3 @@
-@echo off
-
 
 python -m pip install numpy    -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m pip install scipy    -i https://pypi.tuna.tsinghua.edu.cn/simple
