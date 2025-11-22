@@ -749,7 +749,7 @@ class FitsImageViewer:
         )
         self.next_bad_button.pack(side=tk.LEFT, padx=(0, 5))
 
-        # 下一个 SUSPECT/FALSE/ERROR 按钮行
+        # 下一个 SUSPECT/FALSE/ERROR 按钮行 + SUSPECT重查小行星
         next_line2_frame = ttk.Frame(control_container)
         next_line2_frame.pack(fill=tk.X, pady=(0, 0))
         self.next_suspect_button = ttk.Button(
@@ -768,7 +768,13 @@ class FitsImageViewer:
             next_line2_frame, text="下一个 ERROR (7)",
             command=self._jump_to_next_error
         )
-        self.next_error_button.pack(side=tk.LEFT, padx=(5, 0))
+        self.next_error_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        self.requery_suspect_asteroids_button = ttk.Button(
+            next_line2_frame, text="suspect重查小行星",
+            command=self._requery_suspect_asteroids_not_found
+        )
+        self.requery_suspect_asteroids_button.pack(side=tk.LEFT, padx=(5, 0))
 
     def _load_batch_settings(self):
         """从配置文件加载批量处理参数到控件"""
@@ -12374,11 +12380,183 @@ class FitsImageViewer:
             progress_label.config(text="批量查询完成！")
             detail_label.config(text=f"总计: {total} 个文件")
             self.logger.info(f"批量查询完成！成功: {success_count}, 跳过: {skip_count}, 错误: {error_count}")
-
         except Exception as e:
             self.logger.error(f"批量查询过程出错: {str(e)}")
         finally:
-            progress_window.destroy()
+            try:
+                progress_window.destroy()
+            except Exception:
+                pass
+
+
+    def _requery_suspect_asteroids_not_found(self):
+        """从当前目录树节点开始，针对所有 SUSPECT 且小行星结果为"未找到"的检测，重新执行小行星查询。
+
+        仅处理 auto_class_label == 'suspect' 且 query_results_*.txt 中标记为"已查询，未找到"的目标，
+        避免重复查询已找到小行星或从未查询过的目标。
+        """
+        try:
+            if not hasattr(self, 'directory_tree'):
+                messagebox.showwarning("警告", "目录树未初始化")
+                return
+
+            # 构造整棵树的遍历顺序（与可见顺序一致），复用 _jump_to_next_manual_label 的逻辑
+            order = []
+
+            def walk(parent):
+                for child in self.directory_tree.get_children(parent):
+                    order.append(child)
+                    walk(child)
+
+            for root in self.directory_tree.get_children(""):
+                order.append(root)
+                walk(root)
+
+            if not order:
+                messagebox.showinfo("提示", "目录树为空")
+                return
+
+            # 起始节点：当前选中，否则树的第一个根节点
+            selection = self.directory_tree.selection()
+            start_node = selection[0] if selection else order[0]
+
+            try:
+                start_index = order.index(start_node)
+            except ValueError:
+                start_index = 0
+
+            # 辅助函数：从文件节点向上找到所属的天区目录(region)路径
+            def get_region_dir_for_node(node, file_path):
+                parent = self.directory_tree.parent(node)
+                while parent:
+                    tags_parent = self.directory_tree.item(parent, "tags")
+                    vals_parent = self.directory_tree.item(parent, "values")
+                    if "region" in tags_parent and vals_parent:
+                        return vals_parent[0]
+                    parent = self.directory_tree.parent(parent)
+                return os.path.dirname(file_path)
+
+            # 收集需要处理的 (file_path, region_dir) 列表，从起始节点开始向下
+            files_to_process = []
+            for idx_tree in range(start_index, len(order)):
+                node = order[idx_tree]
+                tags = self.directory_tree.item(node, "tags")
+                if "fits_file" not in tags:
+                    continue
+                values = self.directory_tree.item(node, "values")
+                if not values:
+                    continue
+                file_path = values[0]
+                region_dir = get_region_dir_for_node(node, file_path)
+                files_to_process.append({
+                    "file_path": file_path,
+                    "region_dir": region_dir,
+                })
+
+            if not files_to_process:
+                messagebox.showinfo("提示", "从当前节点开始没有FITS文件")
+                return
+
+            # 创建进度窗口
+            progress_window = tk.Toplevel(self.parent_frame)
+            progress_window.title("SUSPECT小行星重查进度")
+            progress_window.geometry("520x200")
+
+            progress_label = ttk.Label(progress_window, text="准备开始...")
+            progress_label.pack(pady=10)
+
+            detail_label = ttk.Label(progress_window, text="", wraplength=480)
+            detail_label.pack(pady=5)
+
+            progress_bar = ttk.Progressbar(progress_window, length=420, mode='determinate')
+            progress_bar.pack(pady=10)
+            progress_bar['maximum'] = len(files_to_process)
+
+            stats_label = ttk.Label(progress_window, text="")
+            stats_label.pack(pady=5)
+
+            total = len(files_to_process)
+            success_files = 0
+            skip_files = 0
+            error_files = 0
+            requery_targets = 0
+            requery_done = 0
+
+            def update_progress(file_idx, filename, status):
+                progress_bar['value'] = file_idx
+                progress_label.config(text=f"处理进度: {file_idx}/{total}")
+                detail_label.config(text=f"当前文件: {filename}\n状态: {status}")
+                stats_label.config(
+                    text=f"文件 成功: {success_files} | 跳过: {skip_files} | 错误: {error_files}    目标 重查: {requery_done}/{requery_targets}"
+                )
+                progress_window.update()
+
+            interval = self._get_batch_query_interval_seconds()
+
+            for idx, info in enumerate(files_to_process, start=1):
+                file_path = info['file_path']
+                filename = os.path.basename(file_path)
+                try:
+                    update_progress(idx - 0.5, filename, "加载检测结果...")
+                    if not self._load_diff_results_for_file(file_path, info['region_dir']):
+                        skip_files += 1
+                        update_progress(idx, filename, "跳过（无法加载检测结果）")
+                        continue
+
+                    if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                        skip_files += 1
+                        update_progress(idx, filename, "跳过（无检测结果）")
+                        continue
+
+                    # 在本文件中统计需要重查的目标
+                    local_targets = []
+                    for ci, cutout in enumerate(self._all_cutout_sets):
+                        if cutout.get('auto_class_label') != 'suspect':
+                            continue
+                        self._current_cutout_index = ci
+                        has_res, txt = self._check_existing_query_results('skybot')
+                        if has_res and txt and "已查询，未找到" in txt:
+                            local_targets.append(ci)
+
+                    if not local_targets:
+                        skip_files += 1
+                        update_progress(idx, filename, "跳过（无 SUSPECT 且小行星=未找到 的目标）")
+                        continue
+
+                    requery_targets += len(local_targets)
+
+                    # 对本文件的目标逐个重查小行星
+                    for step, ci in enumerate(local_targets, start=1):
+                        self._current_cutout_index = ci
+                        update_progress(idx - 0.2, filename, f"重查小行星 ({step}/{len(local_targets)})...")
+                        self._query_skybot()
+                        requery_done += 1
+                        if interval > 0 and step < len(local_targets):
+                            time.sleep(interval)
+
+                    success_files += 1
+                    update_progress(idx, filename, f"完成（重查 {len(local_targets)} 个目标）")
+
+                except Exception as e:
+                    error_files += 1
+                    err_msg = f"处理失败: {str(e)}"
+                    self.logger.error(f"SUSPECT小行星重查 - 处理文件 {filename} 失败: {str(e)}")
+                    update_progress(idx, filename, err_msg)
+
+            progress_label.config(text="SUSPECT小行星重查完成！")
+            detail_label.config(text=f"总计: {total} 个文件，重查目标 {requery_done}/{requery_targets}")
+            self.logger.info(
+                f"SUSPECT小行星重查完成: 文件 成功={success_files}, 跳过={skip_files}, 错误={error_files}; 目标 重查={requery_done}/{requery_targets}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"SUSPECT小行星重查过程出错: {str(e)}", exc_info=True)
+        finally:
+            try:
+                progress_window.destroy()
+            except Exception:
+                pass
+
 
     def _load_diff_results_for_file(self, file_path, region_dir):
         """为指定文件加载diff结果"""
