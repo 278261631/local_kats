@@ -357,11 +357,11 @@ class FitsWebDownloaderGUI:
     def _create_viewer_widgets(self):
         """创建图像查看界面"""
         # 文件选择区域
-        file_frame = ttk.LabelFrame(self.viewer_frame, text="文件选择", padding=10)
-        file_frame.pack(fill=tk.X, pady=(0, 10))
+        file_frame = ttk.LabelFrame(self.viewer_frame, text="文件选择", padding=6)
+        file_frame.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Button(file_frame, text="从下载目录选择", command=self._select_from_download_dir).pack(side=tk.LEFT)
-        ttk.Button(file_frame, text="选择其他FITS文件", command=self._select_fits_file).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(file_frame, text="选择其他FITS文件", command=self._select_fits_file).pack(side=tk.LEFT, padx=(8, 0))
 
         # 创建FITS查看器，传递配置管理器和回调函数
         # 将file_frame传递给FitsImageViewer，以便在其中添加按钮

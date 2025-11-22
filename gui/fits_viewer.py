@@ -173,11 +173,12 @@ class FitsImageViewer:
         """创建界面组件"""
         # 创建主框架
         main_frame = ttk.Frame(self.parent_frame)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # 减小与上方“文件选择”区域的垂直间距
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 0))
 
         # 创建工具栏容器
         toolbar_container = ttk.Frame(main_frame)
-        toolbar_container.pack(fill=tk.X, pady=(0, 5))
+        toolbar_container.pack(fill=tk.X, pady=(0, 3))
 
         # 如果有文件选择框架，将文件信息标签、显示图像、打开下载目录、检查WCS按钮添加到其中
         if self.file_selection_frame:
@@ -702,7 +703,7 @@ class FitsImageViewer:
                                               state="disabled")
         self.open_output_dir_btn.pack(side=tk.LEFT, padx=(0, 0))
 
-        # 第三行控制面板：检测结果状态与人工标记/跳转
+        # 第三行控制面板：检测结果状态与人工标记
         control_frame3 = ttk.Frame(control_container)
         control_frame3.pack(fill=tk.X, pady=(2, 0))
 
@@ -733,33 +734,38 @@ class FitsImageViewer:
         )
         self.auto_jump_unlabeled_high_score_check.pack(side=tk.LEFT, padx=(0, 10))
 
-        # 下一个 GOOD/BAD/SUSPECT/FALSE/ERROR 始终保持可点击，不随cutout加载状态禁用
+        # 下一个 GOOD/BAD 按钮行（始终保持可点击，不随cutout加载状态禁用）
+        next_line1_frame = ttk.Frame(control_container)
+        next_line1_frame.pack(fill=tk.X, pady=(0, 0))
         self.next_good_button = ttk.Button(
-            control_frame3, text="下一个 GOOD (3)",
+            next_line1_frame, text="下一个 GOOD (3)",
             command=self._jump_to_next_good
         )
         self.next_good_button.pack(side=tk.LEFT, padx=(0, 5))
 
         self.next_bad_button = ttk.Button(
-            control_frame3, text="下一个 BAD (4)",
+            next_line1_frame, text="下一个 BAD (4)",
             command=self._jump_to_next_bad
         )
         self.next_bad_button.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 下一个 SUSPECT/FALSE/ERROR 按钮行
+        next_line2_frame = ttk.Frame(control_container)
+        next_line2_frame.pack(fill=tk.X, pady=(0, 0))
         self.next_suspect_button = ttk.Button(
-            control_frame3, text="下一个 SUSPECT (5)",
+            next_line2_frame, text="下一个 SUSPECT (5)",
             command=self._jump_to_next_suspect
         )
-        self.next_suspect_button.pack(side=tk.LEFT, padx=(10, 5))
+        self.next_suspect_button.pack(side=tk.LEFT, padx=(0, 5))
 
         self.next_false_button = ttk.Button(
-            control_frame3, text="下一个 FALSE (6)",
+            next_line2_frame, text="下一个 FALSE (6)",
             command=self._jump_to_next_false
         )
         self.next_false_button.pack(side=tk.LEFT, padx=(5, 5))
 
         self.next_error_button = ttk.Button(
-            control_frame3, text="下一个 ERROR (7)",
+            next_line2_frame, text="下一个 ERROR (7)",
             command=self._jump_to_next_error
         )
         self.next_error_button.pack(side=tk.LEFT, padx=(5, 0))
