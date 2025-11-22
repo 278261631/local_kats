@@ -9255,6 +9255,32 @@ class FitsImageViewer:
                     self.log_callback(msg, "ERROR")
                 return None
 
+            # 为了与 Skybot / 本地 MPCORB 结果的后处理逻辑兼容，
+            # 在此对常见列名进行一次统一重命名：name/ra/dec/mag -> Name/RA/DEC/Mv
+            try:
+                if table_result is not None:
+                    colnames = list(getattr(table_result, "colnames", []))
+                    rename_map = {
+                        "name": "Name",
+                        "ra": "RA",
+                        "dec": "DEC",
+                        "mag": "Mv",
+                    }
+                    for old, new in rename_map.items():
+                        if old in colnames and new not in colnames:
+                            try:
+                                table_result.rename_column(old, new)
+                            except Exception:
+                                warn_msg = f"pympc 列重命名失败: {old} -> {new}"
+                                self.logger.warning(warn_msg, exc_info=True)
+                                if self.log_callback:
+                                    self.log_callback(warn_msg, "WARNING")
+            except Exception:
+                # 列重命名失败不应中断整个查询流程，记录日志后继续返回原始结果
+                self.logger.warning("pympc 结果列重命名过程中发生异常", exc_info=True)
+                if self.log_callback:
+                    self.log_callback("pympc 结果列重命名过程中发生异常", "WARNING")
+
             return table_result
 
         except Exception as e:
