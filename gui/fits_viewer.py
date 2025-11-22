@@ -12390,7 +12390,7 @@ class FitsImageViewer:
 
 
     def _requery_suspect_asteroids_not_found(self):
-        """从当前目录树节点开始，针对所有 SUSPECT 且小行星结果为"未找到"的检测，重新执行小行星查询。
+        """针对当前目录树选中节点“内部”的所有 SUSPECT 且小行星结果为"未找到"的检测，重新执行小行星查询。
 
         仅处理 auto_class_label == 'suspect' 且 query_results_*.txt 中标记为"已查询，未找到"的目标，
         避免重复查询已找到小行星或从未查询过的目标。
@@ -12400,30 +12400,12 @@ class FitsImageViewer:
                 messagebox.showwarning("警告", "目录树未初始化")
                 return
 
-            # 构造整棵树的遍历顺序（与可见顺序一致），复用 _jump_to_next_manual_label 的逻辑
-            order = []
-
-            def walk(parent):
-                for child in self.directory_tree.get_children(parent):
-                    order.append(child)
-                    walk(child)
-
-            for root in self.directory_tree.get_children(""):
-                order.append(root)
-                walk(root)
-
-            if not order:
-                messagebox.showinfo("提示", "目录树为空")
+            selection = self.directory_tree.selection()
+            if not selection:
+                messagebox.showinfo("提示", "请先在目录树中选中一个节点")
                 return
 
-            # 起始节点：当前选中，否则树的第一个根节点
-            selection = self.directory_tree.selection()
-            start_node = selection[0] if selection else order[0]
-
-            try:
-                start_index = order.index(start_node)
-            except ValueError:
-                start_index = 0
+            root_node = selection[0]
 
             # 辅助函数：从文件节点向上找到所属的天区目录(region)路径
             def get_region_dir_for_node(node, file_path):
@@ -12436,25 +12418,26 @@ class FitsImageViewer:
                     parent = self.directory_tree.parent(parent)
                 return os.path.dirname(file_path)
 
-            # 收集需要处理的 (file_path, region_dir) 列表，从起始节点开始向下
+            # 只遍历当前节点“内部”的子树，收集需要处理的 (file_path, region_dir) 列表
             files_to_process = []
-            for idx_tree in range(start_index, len(order)):
-                node = order[idx_tree]
+
+            def walk(node):
                 tags = self.directory_tree.item(node, "tags")
-                if "fits_file" not in tags:
-                    continue
                 values = self.directory_tree.item(node, "values")
-                if not values:
-                    continue
-                file_path = values[0]
-                region_dir = get_region_dir_for_node(node, file_path)
-                files_to_process.append({
-                    "file_path": file_path,
-                    "region_dir": region_dir,
-                })
+                if "fits_file" in tags and values:
+                    file_path = values[0]
+                    region_dir = get_region_dir_for_node(node, file_path)
+                    files_to_process.append({
+                        "file_path": file_path,
+                        "region_dir": region_dir,
+                    })
+                for child in self.directory_tree.get_children(node):
+                    walk(child)
+
+            walk(root_node)
 
             if not files_to_process:
-                messagebox.showinfo("提示", "从当前节点开始没有FITS文件")
+                messagebox.showinfo("提示", "当前节点内没有FITS文件")
                 return
 
             # 创建进度窗口
