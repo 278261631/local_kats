@@ -16,6 +16,8 @@ from pathlib import Path
 import time
 import json
 from concurrent.futures import ThreadPoolExecutor
+import shutil
+
 
 
 # 添加项目根目录到路径
@@ -913,8 +915,9 @@ class FitsWebDownloaderGUI:
         ttk.Button(update_frame, text="下载问题模板对应观测文件", command=self._update_problem_templates).grid(row=3, column=0, sticky=tk.W, padx=(10, 5), pady=(8, 5))
         ttk.Button(update_frame, text="预处理图像", command=self._preprocess_problem_images).grid(row=3, column=1, sticky=tk.W, padx=(5, 5), pady=(8, 5))
         ttk.Button(update_frame, text="生成新模板", command=self._make_problem_templates).grid(row=3, column=2, sticky=tk.W, padx=(5, 5), pady=(8, 5))
+        ttk.Button(update_frame, text="逐个更新模板(老逻辑)", command=self._update_templates_one_by_one).grid(row=3, column=3, sticky=tk.W, padx=(5, 5), pady=(8, 5))
         self.template_update_status = ttk.Label(update_frame, text="就绪")
-        self.template_update_status.grid(row=3, column=3, columnspan=3, sticky=tk.W, padx=(5, 5))
+        self.template_update_status.grid(row=3, column=4, columnspan=2, sticky=tk.W, padx=(5, 5))
 
         # 说明文本单独放在第4行，避免被遮挡
         ttk.Label(
@@ -992,6 +995,481 @@ class FitsWebDownloaderGUI:
                 self.region_collect_status_after(f"失败：{e}", "red")
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _update_templates_one_by_one(self):
+        """使用逐个模板的老逻辑：对每个问题模板单独执行 下载->预处理->生成 模板（后台线程）"""
+        thread = threading.Thread(target=self._update_templates_one_by_one_worker, daemon=True)
+        thread.start()
+
+    def _update_templates_one_by_one_worker(self):
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            report_path = os.path.join(base_dir, "templates_update", "fits_check_report.txt")
+            self._template_update_status_after("解析 fits_check_report.txt...", "blue")
+            system_name, problems = self._parse_fits_check_report(report_path)
+            if not system_name:
+                self._template_update_status_after("无法从报告中识别系统名称", "red")
+                return
+            if not problems:
+                self._template_update_status_after("报告中未找到问题模板文件", "orange")
+                return
+
+            # 选择前N个问题模板
+            use_all = bool(self.problem_use_all_var.get())
+            try:
+                top_n = int(self.problem_top_n_var.get())
+            except Exception:
+                top_n = 1
+            if top_n < 1:
+                top_n = 1
+            selected = problems if use_all else problems[:top_n]
+
+            try:
+                recent_days = int(self.problem_recent_days_var.get())
+            except Exception:
+                recent_days = 3
+            if recent_days < 1:
+                recent_days = 1
+
+            index = self._load_gy1_index()
+            if not index:
+                self._template_update_status_after("GY1索引为空，请先执行“天区收集”。", "red")
+                return
+
+            system_upper = system_name.upper()
+            tel = system_upper.lower()
+
+            # 准备下载器
+            if not self.downloader:
+                self.downloader = FitsDownloader(
+                    max_workers=1,
+                    retry_times=self.retry_times_var.get(),
+                    timeout=self.timeout_var.get(),
+                    enable_astap=False,
+                    astap_config_path="config/url_config.json",
+                )
+
+            url_template = self.config_manager.get_url_template()
+
+            # 导入生成模板和预处理所需的依赖
+            try:
+                import numpy as np
+                from astropy.io import fits
+                from astropy.wcs import WCS
+                from reproject.mosaicking import find_optimal_celestial_wcs, reproject_and_coadd
+                import reproject
+                from fits_checking.fits_monitor import FITSQualityAnalyzer
+            except Exception as e:
+                self._template_update_status_after(f"逐个更新失败：缺少依赖库: {e}", "red")
+                return
+
+            # ASTAP 处理器
+            if not ASTAPProcessor:
+                self._template_update_status_after("ASTAP处理器不可用，无法执行逐个更新。", "red")
+                return
+            astap_config_path = os.path.join(base_dir, "..", "config", "url_config.json")
+            astap_processor = ASTAPProcessor(astap_config_path)
+
+            # 质量分析器和阈值（沿用批量预处理逻辑）
+            quality_analyzer = FITSQualityAnalyzer()
+            lm_thres = 15.0
+            ell_thres = 0.2
+            fwhm_thres = 10.0
+
+            bad_dir = os.path.join(base_dir, "templates_update", "bad_img")
+            os.makedirs(bad_dir, exist_ok=True)
+
+            # 生成模板时的最少参与图像数设置
+            try:
+                min_images = int(self.problem_min_images_var.get())
+            except Exception:
+                min_images = 30
+            if min_images < 1:
+                min_images = 1
+
+            # 重投影线程数设置
+            try:
+                parallel_threads = int(self.problem_reproject_threads_var.get())
+            except Exception:
+                parallel_threads = 10
+            if parallel_threads < 1:
+                parallel_threads = 1
+
+            total_templates = len(selected)
+            made = 0
+
+            from datetime import datetime as _dt
+
+            def _format_bytes(num):
+                if num is None:
+                    return "未知"
+                try:
+                    num = float(num)
+                except Exception:
+                    return str(num)
+                for unit in ["B", "KB", "MB", "GB"]:
+                    if num < 1024.0:
+                        return f"{num:.1f}{unit}"
+                    num /= 1024.0
+                return f"{num:.1f}TB"
+
+            def _compute_lm5sig(fits_path: Path):
+                """根据 .check.fits 和曝光时间计算5σ限制星等，并写入LM5SIG"""
+                try:
+                    stem = fits_path.stem
+                    check_path = fits_path.with_name(f"{stem}.check.fits")
+                    if not check_path.exists():
+                        return None
+                    with fits.open(check_path) as chdul:
+                        data = chdul[0].data
+                    if data is None:
+                        return None
+                    data = np.asarray(data, dtype=np.float64)
+                    med = float(np.median(data))
+                    if med <= 0:
+                        return None
+                    with fits.open(str(fits_path), mode="update") as hdul2:
+                        hdr = hdul2[0].header
+                        exptime = hdr.get("EXPOSURE", hdr.get("EXPTIME", 1.0))
+                        try:
+                            exptime = float(exptime)
+                        except Exception:
+                            exptime = 1.0
+                        if exptime <= 0:
+                            exptime = 1.0
+                        zp = None
+                        for key in ("ZP", "PHOTZP", "MAGZP", "ZP_MAG"):
+                            if key in hdr:
+                                zp = hdr.get(key)
+                                break
+                        if zp is None:
+                            zp = 25.0
+                        try:
+                            zp = float(zp)
+                        except Exception:
+                            zp = 25.0
+                        lmag = zp - 2.5 * np.log10(med * 5.0 * np.pi * 4.0**2 / exptime)
+                        lmag = float(round(lmag, 3))
+                        hdr["LM5SIG"] = (lmag, "5-sigma limiting magnitude")
+                        hdul2.flush()
+                    return lmag
+                except Exception as e:
+                    self._log(f"[逐个更新] 计算LM5SIG失败 {fits_path}: {e}")
+                    return None
+
+            # 对每个问题模板逐个执行：下载 -> 预处理 -> 生成
+            for idx, problem in enumerate(selected, 1):
+                k_number = problem.get("k_number")
+                suffix = problem.get("suffix")
+                k_full = problem.get("k_full")
+                if not (k_number and suffix and k_full):
+                    continue
+
+                try:
+                    k_region = int(str(k_number).lstrip("Kk"))
+                    k_index = int(suffix)
+                except Exception:
+                    self._log(f"[逐个更新] 无法解析天区编号: {k_number}-{suffix}")
+                    continue
+
+                field_name = f"K{k_region:03d}-{k_index}"
+
+                # 每个模板单独的 update 子目录
+                update_root = os.path.join(base_dir, "templates_update", "update", tel, k_full)
+                output_root = os.path.join(base_dir, "templates_update", "output", tel)
+                os.makedirs(update_root, exist_ok=True)
+                os.makedirs(output_root, exist_ok=True)
+
+                # 如果输出模板已存在，则跳过
+                temp_name = f"{field_name}.fits"
+                existing_temp_path = Path(output_root) / temp_name
+                if existing_temp_path.exists():
+                    self._log(f"[逐个更新] 已存在输出模板 {system_upper} {k_full} -> {existing_temp_path}，跳过。")
+                    continue
+
+                # 1) 下载：仅下载当前模板需要的观测文件到其专属目录
+                try:
+                    dates = self._find_recent_dates_for_region(index, k_number, recent_days)
+                except Exception:
+                    dates = []
+                if not dates:
+                    self._log(f"[逐个更新] 天区 {k_number} 在 GY1 索引中没有找到任何日期，跳过。")
+                    continue
+
+                total_downloaded = 0
+
+                for date in dates:
+                    format_params = {"tel_name": system_upper, "date": date, "k_number": k_number}
+                    if "{year_of_date}" in url_template:
+                        try:
+                            year_of_date = date[:4] if len(date) >= 4 else _dt.now().strftime("%Y")
+                        except Exception:
+                            year_of_date = _dt.now().strftime("%Y")
+                        format_params["year_of_date"] = year_of_date
+
+                    region_url = url_template.format(**format_params)
+                    self._log(f"[逐个更新-下载] 扫描 {system_upper} {date} {k_full} - {region_url}")
+                    try:
+                        fits_files = self.directory_scanner.scan_directory_listing(region_url)
+                        if not fits_files:
+                            fits_files = self.scanner.scan_fits_files(region_url)
+                    except Exception as e:
+                        self._log(f"[逐个更新-下载] 扫描失败 {region_url}: {e}")
+                        continue
+
+                    if not fits_files:
+                        self._log(f"[逐个更新-下载] {system_upper} {date} {k_full} 未找到任何FITS文件")
+                        continue
+
+                    pattern = k_full.lower()
+                    candidates = [(fn, url, size) for fn, url, size in fits_files if pattern in fn.lower()]
+                    if not candidates:
+                        self._log(f"[逐个更新-下载] {system_upper} {date} 未找到包含 {k_full} 的文件（共 {len(fits_files)} 个）")
+                        continue
+
+                    for j, (filename, file_url, size) in enumerate(candidates, 1):
+                        try:
+                            self._log(
+                                f"[逐个更新-下载] ({idx}/{total_templates}) #{j}/{len(candidates)} 下载 {system_upper} {date} {k_full} -> {filename}"
+                            )
+
+                            start_time = time.time()
+                            last_update = [start_time]
+
+                            def progress_callback(downloaded_bytes, total_bytes, fn):
+                                now = time.time()
+                                if now - last_update[0] < 0.3 and (total_bytes is None or downloaded_bytes < (total_bytes or 0)):
+                                    return
+                                last_update[0] = now
+                                elapsed = max(now - start_time, 1e-3)
+                                speed = downloaded_bytes / elapsed
+                                speed_str = _format_bytes(speed)
+                                downloaded_str = _format_bytes(downloaded_bytes)
+                                total_str = _format_bytes(total_bytes) if total_bytes is not None else "未知"
+                                text = f"逐个更新下载中: {fn} {downloaded_str}/{total_str} @ {speed_str}/s"
+                                self._template_update_status_after(text, "blue")
+
+                            result = self.downloader.download_single_file(file_url, update_root, progress_callback)
+
+                            if isinstance(result, str) and result.startswith("跳过已存在文件"):
+                                status_text = (
+                                    f"逐个更新: 已存在，跳过 - {system_upper} {date} {k_full} -> {result}"
+                                )
+                                self._template_update_status_after(status_text, "orange")
+                            else:
+                                total_downloaded += 1
+                                status_text = (
+                                    f"逐个更新: 已下载 {total_downloaded} 个文件 - {system_upper} {date} {k_full} -> {result}"
+                                )
+                                self._template_update_status_after(status_text, "green")
+                        except Exception as e:
+                            self._log(f"[逐个更新-下载] 下载失败 {file_url}: {e}")
+                            status_text = f"逐个更新下载失败: {system_upper} {date} {k_full} - {e}"
+                            self._template_update_status_after(status_text, "red")
+
+                # 收集当前模板 update 目录中的FITS文件
+                update_root_path = Path(update_root)
+                fits_paths = []
+                for ext in (".fits", ".fit", ".fts"):
+                    fits_paths.extend(update_root_path.glob(f"*{ext}"))
+                    fits_paths.extend(update_root_path.glob(f"*{ext.upper()}"))
+                fits_paths = sorted(set(fits_paths))
+                if not fits_paths:
+                    self._template_update_status_after(
+                        f"逐个更新: {system_upper} {k_full} 的 update 目录中没有任何FITS文件，跳过。",
+                        "orange",
+                    )
+                    continue
+
+                # 2) 预处理：对该模板的所有文件执行 ASTAP + 质量筛选
+                self._template_update_status_after(
+                    f"逐个更新: ({idx}/{total_templates}) {system_upper} {k_full} - 开始预处理 {len(fits_paths)} 个FITS文件...",
+                    "blue",
+                )
+
+                good_hdus = []
+                used_files = []
+
+                for p in fits_paths:
+                    file_path = str(p)
+                    basename = p.name
+                    reasons = []
+                    is_bad = False
+
+                    # ASTAP 解算
+                    try:
+                        astap_ok = astap_processor.process_fits_file(file_path)
+                        if not astap_ok:
+                            reasons.append("ASTAP失败")
+                            is_bad = True
+                    except Exception as e:
+                        self._log(f"[逐个更新-预处理] ASTAP处理异常 {file_path}: {e}")
+                        reasons.append("ASTAP异常")
+                        is_bad = True
+
+                    # 质量评估
+                    fwhm = np.nan
+                    ellip = np.nan
+                    lm_val = None
+                    try:
+                        with fits.open(file_path) as hdul:
+                            data = hdul[0].data
+                        if data is not None:
+                            image = data.astype(np.float64)
+                            metrics = quality_analyzer.calculate_quality_metrics(image)
+                            if metrics:
+                                fwhm = float(metrics.get("fwhm", np.nan))
+                                ellip = float(metrics.get("ellipticity", np.nan))
+                                lm_val = metrics.get("lm5sig")
+                    except Exception as e:
+                        self._log(f"[逐个更新-预处理] 质量分析失败 {file_path}: {e}")
+
+                    lm_from_check = _compute_lm5sig(p)
+                    if lm_from_check is not None:
+                        lm_val = lm_from_check
+
+                    if lm_val is None or not (isinstance(lm_val, (int, float)) and np.isfinite(lm_val)):
+                        reasons.append("LM未知")
+                        is_bad = True
+                    elif lm_val < lm_thres:
+                        reasons.append(f"LM5SIG={lm_val:.2f}<{lm_thres}")
+                        is_bad = True
+
+                    if not (isinstance(fwhm, (int, float)) and np.isfinite(fwhm)) or fwhm > fwhm_thres:
+                        reasons.append(f"FWHM={fwhm}")
+                        is_bad = True
+                    if not (isinstance(ellip, (int, float)) and np.isfinite(ellip)) or ellip > ell_thres:
+                        reasons.append(f"ELL={ellip}")
+                        is_bad = True
+
+                    if is_bad:
+                        try:
+                            dest = os.path.join(bad_dir, basename)
+                            shutil.move(file_path, dest)
+                            self._log(f"[逐个更新-预处理] 移动到 bad_img: {basename} ({'; '.join(reasons)})")
+                        except Exception as e:
+                            self._log(f"[逐个更新-预处理] 移动坏图像失败 {file_path}: {e}")
+                    else:
+                        # 作为候选参与模板合成
+                        try:
+                            hdu = fits.open(file_path)[0]
+                            try:
+                                w = WCS(hdu.header)
+                                if not w.has_celestial:
+                                    self._log(f"[逐个更新-预处理] 文件缺少天球WCS，跳过: {file_path}")
+                                else:
+                                    good_hdus.append(hdu)
+                                    used_files.append(file_path)
+                            except Exception as w_err:
+                                self._log(f"[逐个更新-预处理] 文件WCS检查失败，跳过: {file_path}: {w_err}")
+                        except Exception as e:
+                            self._log(f"[逐个更新-预处理] 打开文件失败 {file_path}: {e}")
+
+                if not good_hdus:
+                    self._template_update_status_after(
+                        f"逐个更新: {system_upper} {k_full} 预处理后没有可用的图像，跳过生成模板。",
+                        "orange",
+                    )
+                    continue
+
+                if len(good_hdus) < min_images:
+                    self._template_update_status_after(
+                        f"逐个更新: {system_upper} {k_full} 可用图像数 {len(good_hdus)} 小于最少参与图像数 {min_images}，跳过生成。",
+                        "orange",
+                    )
+                    continue
+
+                # 3) 生成模板：对 good_hdus 做重投影和合成
+                self._template_update_status_after(
+                    f"逐个更新: ({idx}/{total_templates}) {system_upper} {k_full} - 使用 {len(good_hdus)} 个文件合成模板...",
+                    "blue",
+                )
+
+                try:
+                    start_time = time.time()
+
+                    wcs, shape_out = find_optimal_celestial_wcs(good_hdus)
+
+                    hdu_list2 = []
+                    for fpath in used_files:
+                        try:
+                            hdu_list2.append(fits.open(fpath)[0])
+                        except Exception as e:
+                            self._log(f"[逐个更新-生成] 重投影时打开文件失败 {fpath}: {e}")
+
+                    if not hdu_list2:
+                        self._template_update_status_after(
+                            f"逐个更新: {system_upper} {k_full} 重投影时没有可用的HDU，跳过。",
+                            "orange",
+                        )
+                        continue
+
+                    comb, footprint = reproject_and_coadd(
+                        hdu_list2,
+                        wcs,
+                        shape_out=shape_out,
+                        reproject_function=reproject.reproject_interp,
+                        combine_function="mean",
+                        match_background=True,
+                        parallel=parallel_threads,
+                    )
+
+                    data = np.where(footprint == len(hdu_list2), comb, np.nan).astype("float32")
+
+                    no_trim_name = f"{field_name}_no_trim.fits"
+                    temp_name = f"{field_name}.fits"
+
+                    write_temp_dir = Path(output_root)
+                    write_temp_dir.mkdir(parents=True, exist_ok=True)
+                    no_trim_path = write_temp_dir / no_trim_name
+                    temp_path = write_temp_dir / temp_name
+
+                    fits.writeto(no_trim_path, data, wcs.to_header(), overwrite=True)
+
+                    mask = np.isfinite(data)
+                    if not mask.any():
+                        self._log(f"[逐个更新-生成] {system_upper} {k_full} 合成结果全部为NaN，跳过裁剪。")
+                        continue
+
+                    ys, xs = np.where(mask)
+                    y_min, y_max = int(ys.min()), int(ys.max())
+                    x_min, x_max = int(xs.min()), int(xs.max())
+
+                    trimmed_data = data[y_min: y_max + 1, x_min: x_max + 1].astype("float32")
+
+                    header = wcs.to_header()
+                    try:
+                        if "CRPIX1" in header:
+                            header["CRPIX1"] -= x_min
+                        if "CRPIX2" in header:
+                            header["CRPIX2"] -= y_min
+                    except Exception:
+                        pass
+
+                    fits.writeto(temp_path, trimmed_data, header, overwrite=True)
+
+                    elapsed = time.time() - start_time
+                    self._log(f"[逐个更新-生成] 完成 {system_upper} {k_full} -> {temp_path}，用时 {elapsed:.1f} 秒")
+
+                    made += 1
+                    self._template_update_status_after(
+                        f"逐个更新: ({idx}/{total_templates}) {system_upper} {k_full} -> {temp_path.name} ({elapsed:.1f}s)",
+                        "green",
+                    )
+                except Exception as e:
+                    files_str = ", ".join(str(p) for p in fits_paths)
+                    self._log(f"[逐个更新-生成] {system_upper} {k_full} 处理失败: {e} | 文件列表: {files_str}")
+
+            if made:
+                self._template_update_status_after(
+                    f"逐个更新完成：成功生成 {made}/{total_templates} 个模板，输出目录: templates_update/output/{tel}",
+                    "green",
+                )
+            else:
+                self._template_update_status_after("逐个更新完成：没有成功生成任何新模板。", "orange")
+        except Exception as e:
+            self._template_update_status_after(f"逐个更新出错: {e}", "red")
+
 
     def _update_problem_templates(self):
         """根据 fits_check_report.txt 下载问题模板对应的最新观测文件（后台线程）"""
