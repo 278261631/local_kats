@@ -1289,8 +1289,9 @@ class FitsWebDownloaderGUI:
 
                 good_hdus = []
                 used_files = []
+                lock = threading.Lock()
 
-                for p in fits_paths:
+                def _process_single(p: Path):
                     file_path = str(p)
                     basename = p.name
                     reasons = []
@@ -1358,12 +1359,24 @@ class FitsWebDownloaderGUI:
                                 if not w.has_celestial:
                                     self._log(f"[逐个更新-预处理] 文件缺少天球WCS，跳过: {file_path}")
                                 else:
-                                    good_hdus.append(hdu)
-                                    used_files.append(file_path)
+                                    with lock:
+                                        good_hdus.append(hdu)
+                                        used_files.append(file_path)
                             except Exception as w_err:
                                 self._log(f"[逐个更新-预处理] 文件WCS检查失败，跳过: {file_path}: {w_err}")
                         except Exception as e:
                             self._log(f"[逐个更新-预处理] 打开文件失败 {file_path}: {e}")
+
+                # 多线程预处理当前模板的所有文件
+                try:
+                    max_workers = int(self.problem_preprocess_threads_var.get())
+                except Exception:
+                    max_workers = 4
+                if max_workers < 1:
+                    max_workers = 1
+
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    executor.map(_process_single, fits_paths)
 
                 if not good_hdus:
                     self._template_update_status_after(
