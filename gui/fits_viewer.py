@@ -11724,18 +11724,32 @@ class FitsImageViewer:
                 # 没有query_results文件时, 但有查询记录; 不再额外计算, 直接走无距离逻辑
                 self.logger.info("自动分类: 未找到query_results_*.txt, 使用无像素距离的规则")
 
-            # 3) 根据距离阈值3像素进行分类，并记录原因
+            # 3) 根据查询类型和距离阈值进行分类，并记录原因
             new_label = cutout.get('auto_class_label')
             reason = ""
             if distances:
                 min_dist = min(distances)
                 self.logger.info(f"自动分类: 最小像素距离 = {min_dist:.2f} px")
-                if min_dist <= 3.0:
+                
+                # 独立判断条件：小行星<15像素 或者 变星<3像素 都判定为false
+                if (skybot_queried and min_dist <= 15.0) or (vsx_queried and min_dist <= 3.0):
                     new_label = 'false'
-                    reason = f"min_dist={min_dist:.2f}<=3.00px, skybot_queried={skybot_queried}, vsx_queried={vsx_queried}"
+                    # 根据具体满足的条件记录原因
+                    if skybot_queried and min_dist <= 15.0 and vsx_queried and min_dist <= 3.0:
+                        reason = f"小行星和变星查询均满足阈值: min_dist={min_dist:.2f}px (小行星≤15px, 变星≤3px)"
+                    elif skybot_queried and min_dist <= 15.0:
+                        reason = f"小行星查询满足阈值: min_dist={min_dist:.2f}<=15.00px"
+                    elif vsx_queried and min_dist <= 3.0:
+                        reason = f"变星查询满足阈值: min_dist={min_dist:.2f}<=3.00px"
                 else:
                     new_label = 'suspect'
-                    reason = f"min_dist={min_dist:.2f}>3.00px, skybot_queried={skybot_queried}, vsx_queried={vsx_queried}"
+                    # 根据不满足的条件记录原因
+                    if skybot_queried and vsx_queried:
+                        reason = f"混合查询均不满足阈值: min_dist={min_dist:.2f}px (小行星>15px, 变星>3px)"
+                    elif skybot_queried:
+                        reason = f"小行星查询不满足阈值: min_dist={min_dist:.2f}>15.00px"
+                    elif vsx_queried:
+                        reason = f"变星查询不满足阈值: min_dist={min_dist:.2f}>3.00px"
             else:
                 # 有查询但完全没有候选体或缺少距离信息 -> suspect
                 new_label = 'suspect'
