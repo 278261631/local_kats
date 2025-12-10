@@ -2321,7 +2321,8 @@ class FitsImageViewer:
                 self.wcs_check_button.config(state="disabled")
 
             # 检查是否选中了目录，如果是则启用批量查询按钮
-            if values and any(tag in tags for tag in ["region", "date", "telescope"]):
+            # 包括：天区(region)、日期(date)、望远镜(telescope) 以及根目录(root_dir，例如“下载目录”根节点)
+            if values and any(tag in tags for tag in ["region", "date", "telescope", "root_dir"]):
                 self.batch_query_button.config(state="normal")
                 if hasattr(self, 'batch_local_query_button'):
                     self.batch_local_query_button.config(state="normal")
