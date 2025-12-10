@@ -749,6 +749,13 @@ class FitsImageViewer:
         )
         self.next_bad_button.pack(side=tk.LEFT, padx=(0, 5))
 
+        # 仅使用 Skybot 查询当前检测结果的小行星（忽略高级设置中的查询方式）
+        self.skybot_force_current_button = ttk.Button(
+            next_line1_frame, text="仅Skybot查当前",
+            command=self._query_skybot_force_online_current
+        )
+        self.skybot_force_current_button.pack(side=tk.LEFT, padx=(5, 0))
+
         # 下一个 SUSPECT/FALSE/ERROR 按钮行 + SUSPECT重查小行星
         next_line2_frame = ttk.Frame(control_container)
         next_line2_frame.pack(fill=tk.X, pady=(0, 0))
@@ -8696,7 +8703,7 @@ class FitsImageViewer:
             self.logger.error(f"应用DSS图像翻转失败: {str(e)}", exc_info=True)
 
     def _query_skybot(self):
-        """使用Skybot查询小行星数据"""
+        """使用当前配置/覆盖逻辑查询小行星（Skybot / 本地MPCORB / pympc）。"""
         try:
             # 立即重置结果标签，确保用户能看到查询状态变化
             self.skybot_result_label.config(text="准备中...", foreground="gray")
@@ -8843,7 +8850,6 @@ class FitsImageViewer:
                 results = self._perform_pympc_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
             else:
                 results = self._perform_skybot_query(ra, dec, utc_time, mpc_code, latitude, longitude, search_radius)
-
 
             if results is not None:
                 # 保存查询结果到当前cutout
@@ -9011,6 +9017,29 @@ class FitsImageViewer:
                     self._update_auto_classification_for_current_cutout()
             except Exception:
                 pass
+
+    def _query_skybot_force_online_current(self):
+        """仅使用 Skybot 在线查询当前检测结果的小行星。
+
+        无论高级设置里配置的是 auto / local / pympc，本按钮都
+        只对“当前 cutout”执行一次 Skybot 在线查询，不影响其它
+        查询按钮和批量查询的行为。
+        """
+        # 仅作用于当前cutout，复用 _query_skybot 的全部参数/结果处理逻辑
+        # 通过临时将 _force_online_query 置为 True 来强制使用 Skybot
+        old_force_online = getattr(self, "_force_online_query", False)
+        try:
+            self._force_online_query = True
+            self.logger.info("[仅Skybot查当前] 临时强制使用 Skybot 在线查询当前检测结果")
+            if self.log_callback:
+                self.log_callback("[仅Skybot查当前] 临时强制使用 Skybot 在线查询当前检测结果", "INFO")
+
+            # 直接复用标准的小行星查询流程（仅当前 cutout）
+            self._query_skybot()
+        finally:
+            # 恢复之前的强制在线标志，避免影响后续其它查询逻辑
+            self._force_online_query = old_force_online
+
 
     def _perform_skybot_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.01):
         """执行 Skybot 小行星查询。
