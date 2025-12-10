@@ -4829,6 +4829,15 @@ Diff统计:
         # 在新线程中执行
         thread = threading.Thread(target=self._full_day_all_systems_batch_process_thread, args=(date, all_telescopes))
         thread.daemon = True
+
+        # 若当前为仅 --date 自动模式，则在整个全天全系统 diff 周期内启用静默模式，
+        # 这样线程内部的 messagebox 提示都会被抑制，仅写入日志，不会打断自动流程。
+        try:
+            if getattr(self, "_auto_date_only_mode", False):
+                self._auto_silent_mode = True
+        except Exception:
+            pass
+
         thread.start()
 
     def _full_day_all_systems_batch_process_thread(self, date, all_telescopes):
@@ -5008,18 +5017,168 @@ Diff统计:
             self.root.after(0, lambda: self.url_builder.set_batch_button_state("normal"))
             self.root.after(0, lambda: self.url_builder.set_full_day_batch_button_state("normal"))
             self.root.after(0, lambda: self.url_builder.set_full_day_all_systems_batch_button_state("normal"))
-            # 恢复静默标志（若启用过）
-            try:
-                self._auto_silent_mode = False
-            except Exception:
-                pass
-
             self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.download_button.config(state="normal"))
             # 禁用暂停和停止按钮
             self.root.after(0, lambda: self.url_builder.set_pause_batch_button_state("disabled"))
             self.root.after(0, lambda: self.url_builder.set_stop_batch_button_state("disabled"))
-            self.root.after(0, lambda: self.status_label.config(text="就绪"))
+
+            # 若为“仅 --date” 自动模式，则在全天全系统 diff 完成后，继续执行自动后处理链
+            # 步骤：刷新目录树并选择下载根目录 → 批量检测对齐 → AI 标记 GOOD/BAD → 批量查询 → 更新 pympc 轨道目录
+            try:
+                if getattr(self, "_auto_date_only_mode", False):
+                    self._log("[自动模式] 全天全系统diff已完成，开始执行后续: 批量检测对齐 → AI标记GOOD/BAD → 批量查询 → 更新pympc轨道目录")
+                    # 在主线程中调度执行自动后处理链
+                    self.root.after(500, self._auto_postprocess_for_date_only_mode)
+                else:
+                    # 非自动模式或非仅日期模式：恢复状态栏
+                    self.root.after(0, lambda: self.status_label.config(text="就绪"))
+            except Exception:
+                # 出现异常时，仍然保证状态栏恢复
+                self.root.after(0, lambda: self.status_label.config(text="就绪"))
+
+    # =========================
+    # 仅 --date 模式：全天全系统 diff 结束后的自动后处理链
+    # =========================
+
+    def _auto_select_download_root_in_viewer(self):
+        """在 Viewer 中刷新目录树并自动选中“下载根目录”节点。返回是否成功。"""
+        try:
+            if not hasattr(self, "fits_viewer") or self.fits_viewer is None:
+                return False
+
+            viewer = self.fits_viewer
+
+            # 刷新目录树
+            try:
+                viewer._refresh_directory_tree()
+            except Exception:
+                # 即使刷新失败，也继续尝试使用现有树
+                pass
+
+            tree = viewer.directory_tree
+            for node in tree.get_children(""):
+                tags = tree.item(node, "tags")
+                values = tree.item(node, "values")
+                text = tree.item(node, "text")
+                if "root_dir" in tags:
+                    try:
+                        tree.selection_set(node)
+                        tree.focus(node)
+                        tree.see(node)
+                        self._log(f"[自动模式] 已在目录树中选中下载根目录节点: {text} ({values[0] if values else ''})")
+                        return True
+                    except Exception:
+                        continue
+
+            self._log("[自动模式] 未能在目录树中找到下载根目录节点(tag=root_dir)，自动后处理链可能无法完整执行。")
+            return False
+        except Exception as e:
+            try:
+                self._log(f"[自动模式] 选择下载根目录节点时出错: {e}")
+            except Exception:
+                pass
+            return False
+
+    def _auto_postprocess_for_date_only_mode(self):
+        """仅 --date 自动模式下，在全天全系统 diff 完成后执行的图像后处理链。"""
+        try:
+            if not getattr(self, "_auto_date_only_mode", False):
+                self._log("[自动模式] 当前并非仅 --date 自动模式，跳过自动后处理链。")
+                self.status_label.config(text="就绪")
+                return
+
+            self._log("[自动模式] 开始执行仅 --date 模式的自动后处理链。")
+
+            # 切换到图像查看标签页
+            try:
+                self.notebook.select(self.viewer_frame)
+            except Exception:
+                pass
+
+            # 在整个后处理链期间启用静默模式
+            prev_silent = getattr(self, "_auto_silent_mode", False)
+            self._auto_silent_mode = True
+
+            def _step1_alignment():
+                # 刷新目录树并选中下载根目录，然后执行批量检测对齐
+                if self._auto_select_download_root_in_viewer():
+                    try:
+                        self._log("[自动模式] 开始批量检测对齐质量……")
+                        self.fits_viewer._batch_evaluate_alignment_quality()
+                    except Exception as e:
+                        self._log(f"[自动模式] 批量检测对齐质量时出错: {e}")
+
+                # 下一步：AI GOOD/BAD 标记
+                self.root.after(500, _step2_ai_mark)
+
+            def _step2_ai_mark():
+                if self._auto_select_download_root_in_viewer():
+                    try:
+                        self._log("[自动模式] 开始 AI 标记 GOOD/BAD……")
+                        self.fits_viewer._ai_mark_detections()
+                    except Exception as e:
+                        self._log(f"[自动模式] AI 标记 GOOD/BAD 时出错: {e}")
+
+                # 下一步：批量查询
+                self.root.after(500, _step3_batch_query)
+
+            def _step3_batch_query():
+                if self._auto_select_download_root_in_viewer():
+                    try:
+                        self._log("[自动模式] 开始批量查询小行星/变星……")
+                        self.fits_viewer._batch_query_asteroids_and_variables()
+                    except Exception as e:
+                        self._log(f"[自动模式] 批量查询时出错: {e}")
+
+                # 最后一步：更新 pympc 轨道目录
+                self.root.after(500, _step4_update_pympc)
+
+            def _step4_update_pympc():
+                try:
+                    self._log("[自动模式] 开始更新 pympc 轨道目录……")
+                    # 使用静默包装，避免缺少依赖时弹窗中断流程
+                    self._run_without_messageboxes(self._update_pympc_catalogue)
+                except Exception as e:
+                    try:
+                        self._log(f"[自动模式] 更新 pympc 轨道目录时出错: {e}")
+                    except Exception:
+                        pass
+                finally:
+                    # 恢复静默标志
+                    try:
+                        self._auto_silent_mode = prev_silent
+                    except Exception:
+                        pass
+
+                    # 结束时恢复状态栏
+                    try:
+                        self.status_label.config(text="就绪")
+                    except Exception:
+                        pass
+
+                    try:
+                        self._log("[自动模式] 仅 --date 模式的自动后处理链已完成。")
+                    except Exception:
+                        pass
+
+            # 启动第一步
+            self.root.after(500, _step1_alignment)
+
+        except Exception as e:
+            # 若自动后处理链本身异常终止，确保静默标志与状态栏恢复
+            try:
+                self._log(f"[自动模式] 自动后处理链异常终止: {e}")
+            except Exception:
+                pass
+            try:
+                self._auto_silent_mode = False
+            except Exception:
+                pass
+            try:
+                self.status_label.config(text="就绪")
+            except Exception:
+                pass
 
     def _on_closing(self):
         """应用程序关闭事件"""
@@ -5080,6 +5239,14 @@ Diff统计:
             self._log(f"已设置日期: {self.auto_date}")
 
             # 根据参数组合决定执行的操作
+
+            # 先记录当前是否为“仅日期”自动模式，供后续自动后处理链使用
+            # 条件：只有 auto_date，且未指定 auto_telescope / auto_region
+            try:
+                self._auto_date_only_mode = bool(self.auto_date and not self.auto_telescope and not self.auto_region)
+            except Exception:
+                self._auto_date_only_mode = False
+
             if self.auto_region:
                 # 有日期、望远镜系统名和天区名 - 执行"扫描fits文件" + "全选" + "批量下载并diff"
                 if not self.auto_telescope:
@@ -5118,6 +5285,13 @@ Diff统计:
 
                 # 延迟执行，确保UI完全初始化
                 self.root.after(2000, self._auto_full_day_all_systems_batch)
+
+                # 仅日期模式下，提前记录日志，提示后续会自动执行图像后处理与pympc更新
+                try:
+                    if getattr(self, "_auto_date_only_mode", False):
+                        self._log("[自动模式] 全天全系统diff结束后，将自动执行: 批量检测对齐 → AI标记GOOD/BAD → 批量查询 → 更新pympc轨道目录")
+                except Exception:
+                    pass
 
         except Exception as e:
             error_msg = f"应用自动设置失败: {str(e)}"
