@@ -5,14 +5,14 @@
 目标：在无图形界面环境下，实现与 gui/run_gui.py 中 --date/--telescope/--region
 自动模式等价的核心功能（全天 / 全天单系统 / 单天区），但不依赖 Tkinter。
 
-	当前版本实现内容：
-	- 基于 ConfigManager 与 url_config_manager 构建 URL
-	- 使用自带的网页解析逻辑 + DirectoryScanner/WebFitsScanner 扫描可用天区和 FITS 列表（不依赖 Tk）
-	- 使用 FitsDownloader 下载 FITS 文件，并按 GUI 中的目录结构组织
-	- 使用 DiffOrbIntegration 直接调用 diff_orb 核心算法执行对齐 + diff
+当前版本实现内容：
+    - 基于 ConfigManager 与 url_config_manager 构建 URL
+    - 使用自带的网页解析逻辑 + DirectoryScanner/WebFitsScanner 扫描可用天区和 FITS 列表（不依赖 Tk）
+    - 使用 FitsDownloader 下载 FITS 文件，并按 GUI 中的目录结构组织
+    - 使用 DiffOrbIntegration 直接调用 diff_orb 核心算法执行对齐 + diff
 
 注意：
-- 本脚本不导入任何 Tk / GUI 组件，可在无 DISPLAY 的服务器上运行。
+- 本脚本不导入任何 Tk / GUI 组件，可在无 DISPLAY 的服务器上运行（虽然脚本放在 gui 目录下）。
 - 依赖项目已有的 diff_orb、simple_noise、astap_processor 等模块。
 """
 
@@ -23,18 +23,15 @@ import logging
 from datetime import datetime
 from typing import List, Tuple
 
-# 保证可以像 GUI 一样导入相关模块
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# run_console.py 现在位于 gui 目录下，这里需要回到仓库根目录
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUI_DIR = os.path.join(PROJECT_ROOT, "gui")
 DIFF_ORB_DIR = os.path.join(PROJECT_ROOT, "diff_orb")
 CONFIG_DIR = os.path.join(PROJECT_ROOT, "config")
 
-if GUI_DIR not in sys.path:
-    sys.path.insert(0, GUI_DIR)
-if DIFF_ORB_DIR not in sys.path:
-    sys.path.insert(0, DIFF_ORB_DIR)
-if CONFIG_DIR not in sys.path:
-    sys.path.insert(0, CONFIG_DIR)
+for d in (PROJECT_ROOT, GUI_DIR, DIFF_ORB_DIR, CONFIG_DIR):
+    if d not in sys.path:
+        sys.path.insert(0, d)
 
 from gui.config_manager import ConfigManager  # type: ignore
 from gui.web_scanner import WebFitsScanner, DirectoryScanner  # type: ignore
@@ -49,11 +46,11 @@ def parse_arguments() -> argparse.Namespace:
         epilog=(
             "\n示例:\n"
             "  # 全天全系统 diff\n"
-            "  python run_console.py --date 20241031\\n\n"
+            "  python gui/run_console.py --date 20241031\n\n"
             "  # 单系统全天 diff\n"
-            "  python run_console.py --date 20241031 --telescope GY1\\n\n"
+            "  python gui/run_console.py --date 20241031 --telescope GY1\n\n"
             "  # 单天区扫描 + 下载 + diff\n"
-            "  python run_console.py --date 20241031 --telescope GY1 --region K019\n"
+            "  python gui/run_console.py --date 20241031 --telescope GY1 --region K019\n"
         ),
     )
 
@@ -383,4 +380,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
