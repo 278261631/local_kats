@@ -5,4 +5,4 @@ for /f "tokens=*" %%i in ('powershell -Command "(Get-Date).AddDays(-1).ToString(
     set YESTERDAY=%%i
 )
 
-python run_gui.py
+python run_gui.py --date %YESTERDAY%
