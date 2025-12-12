@@ -208,7 +208,7 @@ def run_pipeline_for_files(
     cfg: ConfigManager,
 ) -> None:
     if not files:
-        logging.info("[{} {} {}] 无可处理文件，跳过", tel_name, date, region)
+        logging.info("[%s %s %s] 无可处理文件，跳过", tel_name, date, region)
         return
 
     # 下载目录：与 GUI 一致：download_root/tel_name/date/region
@@ -223,7 +223,7 @@ def run_pipeline_for_files(
     )
 
     urls = [url for _name, url in files]
-    logging.info("[{} {} {}] 开始下载 {} 个文件到 {}", tel_name, date, region, len(urls), download_dir)
+    logging.info("[%s %s %s] 开始下载 %d 个文件到 %s", tel_name, date, region, len(urls), download_dir)
     downloader.download_files(urls, download_dir)
 
     # 下载完成后，对下载目录中的所有 FITS 做 diff
