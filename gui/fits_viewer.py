@@ -12,6 +12,8 @@ import platform
 import numpy as np
 import csv
 import time
+import threading
+import queue
 
 
 import matplotlib.pyplot as plt
@@ -12346,49 +12348,50 @@ class FitsImageViewer:
             # 递归处理文件
             def process_file(file_path):
                 try:
-                    # 加载文件的diff结果
-                    root_dir = os.path.dirname(file_path)
-                    self._load_diff_results_for_file(file_path, root_dir)
+                    with self._pympc_query_lock:
+                        # 加载文件的diff结果
+                        root_dir = os.path.dirname(file_path)
+                        self._load_diff_results_for_file(file_path, root_dir)
 
-                    if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
-                        return {"status": "skipped", "reason": "无检测结果"}
+                        if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                            return {"status": "skipped", "reason": "无检测结果"}
 
-                    # 仅查询手动标记为 GOOD 的检测目标
-                    good_indices = [
-                        ci for ci, c in enumerate(self._all_cutout_sets)
-                        if c.get('manual_label') == 'good'
-                    ]
-                    if not good_indices:
-                        return {"status": "skipped", "reason": "无 GOOD 标记目标"}
+                        # 仅查询手动标记为 GOOD 的检测目标
+                        good_indices = [
+                            ci for ci, c in enumerate(self._all_cutout_sets)
+                            if c.get('manual_label') == 'good'
+                        ]
+                        if not good_indices:
+                            return {"status": "skipped", "reason": "无 GOOD 标记目标"}
 
-                    queried_count = 0
-                    found_count = 0
+                        queried_count = 0
+                        found_count = 0
 
-                    for cutout_idx in good_indices:
-                        self._current_cutout_index = cutout_idx
+                        for cutout_idx in good_indices:
+                            self._current_cutout_index = cutout_idx
 
-                        # 检查是否已经查询过
-                        skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                            # 检查是否已经查询过
+                            skybot_queried, skybot_result = self._check_existing_query_results('skybot')
 
-                        # 如果已查询过，跳过
-                        if skybot_queried:
-                            continue
+                            # 如果已查询过，跳过
+                            if skybot_queried:
+                                continue
 
-                        # 执行pympc查询
-                        self._query_skybot(use_pympc=True)  # 强制使用pympc查询
-                        queried_count += 1
+                            # 执行pympc查询
+                            self._query_skybot(use_pympc=True)  # 强制使用pympc查询
+                            queried_count += 1
 
-                        # 检查查询结果
-                        skybot_queried, skybot_result = self._check_existing_query_results('skybot')
-                        if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
-                            found_count += 1
+                            # 检查查询结果
+                            skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                            if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
+                                found_count += 1
 
-                    return {
-                        "status": "success",
-                        "filename": os.path.basename(file_path),
-                        "queried": queried_count,
-                        "found": found_count
-                    }
+                        return {
+                            "status": "success",
+                            "filename": os.path.basename(file_path),
+                            "queried": queried_count,
+                            "found": found_count
+                        }
                 except Exception as e:
                     return {
                         "status": "error",
@@ -12435,7 +12438,7 @@ class FitsImageViewer:
                         file_path = file_queue.get(block=False)
                     except queue.Empty:
                         break
-                    
+
                     result = process_file(file_path)
                     result_queue.put(result)
                     file_queue.task_done()
@@ -12481,12 +12484,12 @@ class FitsImageViewer:
 
             def update_progress():
                 nonlocal processed, success_count, skip_count, error_count, total_queried, total_found
-                
+
                 # 获取所有可用结果
                 while not result_queue.empty():
                     result = result_queue.get()
                     processed += 1
-                    
+
                     if result["status"] == "success":
                         success_count += 1
                         total_queried += result.get("queried", 0)
@@ -12501,7 +12504,7 @@ class FitsImageViewer:
                 progress_bar['value'] = processed
                 progress_label.config(text=f"处理进度: {processed}/{len(files_to_process)}")
                 stats_label.config(text=f"成功: {success_count} | 跳过: {skip_count} | 错误: {error_count}")
-                
+
                 # 检查是否完成
                 if processed < len(files_to_process):
                     progress_window.after(100, update_progress)
@@ -12509,7 +12512,7 @@ class FitsImageViewer:
                     # 等待所有线程完成
                     for t in threads:
                         t.join()
-                    
+
                     # 最终统计
                     final_stats = (
                         f"批量查询完成！\n"+
