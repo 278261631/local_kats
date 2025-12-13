@@ -12341,6 +12341,12 @@ class FitsImageViewer:
                 messagebox.showwarning("警告", "请选择一个目录或文件")
                 return
 
+            # 保存当前显示状态，以便批量查询完成后恢复
+            saved_file_path = self.current_file_path
+            saved_cutout_sets = getattr(self, '_all_cutout_sets', None)
+            saved_cutout_index = getattr(self, '_current_cutout_index', 0)
+            saved_detection_result_dir = getattr(self, '_current_detection_result_dir', None)
+
             # 获取线程数
             try:
                 thread_count = int(self.batch_query_threads_var.get())
@@ -12529,6 +12535,17 @@ class FitsImageViewer:
                     )
                     messagebox.showinfo("查询完成", final_stats)
                     progress_window.destroy()
+
+                    # 恢复之前的显示状态
+                    if saved_file_path and saved_cutout_sets:
+                        self._all_cutout_sets = saved_cutout_sets
+                        self._current_cutout_index = saved_cutout_index
+                        self._current_detection_result_dir = saved_detection_result_dir
+                        self.current_file_path = saved_file_path
+                        # 重新显示当前cutout
+                        if self._all_cutout_sets:
+                            self._show_current_cutout()
+                            self.logger.info("批量查询完成，已恢复之前的显示状态")
 
             # 启动进度更新
             progress_window.after(100, update_progress)
