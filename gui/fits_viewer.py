@@ -12429,11 +12429,13 @@ class FitsImageViewer:
                         for cutout_idx in good_indices:
                             self._current_cutout_index = cutout_idx
 
-                            # 检查是否已经查询过
+                            # 检查是否已经查询过且找到了小行星
                             skybot_queried, skybot_result = self._check_existing_query_results('skybot')
 
-                            # 如果已查询过，跳过
-                            if skybot_queried:
+                            # 只有当已查询且找到小行星时才跳过，否则重新查询
+                            # （包括：未查询、已查询但未找到、已查询但结果文件缺失等情况都会重新查询）
+                            if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
+                                found_count += 1  # 统计已有结果
                                 continue
 
                             # 执行pympc查询
