@@ -8749,12 +8749,18 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"应用DSS图像翻转失败: {str(e)}", exc_info=True)
 
-    def _query_skybot(self, use_pympc=False):
-        """使用当前配置/覆盖逻辑查询小行星（Skybot / 本地MPCORB / pympc）。"""
+    def _query_skybot(self, use_pympc=False, skip_gui=False):
+        """使用当前配置/覆盖逻辑查询小行星（Skybot / 本地MPCORB / pympc）。
+
+        Args:
+            use_pympc: 是否强制使用pympc查询
+            skip_gui: 是否跳过GUI操作（在非主线程调用时应设为True）
+        """
         try:
             # 立即重置结果标签，确保用户能看到查询状态变化
-            self.skybot_result_label.config(text="准备中...", foreground="gray")
-            self.skybot_result_label.update_idletasks()  # 强制刷新界面
+            if not skip_gui:
+                self.skybot_result_label.config(text="准备中...", foreground="gray")
+                self.skybot_result_label.update_idletasks()  # 强制刷新界面
             # 标记当前查询来源，默认在线Skybot；后续根据use_local更新
             source = "Skybot"
 
@@ -8786,7 +8792,8 @@ class FitsImageViewer:
             # 检查是否有RA/DEC信息
             if not file_info.get('ra') or not file_info.get('dec'):
                 self.logger.error("无法获取目标的RA/DEC坐标信息")
-                self.skybot_result_label.config(text="坐标缺失", foreground="red")
+                if not skip_gui:
+                    self.skybot_result_label.config(text="坐标缺失", foreground="red")
                 return
 
             ra = float(file_info['ra'])
@@ -8803,7 +8810,8 @@ class FitsImageViewer:
                     self.logger.info(f"从文件名提取UTC时间: {self._current_utc_time}")
                 else:
                     self.logger.error("无法获取UTC时间信息")
-                    self.skybot_result_label.config(text="时间缺失", foreground="red")
+                    if not skip_gui:
+                        self.skybot_result_label.config(text="时间缺失", foreground="red")
                     return
 
             utc_time = self._current_utc_time
@@ -8814,7 +8822,8 @@ class FitsImageViewer:
                 longitude = float(self.gps_lon_var.get())
             except ValueError:
                 self.logger.error(f"无效的GPS坐标: 纬度={self.gps_lat_var.get()}, 经度={self.gps_lon_var.get()}")
-                self.skybot_result_label.config(text="GPS无效", foreground="red")
+                if not skip_gui:
+                    self.skybot_result_label.config(text="GPS无效", foreground="red")
                 return
 
             # 获取MPC代码
@@ -8836,8 +8845,9 @@ class FitsImageViewer:
             if self.log_callback:
                 self.log_callback(query_info, "INFO")
 
-            self.skybot_result_label.config(text="查询中...", foreground="orange")
-            self.skybot_result_label.update_idletasks()  # 强制刷新界面
+            if not skip_gui:
+                self.skybot_result_label.config(text="查询中...", foreground="orange")
+                self.skybot_result_label.update_idletasks()  # 强制刷新界面
 
             # 执行小行星查询（根据设置/覆盖开关和高级选项选择后端）
             # 1) 先读取配置中的小行星查询方式: auto / skybot / local / pympc
@@ -8914,7 +8924,8 @@ class FitsImageViewer:
                 count = len(results)
                 if count > 0:
 
-                    self.skybot_result_label.config(text=f"找到 {count} 个", foreground="green")
+                    if not skip_gui:
+                        self.skybot_result_label.config(text=f"找到 {count} 个", foreground="green")
                     success_msg = f"{source}查询成功，找到 {count} 个小行星"
                     self.logger.info(success_msg)
                     if self.log_callback:
@@ -9008,16 +9019,19 @@ class FitsImageViewer:
                     self._update_detection_txt_with_query_results()
 
                     # 更新按钮颜色 - 紫红色(有结果)
-                    self._update_query_button_color('skybot')
+                    if not skip_gui:
+                        self._update_query_button_color('skybot')
 
                     # 重新绘制图像以显示小行星标记
-                    self._refresh_current_cutout_display()
+                    if not skip_gui:
+                        self._refresh_current_cutout_display()
                 else:
                     # 查询结果为空（未找到）
                     # 注意：已经在上面保存了results（空列表）到cutout
                     self._skybot_query_results = None  # 兼容旧代码
 
-                    self.skybot_result_label.config(text="未找到", foreground="blue")
+                    if not skip_gui:
+                        self.skybot_result_label.config(text="未找到", foreground="blue")
                     not_found_msg = f"{source}查询完成，未找到小行星"
                     self.logger.info(not_found_msg)
                     if self.log_callback:
@@ -9027,10 +9041,12 @@ class FitsImageViewer:
                     self._update_detection_txt_with_query_results()
 
                     # 更新按钮颜色 - 绿色(无结果)
-                    self._update_query_button_color('skybot')
+                    if not skip_gui:
+                        self._update_query_button_color('skybot')
 
                     # 重新绘制图像（虽然没有结果，但确保界面一致性）
-                    self._refresh_current_cutout_display()
+                    if not skip_gui:
+                        self._refresh_current_cutout_display()
 
                 # 每次成功完成Skybot查询后，更新自动分类（suspect/false/error）
                 self._update_auto_classification_for_current_cutout()
@@ -9043,7 +9059,8 @@ class FitsImageViewer:
                 except Exception:
                     pass
 
-                self.skybot_result_label.config(text="查询失败", foreground="red")
+                if not skip_gui:
+                    self.skybot_result_label.config(text="查询失败", foreground="red")
                 error_msg = f"{source}查询失败"
                 self.logger.error(error_msg)
                 if self.log_callback:
@@ -9057,7 +9074,8 @@ class FitsImageViewer:
             self.logger.error(exception_msg, exc_info=True)
             if self.log_callback:
                 self.log_callback(exception_msg, "ERROR")
-            self.skybot_result_label.config(text="查询出错", foreground="red")
+            if not skip_gui:
+                self.skybot_result_label.config(text="查询出错", foreground="red")
             # 异常情况下标记为错误并更新分类
             try:
                 if hasattr(self, '_all_cutout_sets') and hasattr(self, '_current_cutout_index'):
@@ -9383,12 +9401,17 @@ class FitsImageViewer:
 
 
 
-    def _query_vsx(self):
-        """使用VSX查询变星数据"""
+    def _query_vsx(self, skip_gui=False):
+        """使用VSX查询变星数据
+
+        Args:
+            skip_gui: 是否跳过GUI操作（在非主线程调用时应设为True）
+        """
         try:
             # 立即重置结果标签，确保用户能看到查询状态变化
-            self.vsx_result_label.config(text="准备中...", foreground="gray")
-            self.vsx_result_label.update_idletasks()  # 强制刷新界面
+            if not skip_gui:
+                self.vsx_result_label.config(text="准备中...", foreground="gray")
+                self.vsx_result_label.update_idletasks()  # 强制刷新界面
 
             # 检查是否有当前显示的cutout
             if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
@@ -9417,7 +9440,8 @@ class FitsImageViewer:
             # 检查是否有RA/DEC信息
             if not file_info.get('ra') or not file_info.get('dec'):
                 self.logger.error("无法获取目标的RA/DEC坐标信息")
-                self.vsx_result_label.config(text="坐标缺失", foreground="red")
+                if not skip_gui:
+                    self.vsx_result_label.config(text="坐标缺失", foreground="red")
                 return
 
             ra = float(file_info['ra'])
@@ -9443,8 +9467,9 @@ class FitsImageViewer:
             if self.log_callback:
                 self.log_callback(query_info, "INFO")
 
-            self.vsx_result_label.config(text="查询中...", foreground="orange")
-            self.vsx_result_label.update_idletasks()  # 强制刷新界面
+            if not skip_gui:
+                self.vsx_result_label.config(text="查询中...", foreground="orange")
+                self.vsx_result_label.update_idletasks()  # 强制刷新界面
 
             # 执行VSX查询（根据设置/覆盖开关选择本地/在线）
             force_online = getattr(self, '_force_online_query', False)
@@ -9477,7 +9502,8 @@ class FitsImageViewer:
                 count = len(results)
                 if count > 0:
 
-                    self.vsx_result_label.config(text=f"找到 {count} 个", foreground="green")
+                    if not skip_gui:
+                        self.vsx_result_label.config(text=f"找到 {count} 个", foreground="green")
                     success_msg = f"VSX查询成功，找到 {count} 个变星"
                     self.logger.info(success_msg)
                     if self.log_callback:
@@ -9566,16 +9592,19 @@ class FitsImageViewer:
                     self._update_detection_txt_with_query_results()
 
                     # 更新按钮颜色 - 紫红色(有结果)
-                    self._update_query_button_color('vsx')
+                    if not skip_gui:
+                        self._update_query_button_color('vsx')
 
                     # 重新绘制图像以显示变星标记
-                    self._refresh_current_cutout_display()
+                    if not skip_gui:
+                        self._refresh_current_cutout_display()
                 else:
                     # 查询结果为空（未找到）
                     # 注意：已经在上面保存了results（空列表）到cutout
                     self._vsx_query_results = None  # 兼容旧代码
 
-                    self.vsx_result_label.config(text="未找到", foreground="blue")
+                    if not skip_gui:
+                        self.vsx_result_label.config(text="未找到", foreground="blue")
                     not_found_msg = "VSX查询完成，未找到变星"
                     self.logger.info(not_found_msg)
                     if self.log_callback:
@@ -9585,10 +9614,12 @@ class FitsImageViewer:
                     self._update_detection_txt_with_query_results()
 
                     # 更新按钮颜色 - 绿色(无结果)
-                    self._update_query_button_color('vsx')
+                    if not skip_gui:
+                        self._update_query_button_color('vsx')
 
                     # 重新绘制图像（虽然没有结果，但确保界面一致性）
-                    self._refresh_current_cutout_display()
+                    if not skip_gui:
+                        self._refresh_current_cutout_display()
 
                 # 每次成功完成VSX查询后，更新一次自动分类
                 self._update_auto_classification_for_current_cutout()
@@ -9601,7 +9632,8 @@ class FitsImageViewer:
                 except Exception:
                     pass
 
-                self.vsx_result_label.config(text="查询失败", foreground="red")
+                if not skip_gui:
+                    self.vsx_result_label.config(text="查询失败", foreground="red")
                 error_msg = "VSX查询失败"
                 self.logger.error(error_msg)
                 if self.log_callback:
@@ -9615,7 +9647,8 @@ class FitsImageViewer:
             self.logger.error(exception_msg, exc_info=True)
             if self.log_callback:
                 self.log_callback(exception_msg, "ERROR")
-            self.vsx_result_label.config(text="查询出错", foreground="red")
+            if not skip_gui:
+                self.vsx_result_label.config(text="查询出错", foreground="red")
 
             # 异常情况下标记为错误并更新分类
             try:
@@ -12375,6 +12408,10 @@ class FitsImageViewer:
                         root_dir = os.path.dirname(file_path)
                         self._load_diff_results_for_file(file_path, root_dir)
 
+                        # 设置selected_file_path，以便_update_detection_txt_with_query_results能正确获取文件名
+                        self.selected_file_path = file_path
+                        self.current_file_path = file_path
+
                         if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
                             return {"status": "skipped", "reason": "无检测结果"}
 
@@ -12400,7 +12437,7 @@ class FitsImageViewer:
                                 continue
 
                             # 执行pympc查询
-                            self._query_skybot(use_pympc=True)  # 强制使用pympc查询
+                            self._query_skybot(use_pympc=True, skip_gui=True)  # 强制使用pympc查询，跳过GUI操作
                             queried_count += 1
 
                             # 检查查询结果
@@ -12606,6 +12643,10 @@ class FitsImageViewer:
                         root_dir = os.path.dirname(file_path)
                         self._load_diff_results_for_file(file_path, root_dir)
 
+                        # 设置selected_file_path，以便_update_detection_txt_with_query_results能正确获取文件名
+                        self.selected_file_path = file_path
+                        self.current_file_path = file_path
+
                         if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
                             return {"status": "skipped", "reason": "无检测结果"}
 
@@ -12635,7 +12676,7 @@ class FitsImageViewer:
                                 continue
 
                             # 执行变星查询
-                            self._query_vsx()
+                            self._query_vsx(skip_gui=True)  # 跳过GUI操作
                             queried_count += 1
 
                             # 检查查询结果
