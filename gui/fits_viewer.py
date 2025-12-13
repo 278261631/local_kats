@@ -12369,6 +12369,174 @@ class FitsImageViewer:
 
         return files_to_process
 
+    def _extract_radec_from_cutout_standalone(self, cutout, filename):
+        """从cutout独立提取RA/DEC坐标"""
+        try:
+            detection_img = cutout.get('detection')
+            if not detection_img:
+                return None, None
+
+            # 从detection文件名解析X/Y坐标
+            import re
+            det_basename = os.path.basename(detection_img)
+            coord_match = re.search(r'X(\d+)_Y(\d+)', det_basename)
+            if not coord_match:
+                return None, None
+
+            center_x = float(coord_match.group(1))
+            center_y = float(coord_match.group(2))
+
+            # 查找aligned.fits文件获取WCS
+            cutout_dir = os.path.dirname(detection_img)
+            detection_dir = os.path.dirname(cutout_dir)
+            fits_dir = os.path.dirname(detection_dir)
+
+            aligned_files = [f for f in os.listdir(fits_dir)
+                           if f.endswith('_aligned.fits') and os.path.isfile(os.path.join(fits_dir, f))]
+            if not aligned_files:
+                return None, None
+
+            aligned_file = os.path.join(fits_dir, aligned_files[0])
+
+            from astropy.io import fits
+            from astropy.wcs import WCS
+
+            with fits.open(aligned_file) as hdul:
+                header = hdul[0].header
+                wcs = WCS(header)
+                # 像素坐标转天球坐标
+                world_coords = wcs.all_pix2world([[center_x, center_y]], 0)
+                ra = world_coords[0][0]
+                dec = world_coords[0][1]
+                return ra, dec
+
+        except Exception as e:
+            self.logger.warning(f"提取坐标失败 {filename}: {e}")
+            return None, None
+
+    def _extract_utc_from_filename(self, filename):
+        """从文件名提取UTC时间"""
+        try:
+            time_info = self._extract_time_from_filename(filename)
+            if time_info:
+                return time_info.get('utc_datetime')
+            return None
+        except Exception:
+            return None
+
+    def _save_query_results_standalone(self, query_file, cutout, cutout_idx, ra, dec, results, fits_dir):
+        """独立保存查询结果到文件"""
+        try:
+            detection_img = cutout.get('detection')
+
+            # 准备小行星结果内容
+            skybot_lines = []
+            if results is not None:
+                if len(results) > 0:
+                    colnames = results.colnames
+                    for i, row in enumerate(results, 1):
+                        asteroid_info = []
+                        if 'Name' in colnames:
+                            asteroid_info.append(f"名称={row['Name']}")
+                        if 'Number' in colnames:
+                            asteroid_info.append(f"编号={row['Number']}")
+                        if 'Type' in colnames:
+                            asteroid_info.append(f"类型={row['Type']}")
+                        if 'RA' in colnames:
+                            ra_val = row['RA'].value if hasattr(row['RA'], 'value') else float(row['RA'])
+                            asteroid_info.append(f"RA={ra_val:.6f}°")
+                        if 'DEC' in colnames:
+                            dec_val = row['DEC'].value if hasattr(row['DEC'], 'value') else float(row['DEC'])
+                            asteroid_info.append(f"DEC={dec_val:.6f}°")
+
+                        # 计算像素距离
+                        if 'RA' in colnames and 'DEC' in colnames:
+                            ra_val = row['RA'].value if hasattr(row['RA'], 'value') else float(row['RA'])
+                            dec_val = row['DEC'].value if hasattr(row['DEC'], 'value') else float(row['DEC'])
+                            pixel_result = self._calc_pixel_dist_standalone(detection_img, ra_val, dec_val, fits_dir)
+                            if pixel_result:
+                                pixel_dist, px, py = pixel_result
+                                asteroid_info.append(f"像素距离={pixel_dist:.1f}px")
+                                asteroid_info.append(f"像素位置=({px:.1f}, {py:.1f})")
+
+                        if 'Mv' in colnames:
+                            asteroid_info.append(f"星等={row['Mv']}")
+                        if 'Dg' in colnames:
+                            asteroid_info.append(f"距离={row['Dg']}AU")
+                        skybot_lines.append(f"  - 小行星{i}: {', '.join(asteroid_info)}")
+                else:
+                    skybot_lines.append("  - (已查询，未找到)")
+            else:
+                skybot_lines.append("  - (查询失败)")
+
+            # 写入文件
+            with open(query_file, 'w', encoding='utf-8') as f:
+                f.write("=" * 60 + "\n")
+                f.write(f"查询结果 - 检测目标 #{cutout_idx + 1}\n")
+                f.write("=" * 60 + "\n\n")
+                f.write(f"中心坐标: RA={ra:.6f}°, DEC={dec:.6f}°\n\n")
+                f.write("小行星查询结果:\n")
+                for line in skybot_lines:
+                    f.write(line + "\n")
+                f.write("\n变星查询结果:\n")
+                f.write("  - (未查询)\n")
+
+            self.logger.info(f"保存查询结果到: {query_file}")
+
+        except Exception as e:
+            self.logger.error(f"保存查询结果失败: {e}")
+
+    def _calc_pixel_dist_standalone(self, detection_img, ra, dec, fits_dir):
+        """独立计算像素距离"""
+        try:
+            import re
+            from PIL import Image
+            from astropy.io import fits
+            from astropy.wcs import WCS
+
+            # 从detection文件名解析中心坐标
+            det_basename = os.path.basename(detection_img)
+            coord_match = re.search(r'X(\d+)_Y(\d+)', det_basename)
+            if not coord_match:
+                return None
+
+            center_x_aligned = float(coord_match.group(1))
+            center_y_aligned = float(coord_match.group(2))
+
+            # 查找aligned.fits
+            aligned_files = [f for f in os.listdir(fits_dir)
+                           if f.endswith('_aligned.fits') and os.path.isfile(os.path.join(fits_dir, f))]
+            if not aligned_files:
+                return None
+
+            aligned_file = os.path.join(fits_dir, aligned_files[0])
+
+            with fits.open(aligned_file) as hdul:
+                header = hdul[0].header
+                wcs = WCS(header)
+                pixel_coords = wcs.all_world2pix([[ra, dec]], 0)
+                pixel_x_aligned = pixel_coords[0][0]
+                pixel_y_aligned = pixel_coords[0][1]
+
+            # 读取cutout尺寸
+            cutout_img = Image.open(detection_img)
+            cutout_width, cutout_height = cutout_img.size
+            cutout_center_x = cutout_width / 2.0
+            cutout_center_y = cutout_height / 2.0
+
+            # 计算偏移和距离
+            offset_x = pixel_x_aligned - center_x_aligned
+            offset_y = pixel_y_aligned - center_y_aligned
+            pixel_x_cutout = cutout_center_x + offset_x
+            pixel_y_cutout = cutout_center_y + offset_y
+            distance = np.sqrt(offset_x**2 + offset_y**2)
+
+            return (distance, pixel_x_cutout, pixel_y_cutout)
+
+        except Exception as e:
+            self.logger.warning(f"计算像素距离失败: {e}")
+            return None
+
     def _batch_pympc_query(self):
         """执行批量pympc小行星查询"""
         try:
@@ -12400,65 +12568,27 @@ class FitsImageViewer:
             except ValueError:
                 thread_count = 10  # 默认值
 
-            # 递归处理文件
-            def process_file(file_path):
-                try:
-                    with self._pympc_query_lock:
-                        # 加载文件的diff结果
-                        root_dir = os.path.dirname(file_path)
-                        self._load_diff_results_for_file(file_path, root_dir)
+            self.logger.info(f"[pympc批量查询] 线程数设置: {thread_count}")
 
-                        # 设置selected_file_path，以便_update_detection_txt_with_query_results能正确获取文件名
-                        self.selected_file_path = file_path
-                        self.current_file_path = file_path
+            # 预先收集查询配置（避免多线程访问GUI控件）
+            try:
+                gps_lat = float(self.gps_lat_var.get())
+                gps_lon = float(self.gps_lon_var.get())
+            except ValueError:
+                gps_lat, gps_lon = 43.4, 87.1
+            mpc_code = self.mpc_code_var.get().strip().upper() or 'N87'
+            try:
+                search_radius = float(self.search_radius_var.get())
+            except ValueError:
+                search_radius = 0.01
 
-                        if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
-                            return {"status": "skipped", "reason": "无检测结果"}
-
-                        # 仅查询手动标记为 GOOD 的检测目标
-                        good_indices = [
-                            ci for ci, c in enumerate(self._all_cutout_sets)
-                            if c.get('manual_label') == 'good'
-                        ]
-                        if not good_indices:
-                            return {"status": "skipped", "reason": "无 GOOD 标记目标"}
-
-                        queried_count = 0
-                        found_count = 0
-
-                        for cutout_idx in good_indices:
-                            self._current_cutout_index = cutout_idx
-
-                            # 检查是否已经查询过且找到了小行星
-                            skybot_queried, skybot_result = self._check_existing_query_results('skybot')
-
-                            # 只有当已查询且找到小行星时才跳过，否则重新查询
-                            # （包括：未查询、已查询但未找到、已查询但结果文件缺失等情况都会重新查询）
-                            if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
-                                found_count += 1  # 统计已有结果
-                                continue
-
-                            # 执行pympc查询
-                            self._query_skybot(use_pympc=True, skip_gui=True)  # 强制使用pympc查询，跳过GUI操作
-                            queried_count += 1
-
-                            # 检查查询结果
-                            skybot_queried, skybot_result = self._check_existing_query_results('skybot')
-                            if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
-                                found_count += 1
-
-                        return {
-                            "status": "success",
-                            "filename": os.path.basename(file_path),
-                            "queried": queried_count,
-                            "found": found_count
-                        }
-                except Exception as e:
-                    return {
-                        "status": "error",
-                        "filename": os.path.basename(file_path),
-                        "error": str(e)
-                    }
+            query_config = {
+                'gps_lat': gps_lat,
+                'gps_lon': gps_lon,
+                'mpc_code': mpc_code,
+                'search_radius': search_radius,
+            }
+            self.logger.info(f"[pympc批量查询] 查询配置: {query_config}")
 
             # 收集所有需要处理的文件
             files_to_process = []
@@ -12480,12 +12610,210 @@ class FitsImageViewer:
                 messagebox.showinfo("信息", "没有找到需要查询的FITS文件")
                 return
 
+            self.logger.info(f"[pympc批量查询] 待处理文件数: {len(files_to_process)}")
+
+            # 独立的文件处理函数（不使用共享状态）
+            def process_file_standalone(file_path, config):
+                """独立处理单个文件的pympc查询，不依赖self的共享状态"""
+                import threading
+                thread_name = threading.current_thread().name
+                filename = os.path.basename(file_path)
+
+                try:
+                    self.logger.info(f"[{thread_name}] 开始处理: {filename}")
+
+                    # 获取diff输出目录
+                    base_output_dir = None
+                    if self.get_diff_output_dir_callback:
+                        base_output_dir = self.get_diff_output_dir_callback()
+                    if not base_output_dir or not os.path.exists(base_output_dir):
+                        self.logger.info(f"[{thread_name}] {filename}: 跳过 - 无输出目录")
+                        return {"status": "skipped", "reason": "无输出目录"}
+
+                    download_dir = None
+                    if self.get_download_dir_callback:
+                        download_dir = self.get_download_dir_callback()
+                    if not download_dir:
+                        self.logger.info(f"[{thread_name}] {filename}: 跳过 - 无下载目录")
+                        return {"status": "skipped", "reason": "无下载目录"}
+
+                    # 构建输出目录路径
+                    region_dir = os.path.dirname(file_path)
+                    normalized_region_dir = os.path.normpath(region_dir)
+                    normalized_download_dir = os.path.normpath(download_dir)
+                    try:
+                        relative_path = os.path.relpath(normalized_region_dir, normalized_download_dir)
+                    except ValueError:
+                        self.logger.info(f"[{thread_name}] {filename}: 跳过 - 路径计算失败")
+                        return {"status": "skipped", "reason": "路径计算失败"}
+
+                    file_basename = os.path.splitext(filename)[0]
+                    output_region_dir = os.path.join(base_output_dir, relative_path)
+                    potential_output_dir = os.path.join(output_region_dir, file_basename)
+
+                    if not os.path.exists(potential_output_dir) or not os.path.isdir(potential_output_dir):
+                        self.logger.info(f"[{thread_name}] {filename}: 跳过 - 无diff输出目录")
+                        return {"status": "skipped", "reason": "无diff输出目录"}
+
+                    # 查找detection目录
+                    detection_dir_path = None
+                    try:
+                        items = os.listdir(potential_output_dir)
+                        for item_name in items:
+                            item_path = os.path.join(potential_output_dir, item_name)
+                            if os.path.isdir(item_path) and item_name.startswith('detection_'):
+                                detection_dir_path = item_path
+                                break
+                    except Exception:
+                        pass
+
+                    if not detection_dir_path:
+                        self.logger.info(f"[{thread_name}] {filename}: 跳过 - 无detection目录")
+                        return {"status": "skipped", "reason": "无detection目录"}
+
+                    # 查找cutouts目录
+                    cutouts_dir = os.path.join(detection_dir_path, "cutouts")
+                    if not os.path.exists(cutouts_dir):
+                        self.logger.info(f"[{thread_name}] {filename}: 跳过 - 无cutouts目录")
+                        return {"status": "skipped", "reason": "无cutouts目录"}
+
+                    # 加载cutout信息
+                    from pathlib import Path
+                    cutouts_path = Path(cutouts_dir)
+                    reference_files = sorted(cutouts_path.glob("*_1_reference.png"))
+                    aligned_files = sorted(cutouts_path.glob("*_2_aligned.png"))
+                    detection_files = sorted(cutouts_path.glob("*_3_detection.png"))
+
+                    if not (reference_files and aligned_files and detection_files):
+                        self.logger.info(f"[{thread_name}] {filename}: 跳过 - 无完整cutout")
+                        return {"status": "skipped", "reason": "无完整cutout"}
+
+                    # 构建本地cutout列表
+                    local_cutouts = []
+                    for ref, aligned, det in zip(reference_files, aligned_files, detection_files):
+                        local_cutouts.append({
+                            'reference': str(ref),
+                            'aligned': str(aligned),
+                            'detection': str(det),
+                        })
+
+                    # 加载GOOD/BAD标记
+                    try:
+                        comparison_files = list(Path(detection_dir_path).glob("aligned_comparison_*.txt"))
+                        if comparison_files:
+                            with open(comparison_files[0], 'r', encoding='utf-8') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line.startswith('#') and '[GOOD]' in line:
+                                        try:
+                                            idx = int(line.split('#')[1].split()[0]) - 1
+                                            if 0 <= idx < len(local_cutouts):
+                                                local_cutouts[idx]['manual_label'] = 'good'
+                                        except:
+                                            pass
+                                    elif line.startswith('#') and '[BAD]' in line:
+                                        try:
+                                            idx = int(line.split('#')[1].split()[0]) - 1
+                                            if 0 <= idx < len(local_cutouts):
+                                                local_cutouts[idx]['manual_label'] = 'bad'
+                                        except:
+                                            pass
+                    except Exception as e:
+                        self.logger.warning(f"[{thread_name}] {filename}: 加载标记失败 - {e}")
+
+                    # 获取GOOD目标
+                    good_indices = [i for i, c in enumerate(local_cutouts) if c.get('manual_label') == 'good']
+                    if not good_indices:
+                        self.logger.info(f"[{thread_name}] {filename}: 跳过 - 无GOOD标记")
+                        return {"status": "skipped", "reason": "无GOOD标记"}
+
+                    self.logger.info(f"[{thread_name}] {filename}: GOOD目标={good_indices}, 总数={len(local_cutouts)}")
+
+                    queried_count = 0
+                    found_count = 0
+                    skipped_count = 0
+
+                    for cutout_idx in good_indices:
+                        cutout = local_cutouts[cutout_idx]
+                        detection_img = cutout['detection']
+
+                        # 检查是否已有查询结果
+                        query_file = os.path.join(cutouts_dir, f"query_results_{cutout_idx + 1:03d}.txt")
+                        already_found = False
+                        if os.path.exists(query_file):
+                            try:
+                                with open(query_file, 'r', encoding='utf-8') as f:
+                                    content = f.read()
+                                    # 检查是否找到小行星（有像素距离信息说明找到了）
+                                    if "小行星查询结果:" in content and "像素距离=" in content:
+                                        already_found = True
+                            except:
+                                pass
+
+                        if already_found:
+                            self.logger.info(f"[{thread_name}] {filename} cutout#{cutout_idx+1}: 跳过 - 已找到小行星")
+                            found_count += 1
+                            skipped_count += 1
+                            continue
+
+                        # 提取RA/DEC坐标
+                        ra, dec = self._extract_radec_from_cutout_standalone(cutout, filename)
+                        if ra is None or dec is None:
+                            self.logger.warning(f"[{thread_name}] {filename} cutout#{cutout_idx+1}: 跳过 - 无坐标")
+                            continue
+
+                        # 提取UTC时间
+                        utc_time = self._extract_utc_from_filename(filename)
+                        if utc_time is None:
+                            self.logger.warning(f"[{thread_name}] {filename} cutout#{cutout_idx+1}: 跳过 - 无时间")
+                            continue
+
+                        self.logger.info(f"[{thread_name}] {filename} cutout#{cutout_idx+1}: 执行查询 RA={ra:.4f}, DEC={dec:.4f}")
+
+                        # 执行pympc查询
+                        results = self._perform_pympc_query(
+                            ra, dec, utc_time,
+                            config['mpc_code'],
+                            config['gps_lat'],
+                            config['gps_lon'],
+                            config['search_radius']
+                        )
+                        queried_count += 1
+
+                        # 保存查询结果
+                        self._save_query_results_standalone(
+                            query_file, cutout, cutout_idx, ra, dec,
+                            results, potential_output_dir
+                        )
+
+                        if results is not None and len(results) > 0:
+                            self.logger.info(f"[{thread_name}] {filename} cutout#{cutout_idx+1}: 找到 {len(results)} 个小行星")
+                            found_count += 1
+                        else:
+                            self.logger.info(f"[{thread_name}] {filename} cutout#{cutout_idx+1}: 未找到")
+
+                    self.logger.info(f"[{thread_name}] {filename}: 完成 查询={queried_count}, 跳过={skipped_count}, 找到={found_count}")
+                    return {
+                        "status": "success",
+                        "filename": filename,
+                        "queried": queried_count,
+                        "found": found_count,
+                        "skipped": skipped_count
+                    }
+
+                except Exception as e:
+                    self.logger.error(f"[{thread_name}] {filename}: 处理失败 - {str(e)}", exc_info=True)
+                    return {
+                        "status": "error",
+                        "filename": filename,
+                        "error": str(e)
+                    }
+
             # 使用多线程执行查询
             import threading
             import queue
 
             result_queue = queue.Queue()
-            active_threads = 0
             file_queue = queue.Queue()
 
             # 填充文件队列
@@ -12500,7 +12828,7 @@ class FitsImageViewer:
                     except queue.Empty:
                         break
 
-                    result = process_file(file_path)
+                    result = process_file_standalone(file_path, query_config)
                     result_queue.put(result)
                     file_queue.task_done()
 
