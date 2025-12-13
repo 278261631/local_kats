@@ -420,6 +420,8 @@ class FitsImageViewer:
         self.search_radius_var = tk.StringVar(value="0.01")
         # 批量查询间隔（秒），在高级设置中配置
         self.batch_query_interval_var = tk.StringVar(value="2.0")
+        # pympc批量查询线程数，在高级设置中配置
+        self.batch_query_threads_var = tk.StringVar(value="10")
 
         # 批量检测对齐按钮（移动至此，位于“批量本地查询(离线)”左侧）
         self.batch_alignment_button = ttk.Button(
@@ -447,6 +449,12 @@ class FitsImageViewer:
                                             command=self._batch_query_asteroids_and_variables,
                                             state="disabled")
         self.batch_query_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        # pympc批量查询按钮（多线程）
+        self.batch_pympc_query_button = ttk.Button(toolbar_frame6, text="pympc批量查询",
+                                                   command=self._batch_pympc_query,
+                                                   state="disabled")
+        self.batch_pympc_query_button.pack(side=tk.LEFT, padx=(5, 5))
 
         # 批量删除查询结果按钮
         self.batch_delete_query_button = ttk.Button(toolbar_frame6, text="删除查询结果",
@@ -1410,8 +1418,11 @@ class FitsImageViewer:
             # 加载批量查询间隔（秒），默认值：5秒
             interval = query_settings.get('batch_query_interval_seconds', 5.0)
             self.batch_query_interval_var.set(str(interval))
+            # 加载批量查询线程数，默认值：10
+            batch_threads = query_settings.get('batch_query_threads', 10)
+            self.batch_query_threads_var.set(str(batch_threads))
 
-            self.logger.info(f"查询设置已加载: 搜索半径={search_radius}°, 批量查询间隔={interval}s")
+            self.logger.info(f"查询设置已加载: 搜索半径={search_radius}°, 批量查询间隔={interval}s, 批量线程数={batch_threads}")
 
         except Exception as e:
             self.logger.error(f"加载查询设置失败: {str(e)}")
@@ -1440,13 +1451,25 @@ class FitsImageViewer:
                 self.logger.error(f"批量查询间隔不能为负数: {interval}")
                 return
 
+            # 获取批量查询线程数
+            try:
+                batch_threads = int(self.batch_query_threads_var.get())
+            except ValueError:
+                self.logger.error(f"无效的批量线程数: {self.batch_query_threads_var.get()}")
+                return
+
+            if batch_threads <= 0:
+                self.logger.error(f"批量线程数必须大于0: {batch_threads}")
+                return
+
             # 保存到配置文件
             self.config_manager.update_query_settings(
                 search_radius=search_radius,
                 batch_query_interval_seconds=interval,
+                batch_query_threads=batch_threads,
             )
 
-            self.logger.info(f"查询设置已保存: 搜索半径={search_radius}°, 批量查询间隔={interval}s")
+            self.logger.info(f"查询设置已保存: 搜索半径={search_radius}°, 批量查询间隔={interval}s, pympc批量线程数={pympc_threads}")
 
         except ValueError:
             self.logger.error(f"无效的搜索半径: {self.search_radius_var.get()}")
@@ -2311,6 +2334,8 @@ class FitsImageViewer:
                 self.batch_local_query_button.config(state="normal")
             if hasattr(self, 'batch_alignment_button'):
                 self.batch_alignment_button.config(state="normal")
+            if hasattr(self, 'batch_pympc_query_button'):
+                self.batch_pympc_query_button.config(state="normal")
             # 启用批量删除查询结果按钮
             self.batch_delete_query_button.config(state="normal")
         else:
@@ -2335,6 +2360,8 @@ class FitsImageViewer:
                     self.batch_local_query_button.config(state="normal")
                 if hasattr(self, 'batch_alignment_button'):
                     self.batch_alignment_button.config(state="normal")
+                if hasattr(self, 'batch_pympc_query_button'):
+                    self.batch_pympc_query_button.config(state="normal")
                 self.batch_delete_query_button.config(state="normal")
                 self.file_info_label.config(text="已选择目录 [可批量查询]")
             else:
@@ -2343,6 +2370,8 @@ class FitsImageViewer:
                     self.batch_local_query_button.config(state="disabled")
                 if hasattr(self, 'batch_alignment_button'):
                     self.batch_alignment_button.config(state="disabled")
+                if hasattr(self, 'batch_pympc_query_button'):
+                    self.batch_pympc_query_button.config(state="disabled")
                 self.batch_delete_query_button.config(state="disabled")
                 self.file_info_label.config(text="未选择FITS文件")
 
@@ -8702,7 +8731,7 @@ class FitsImageViewer:
         except Exception as e:
             self.logger.error(f"应用DSS图像翻转失败: {str(e)}", exc_info=True)
 
-    def _query_skybot(self):
+    def _query_skybot(self, use_pympc=False):
         """使用当前配置/覆盖逻辑查询小行星（Skybot / 本地MPCORB / pympc）。"""
         try:
             # 立即重置结果标签，确保用户能看到查询状态变化
@@ -8795,7 +8824,9 @@ class FitsImageViewer:
             # 执行小行星查询（根据设置/覆盖开关和高级选项选择后端）
             # 1) 先读取配置中的小行星查询方式: auto / skybot / local / pympc
             method = "auto"
-            if self.config_manager:
+            if use_pympc:
+                method = "pympc"
+            elif self.config_manager:
                 try:
                     ls = self.config_manager.get_local_catalog_settings() or {}
                     method_cfg = str(ls.get("asteroid_query_method", "auto")).lower()
@@ -12286,6 +12317,219 @@ class FitsImageViewer:
             self.logger.error(f"收集文件失败: {str(e)}")
 
         return files_to_process
+
+    def _batch_pympc_query(self):
+        """执行批量pympc小行星查询"""
+        try:
+            # 获取用户选择
+            selection = self.directory_tree.selection()
+            if not selection:
+                messagebox.showwarning("警告", "请选择一个目录或文件")
+                return
+
+            item = selection[0]
+            values = self.directory_tree.item(item, "values")
+            tags = self.directory_tree.item(item, "tags")
+
+            if not values:
+                messagebox.showwarning("警告", "请选择一个目录或文件")
+                return
+
+            # 获取线程数
+            try:
+                thread_count = int(self.batch_query_threads_var.get())
+                if thread_count < 1:
+                    thread_count = 1
+            except ValueError:
+                thread_count = 10  # 默认值
+
+            # 递归处理文件
+            def process_file(file_path):
+                try:
+                    # 加载文件的diff结果
+                    root_dir = os.path.dirname(file_path)
+                    self._load_diff_results_for_file(file_path, root_dir)
+
+                    if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                        return {"status": "skipped", "reason": "无检测结果"}
+
+                    # 仅查询手动标记为 GOOD 的检测目标
+                    good_indices = [
+                        ci for ci, c in enumerate(self._all_cutout_sets)
+                        if c.get('manual_label') == 'good'
+                    ]
+                    if not good_indices:
+                        return {"status": "skipped", "reason": "无 GOOD 标记目标"}
+
+                    queried_count = 0
+                    found_count = 0
+
+                    for cutout_idx in good_indices:
+                        self._current_cutout_index = cutout_idx
+
+                        # 检查是否已经查询过
+                        skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+
+                        # 如果已查询过，跳过
+                        if skybot_queried:
+                            continue
+
+                        # 执行pympc查询
+                        self._query_skybot(use_pympc=True)  # 强制使用pympc查询
+                        queried_count += 1
+
+                        # 检查查询结果
+                        skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                        if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
+                            found_count += 1
+
+                    return {
+                        "status": "success",
+                        "filename": os.path.basename(file_path),
+                        "queried": queried_count,
+                        "found": found_count
+                    }
+                except Exception as e:
+                    return {
+                        "status": "error",
+                        "filename": os.path.basename(file_path),
+                        "error": str(e)
+                    }
+
+            # 收集所有需要处理的文件
+            files_to_process = []
+            is_file = "fits_file" in tags
+
+            if is_file:
+                # 单个文件
+                files_to_process.append(values[0])
+            else:
+                # 目录
+                directory = values[0]
+                for root, dirs, files in os.walk(directory):
+                    for filename in files:
+                        if filename.lower().endswith(('.fits', '.fit', '.fts')):
+                            file_path = os.path.join(root, filename)
+                            files_to_process.append(file_path)
+
+            if not files_to_process:
+                messagebox.showinfo("信息", "没有找到需要查询的FITS文件")
+                return
+
+            # 使用多线程执行查询
+            import threading
+            import queue
+
+            result_queue = queue.Queue()
+            active_threads = 0
+            file_queue = queue.Queue()
+
+            # 填充文件队列
+            for file_path in files_to_process:
+                file_queue.put(file_path)
+
+            # 线程函数
+            def thread_worker():
+                while True:
+                    try:
+                        file_path = file_queue.get(block=False)
+                    except queue.Empty:
+                        break
+                    
+                    result = process_file(file_path)
+                    result_queue.put(result)
+                    file_queue.task_done()
+
+            # 创建和启动线程
+            max_threads = min(thread_count, len(files_to_process))
+            threads = []
+            for _ in range(max_threads):
+                t = threading.Thread(target=thread_worker)
+                t.daemon = True
+                t.start()
+                threads.append(t)
+
+            # 显示进度窗口
+            progress_window = tk.Toplevel(self.parent_frame)
+            progress_window.title("批量PYMPC查询进度")
+            progress_window.geometry("500x250")
+
+            # 进度标签
+            progress_label = ttk.Label(progress_window, text="准备开始...")
+            progress_label.pack(pady=10)
+
+            # 详细信息
+            detail_label = ttk.Label(progress_window, text="", wraplength=450)
+            detail_label.pack(pady=5)
+
+            # 进度条
+            progress_bar = ttk.Progressbar(progress_window, length=400, mode='determinate')
+            progress_bar.pack(pady=10)
+            progress_bar['maximum'] = len(files_to_process)
+
+            # 统计标签
+            stats_label = ttk.Label(progress_window, text="")
+            stats_label.pack(pady=5)
+
+            # 更新进度
+            processed = 0
+            success_count = 0
+            skip_count = 0
+            error_count = 0
+            total_queried = 0
+            total_found = 0
+
+            def update_progress():
+                nonlocal processed, success_count, skip_count, error_count, total_queried, total_found
+                
+                # 获取所有可用结果
+                while not result_queue.empty():
+                    result = result_queue.get()
+                    processed += 1
+                    
+                    if result["status"] == "success":
+                        success_count += 1
+                        total_queried += result.get("queried", 0)
+                        total_found += result.get("found", 0)
+                    elif result["status"] == "skipped":
+                        skip_count += 1
+                    elif result["status"] == "error":
+                        error_count += 1
+                        self.logger.error(f"处理文件 {result.get('filename')} 失败: {result.get('error')}")
+
+                # 更新UI
+                progress_bar['value'] = processed
+                progress_label.config(text=f"处理进度: {processed}/{len(files_to_process)}")
+                stats_label.config(text=f"成功: {success_count} | 跳过: {skip_count} | 错误: {error_count}")
+                
+                # 检查是否完成
+                if processed < len(files_to_process):
+                    progress_window.after(100, update_progress)
+                else:
+                    # 等待所有线程完成
+                    for t in threads:
+                        t.join()
+                    
+                    # 最终统计
+                    final_stats = (
+                        f"批量查询完成！\n"+
+                        f"总文件数: {len(files_to_process)}\n"+
+                        f"成功处理: {success_count}\n"+
+                        f"跳过: {skip_count}\n"+
+                        f"错误: {error_count}\n"+
+                        f"总查询目标数: {total_queried}\n"+
+                        f"找到小行星数: {total_found}"
+                    )
+                    messagebox.showinfo("查询完成", final_stats)
+                    progress_window.destroy()
+
+            # 启动进度更新
+            progress_window.after(100, update_progress)
+
+        except Exception as e:
+            error_msg = f"批量pympc查询失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            messagebox.showerror("错误", error_msg)
 
     def _execute_batch_query(self, files_to_process):
         """执行批量查询"""
