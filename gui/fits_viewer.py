@@ -135,6 +135,10 @@ class FitsImageViewer:
         self._skybot_queried = False
         self._vsx_queried = False
 
+        # 批量pympc查询用的线程锁
+        import threading
+        self._pympc_query_lock = threading.Lock()
+
         # 创建界面
         self._create_widgets()
 
