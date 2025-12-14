@@ -4516,31 +4516,22 @@ class FitsImageViewer:
             except Exception:
                 pass
 
-            msg = (
-                "AI自动标记完成！\n\n"
-                f"总目标数: {total_cutouts}\n"
-                f"新标记 GOOD: {marked_good}\n"
-                f"新标记 BAD: {marked_bad}\n"
-                f"跳过(已有手工标记): {skipped_labeled}\n"
-                f"跳过(低于置信度阈值): {skipped_low_conf}\n"
-                f"跳过(缺少图像文件): {skipped_missing_img}"
-            )
-            messagebox.showinfo("AI自动标记", msg)
-
+            # 将弹框改为控制台日志输出
             if hasattr(self, "logger"):
                 self.logger.info(
                     "AI自动标记完成: "
-                    f"total={total_cutouts}, good={marked_good}, bad={marked_bad}, "
-                    f"skipped_labeled={skipped_labeled}, "
-                    f"skipped_low_conf={skipped_low_conf}, "
-                    f"skipped_missing_img={skipped_missing_img}"
+                    f"总目标数={total_cutouts}, 新标记GOOD={marked_good}, 新标记BAD={marked_bad}, "
+                    f"跳过(已有手工标记)={skipped_labeled}, "
+                    f"跳过(低于置信度阈值)={skipped_low_conf}, "
+                    f"跳过(缺少图像文件)={skipped_missing_img}"
                 )
 
         except Exception as e:
             err = f"AI自动标记失败: {e}"
             if hasattr(self, "logger"):
                 self.logger.error(err, exc_info=True)
-            messagebox.showerror("错误", err)
+            # 将错误弹框改为控制台日志输出
+            self.logger.error("AI自动标记失败: %s", str(e))
 
 
 
