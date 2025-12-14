@@ -12936,7 +12936,8 @@ class FitsImageViewer:
                         f"总查询目标数: {total_queried}\n"+
                         f"找到小行星数: {total_found}"
                     )
-                    messagebox.showinfo("查询完成", final_stats)
+                    self.logger.info(final_stats)
+                    # messagebox.showinfo("查询完成", final_stats)
                     progress_window.destroy()
 
                     # 恢复之前的显示状态
