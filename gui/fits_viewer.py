@@ -12961,9 +12961,20 @@ class FitsImageViewer:
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
 
-    def _batch_vsx_query(self):
+    def _batch_vsx_query(self, on_complete=None):
         """执行批量变星查询（跳过非GOOD和已有小行星结果的目标）"""
         self.logger.info("批量变星查询按钮被点击，开始执行批量查询")
+
+        def _safe_invoke_on_complete():
+            if callable(on_complete):
+                try:
+                    self.parent_frame.after(0, on_complete)
+                except Exception:
+                    try:
+                        on_complete()
+                    except Exception:
+                        pass
+
         try:
             # 获取用户选择
             selection = self.directory_tree.selection()
@@ -13244,6 +13255,13 @@ class FitsImageViewer:
             error_msg = f"批量变星查询失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
+        finally:
+            if 'progress_window' in locals() and progress_window.winfo_exists():
+                try:
+                    progress_window.destroy()
+                except Exception:
+                    pass
+            _safe_invoke_on_complete()
 
     def _execute_batch_query(self, files_to_process):
         """执行批量查询"""

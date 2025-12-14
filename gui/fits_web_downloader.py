@@ -5127,10 +5127,13 @@ Diff统计:
                     def _run_vsx_after_pympc():
                         try:
                             self._log("[自动模式] 开始执行批量变星查询...")
+                            self.fits_viewer._batch_vsx_query(on_complete=lambda: self.root.after(500, _step4_update_pympc))
+                        except TypeError:
+                            # 兼容旧版变星查询（无回调参数）
                             self.fits_viewer._batch_vsx_query()
+                            self.root.after(500, _step4_update_pympc)
                         except Exception as e:
                             self._log(f"[自动模式] 批量变星查询时出错: {e}")
-                        finally:
                             self.root.after(500, _step4_update_pympc)
 
                     try:
@@ -5439,20 +5442,34 @@ Diff统计:
                 self.root.after(500, _step3_batch_query)
 
             def _step3_batch_query():
+                def _finish_after_queries():
+                    self.root.after(500, _finish_chain)
+
                 if self._auto_select_download_root_in_viewer():
+                    def _run_vsx_after_pympc():
+                        try:
+                            self._log("[自动链] 开始执行批量变星查询...")
+                            self.fits_viewer._batch_vsx_query(on_complete=_finish_after_queries)
+                        except TypeError:
+                            self.fits_viewer._batch_vsx_query()
+                            _finish_after_queries()
+                        except Exception as e:
+                            self._log(f"[自动链] 批量变星查询时出错: {e}")
+                            _finish_after_queries()
+
                     try:
                         # 先执行pympc批量查询
                         self._log("[自动链] 开始执行pympc批量查询...")
+                        self.fits_viewer._batch_pympc_query(on_complete=_run_vsx_after_pympc)
+                        return
+                    except TypeError:
                         self.fits_viewer._batch_pympc_query()
-
-                        # 然后执行批量变星查询
-                        self._log("[自动链] 开始执行批量变星查询...")
-                        self.fits_viewer._batch_vsx_query()
+                        _run_vsx_after_pympc()
                     except Exception as e:
                         self._log(f"[自动链] 批量查询时出错: {e}")
-
-                # 批量查询完成后，结束自动链
-                self.root.after(500, _finish_chain)
+                        _finish_after_queries()
+                else:
+                    _finish_after_queries()
 
             def _finish_chain():
                 try:
