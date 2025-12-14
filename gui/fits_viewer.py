@@ -12704,16 +12704,33 @@ class FitsImageViewer:
                             with open(comparison_files[0], 'r', encoding='utf-8') as f:
                                 for line in f:
                                     line = line.strip()
-                                    if line.startswith('#') and '[GOOD]' in line:
+                                    # 支持两种格式：1) #1 [GOOD]  2) cutout #1: [GOOD]
+                                    if '[GOOD]' in line:
                                         try:
-                                            idx = int(line.split('#')[1].split()[0]) - 1
+                                            # 格式1: #1 [GOOD]
+                                            if line.startswith('#'):
+                                                idx = int(line.split('#')[1].split()[0]) - 1
+                                            # 格式2: cutout #1: [GOOD]
+                                            elif 'cutout #' in line:
+                                                idx = int(line.split('cutout #')[1].split(':')[0]) - 1
+                                            else:
+                                                continue
+                                            
                                             if 0 <= idx < len(local_cutouts):
                                                 local_cutouts[idx]['manual_label'] = 'good'
                                         except:
                                             pass
-                                    elif line.startswith('#') and '[BAD]' in line:
+                                    elif '[BAD]' in line:
                                         try:
-                                            idx = int(line.split('#')[1].split()[0]) - 1
+                                            # 格式1: #1 [BAD]
+                                            if line.startswith('#'):
+                                                idx = int(line.split('#')[1].split()[0]) - 1
+                                            # 格式2: cutout #1: [BAD]
+                                            elif 'cutout #' in line:
+                                                idx = int(line.split('cutout #')[1].split(':')[0]) - 1
+                                            else:
+                                                continue
+                                            
                                             if 0 <= idx < len(local_cutouts):
                                                 local_cutouts[idx]['manual_label'] = 'bad'
                                         except:
