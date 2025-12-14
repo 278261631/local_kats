@@ -264,7 +264,7 @@ class FitsImageViewer:
         self.saliency_thresh_var = tk.DoubleVar(value=0.65)
 
         # AI GOOD/BAD 自动标记置信度阈值（在高级设置中可调）
-        self.ai_confidence_threshold_var = tk.DoubleVar(value=0.7)
+        self.ai_confidence_threshold_var = tk.DoubleVar(value=0.5)
 
 
         # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
@@ -894,7 +894,7 @@ class FitsImageViewer:
 
                 # AI GOOD/BAD 自动标记相关设置
                 ais = self.config_manager.get_ai_classification_settings()
-                self.ai_confidence_threshold_var.set(float(ais.get('confidence_threshold', 0.7)))
+                self.ai_confidence_threshold_var.set(float(ais.get('confidence_threshold', 0.5)))
             except Exception:
                 pass
 

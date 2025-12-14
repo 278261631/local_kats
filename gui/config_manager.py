@@ -111,7 +111,7 @@ class ConfigManager:
                 "auto_enable_threshold": 50  # 检测目标超过此数量时自动启用过滤（默认值：50）
             },
             "ai_classification_settings": {
-                "confidence_threshold": 0.7  # AI GOOD/BAD 自动标记置信度阈值（默认：0.7）
+                "confidence_threshold": 0.5  # AI GOOD/BAD 自动标记置信度阈值（默认：0.7）
             },
             "line_detection_settings": {
                 "sensitivity": 50,                # 直线检测灵敏度(1-100)，越大越敏感
