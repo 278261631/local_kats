@@ -12985,58 +12985,57 @@ class FitsImageViewer:
             # 处理单个文件
             def process_file(file_path):
                 try:
-                    with self._pympc_query_lock:
-                        # 加载文件的diff结果
-                        root_dir = os.path.dirname(file_path)
-                        self._load_diff_results_for_file(file_path, root_dir)
+                    # 加载文件的diff结果
+                    root_dir = os.path.dirname(file_path)
+                    self._load_diff_results_for_file(file_path, root_dir)
 
-                        # 设置selected_file_path，以便_update_detection_txt_with_query_results能正确获取文件名
-                        self.selected_file_path = file_path
-                        self.current_file_path = file_path
+                    # 设置selected_file_path，以便_update_detection_txt_with_query_results能正确获取文件名
+                    self.selected_file_path = file_path
+                    self.current_file_path = file_path
 
-                        if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
-                            return {"status": "skipped", "reason": "无检测结果"}
+                    if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                        return {"status": "skipped", "reason": "无检测结果"}
 
-                        # 仅查询手动标记为 GOOD 的检测目标
-                        good_indices = [
-                            ci for ci, c in enumerate(self._all_cutout_sets)
-                            if c.get('manual_label') == 'good'
-                        ]
-                        if not good_indices:
-                            return {"status": "skipped", "reason": "无 GOOD 标记目标"}
+                    # 仅查询手动标记为 GOOD 的检测目标
+                    good_indices = [
+                        ci for ci, c in enumerate(self._all_cutout_sets)
+                        if c.get('manual_label') == 'good'
+                    ]
+                    if not good_indices:
+                        return {"status": "skipped", "reason": "无 GOOD 标记目标"}
 
-                        queried_count = 0
-                        found_count = 0
+                    queried_count = 0
+                    found_count = 0
 
-                        for cutout_idx in good_indices:
-                            self._current_cutout_index = cutout_idx
+                    for cutout_idx in good_indices:
+                        self._current_cutout_index = cutout_idx
 
-                            # 检查是否已有小行星查询结果（找到小行星则跳过）
-                            skybot_queried, skybot_result = self._check_existing_query_results('skybot')
-                            if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
-                                # 已找到小行星，跳过变星查询
-                                continue
+                        # 检查是否已有小行星查询结果（找到小行星则跳过）
+                        skybot_queried, skybot_result = self._check_existing_query_results('skybot')
+                        if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
+                            # 已找到小行星，跳过变星查询
+                            continue
 
-                            # 检查是否已经查询过变星
-                            vsx_queried, vsx_result = self._check_existing_query_results('vsx')
-                            if vsx_queried:
-                                continue
+                        # 检查是否已经查询过变星
+                        vsx_queried, vsx_result = self._check_existing_query_results('vsx')
+                        if vsx_queried:
+                            continue
 
-                            # 执行变星查询
-                            self._query_vsx(skip_gui=True)  # 跳过GUI操作
-                            queried_count += 1
+                        # 执行变星查询
+                        self._query_vsx(skip_gui=True)  # 跳过GUI操作
+                        queried_count += 1
 
-                            # 检查查询结果
-                            vsx_queried, vsx_result = self._check_existing_query_results('vsx')
-                            if vsx_queried and vsx_result and "找到" in vsx_result and "未找到" not in vsx_result:
-                                found_count += 1
+                        # 检查查询结果
+                        vsx_queried, vsx_result = self._check_existing_query_results('vsx')
+                        if vsx_queried and vsx_result and "找到" in vsx_result and "未找到" not in vsx_result:
+                            found_count += 1
 
-                        return {
-                            "status": "success",
-                            "filename": os.path.basename(file_path),
-                            "queried": queried_count,
-                            "found": found_count
-                        }
+                    return {
+                        "status": "success",
+                        "filename": os.path.basename(file_path),
+                        "queried": queried_count,
+                        "found": found_count
+                    }
                 except Exception as e:
                     return {
                         "status": "error",
