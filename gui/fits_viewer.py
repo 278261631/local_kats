@@ -467,6 +467,9 @@ class FitsImageViewer:
                                                   command=self._batch_vsx_query,
                                                   state="disabled")
         self.batch_vsx_query_button.pack(side=tk.LEFT, padx=(5, 5))
+        
+        # 记录按钮初始状态
+        self.logger.info(f"批量变星查询按钮已创建，初始状态: {self.batch_vsx_query_button['state']}")
 
         # 批量删除查询结果按钮
         self.batch_delete_query_button = ttk.Button(toolbar_frame6, text="删除查询结果",
@@ -2350,6 +2353,7 @@ class FitsImageViewer:
                 self.batch_pympc_query_button.config(state="normal")
             if hasattr(self, 'batch_vsx_query_button'):
                 self.batch_vsx_query_button.config(state="normal")
+                self.logger.info("批量变星查询按钮状态更新: 启用 (选中FITS文件)")
             # 启用批量删除查询结果按钮
             self.batch_delete_query_button.config(state="normal")
         else:
@@ -2378,6 +2382,7 @@ class FitsImageViewer:
                     self.batch_pympc_query_button.config(state="normal")
                 if hasattr(self, 'batch_vsx_query_button'):
                     self.batch_vsx_query_button.config(state="normal")
+                    self.logger.info("批量变星查询按钮状态更新: 启用 (选中目录节点)")
                 self.batch_delete_query_button.config(state="normal")
                 self.file_info_label.config(text="已选择目录 [可批量查询]")
             else:
@@ -2390,6 +2395,7 @@ class FitsImageViewer:
                     self.batch_pympc_query_button.config(state="disabled")
                 if hasattr(self, 'batch_vsx_query_button'):
                     self.batch_vsx_query_button.config(state="disabled")
+                    self.logger.info("批量变星查询按钮状态更新: 禁用 (未选中有效文件或目录)")
                 self.batch_delete_query_button.config(state="disabled")
                 self.file_info_label.config(text="未选择FITS文件")
 
@@ -12944,10 +12950,12 @@ class FitsImageViewer:
 
     def _batch_vsx_query(self):
         """执行批量变星查询（跳过非GOOD和已有小行星结果的目标）"""
+        self.logger.info("批量变星查询按钮被点击，开始执行批量查询")
         try:
             # 获取用户选择
             selection = self.directory_tree.selection()
             if not selection:
+                self.logger.warning("批量变星查询: 未选择任何目录或文件")
                 messagebox.showwarning("警告", "请选择一个目录或文件")
                 return
 
@@ -12985,6 +12993,7 @@ class FitsImageViewer:
                     self.current_file_path = file_path
 
                     if not hasattr(self, '_all_cutout_sets') or not self._all_cutout_sets:
+                        self.logger.info(f"文件 {os.path.basename(file_path)}: 无检测结果，跳过")
                         return {"status": "skipped", "reason": "无检测结果"}
 
                     # 仅查询手动标记为 GOOD 的检测目标
@@ -12993,25 +13002,37 @@ class FitsImageViewer:
                         if c.get('manual_label') == 'good'
                     ]
                     if not good_indices:
+                        self.logger.info(f"文件 {os.path.basename(file_path)}: 无 GOOD 标记目标，跳过")
                         return {"status": "skipped", "reason": "无 GOOD 标记目标"}
+
+                    self.logger.info(f"文件 {os.path.basename(file_path)}: 找到 {len(good_indices)} 个 GOOD 标记目标")
 
                     queried_count = 0
                     found_count = 0
+                    skipped_skybot_count = 0
+                    skipped_vsx_count = 0
 
                     for cutout_idx in good_indices:
                         self._current_cutout_index = cutout_idx
+                        cutout_info = self._all_cutout_sets[cutout_idx]
 
                         # 检查是否已有小行星查询结果（找到小行星则跳过）
                         skybot_queried, skybot_result = self._check_existing_query_results('skybot')
                         if skybot_queried and skybot_result and "找到" in skybot_result and "未找到" not in skybot_result:
                             # 已找到小行星，跳过变星查询
+                            self.logger.info(f"目标 {cutout_idx+1}: 已找到小行星 '{skybot_result}'，跳过变星查询")
+                            skipped_skybot_count += 1
                             continue
 
                         # 检查是否已经查询过变星
                         vsx_queried, vsx_result = self._check_existing_query_results('vsx')
                         if vsx_queried:
+                            self.logger.info(f"目标 {cutout_idx+1}: 已查询过变星，跳过")
+                            skipped_vsx_count += 1
                             continue
 
+                        self.logger.info(f"目标 {cutout_idx+1}: 执行变星查询...")
+                        
                         # 执行变星查询
                         self._query_vsx(skip_gui=True)  # 跳过GUI操作
                         queried_count += 1
@@ -13020,14 +13041,26 @@ class FitsImageViewer:
                         vsx_queried, vsx_result = self._check_existing_query_results('vsx')
                         if vsx_queried and vsx_result and "找到" in vsx_result and "未找到" not in vsx_result:
                             found_count += 1
+                            self.logger.info(f"目标 {cutout_idx+1}: 找到变星 '{vsx_result}'")
+                        else:
+                            self.logger.info(f"目标 {cutout_idx+1}: 未找到变星")
+
+                    self.logger.info(
+                        f"文件 {os.path.basename(file_path)} 处理完成: "
+                        f"查询 {queried_count} 个目标, 找到 {found_count} 个变星, "
+                        f"跳过小行星目标 {skipped_skybot_count} 个, 跳过已查询变星 {skipped_vsx_count} 个"
+                    )
 
                     return {
                         "status": "success",
                         "filename": os.path.basename(file_path),
                         "queried": queried_count,
-                        "found": found_count
+                        "found": found_count,
+                        "skipped_skybot": skipped_skybot_count,
+                        "skipped_vsx": skipped_vsx_count
                     }
                 except Exception as e:
+                    self.logger.error(f"处理文件 {os.path.basename(file_path)} 失败: {str(e)}", exc_info=True)
                     return {
                         "status": "error",
                         "filename": os.path.basename(file_path),
@@ -13041,6 +13074,7 @@ class FitsImageViewer:
             if is_file:
                 # 单个文件
                 files_to_process.append(values[0])
+                self.logger.info(f"开始批量变星查询: 单个文件 {values[0]}")
             else:
                 # 目录
                 directory = values[0]
@@ -13049,10 +13083,13 @@ class FitsImageViewer:
                         if filename.lower().endswith(('.fits', '.fit', '.fts')):
                             file_path = os.path.join(root, filename)
                             files_to_process.append(file_path)
+                self.logger.info(f"开始批量变星查询: 目录 {directory}, 找到 {len(files_to_process)} 个FITS文件")
 
             if not files_to_process:
                 messagebox.showinfo("信息", "没有找到需要查询的FITS文件")
                 return
+
+            self.logger.info(f"批量变星查询配置: 线程数={thread_count}, 总文件数={len(files_to_process)}")
 
             # 使用多线程执行查询
             import threading
@@ -13080,11 +13117,12 @@ class FitsImageViewer:
             # 创建和启动线程
             max_threads = min(thread_count, len(files_to_process))
             threads = []
-            for _ in range(max_threads):
+            for i in range(max_threads):
                 t = threading.Thread(target=thread_worker)
                 t.daemon = True
                 t.start()
                 threads.append(t)
+                self.logger.info(f"启动查询线程 {i+1}/{max_threads}")
 
             # 显示进度窗口
             progress_window = tk.Toplevel(self.parent_frame)
@@ -13115,9 +13153,12 @@ class FitsImageViewer:
             error_count = 0
             total_queried = 0
             total_found = 0
+            total_skipped_skybot = 0
+            total_skipped_vsx = 0
 
             def update_progress():
                 nonlocal processed, success_count, skip_count, error_count, total_queried, total_found
+                nonlocal total_skipped_skybot, total_skipped_vsx
 
                 # 获取所有可用结果
                 while not result_queue.empty():
@@ -13128,8 +13169,16 @@ class FitsImageViewer:
                         success_count += 1
                         total_queried += result.get("queried", 0)
                         total_found += result.get("found", 0)
+                        total_skipped_skybot += result.get("skipped_skybot", 0)
+                        total_skipped_vsx += result.get("skipped_vsx", 0)
+                        
+                        self.logger.info(f"文件 {result.get('filename')} 处理成功: "
+                                       f"查询 {result.get('queried', 0)} 目标, 找到 {result.get('found', 0)} 变星")
+                                       
                     elif result["status"] == "skipped":
                         skip_count += 1
+                        self.logger.info(f"文件 {result.get('filename')} 跳过: {result.get('reason')}")
+                        
                     elif result["status"] == "error":
                         error_count += 1
                         self.logger.error(f"处理文件 {result.get('filename')} 失败: {result.get('error')}")
@@ -13155,8 +13204,12 @@ class FitsImageViewer:
                         f"跳过: {skip_count}\n"+
                         f"错误: {error_count}\n"+
                         f"总查询目标数: {total_queried}\n"+
-                        f"找到变星数: {total_found}"
+                        f"找到变星数: {total_found}\n"+
+                        f"跳过小行星目标: {total_skipped_skybot}\n"+
+                        f"跳过已查询变星: {total_skipped_vsx}"
                     )
+                    
+                    self.logger.info(f"批量变星查询完成: {final_stats.replace(chr(10), ' ')}")
                     messagebox.showinfo("查询完成", final_stats)
                     progress_window.destroy()
 
