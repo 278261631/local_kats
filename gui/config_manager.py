@@ -103,7 +103,8 @@ class ConfigManager:
             },
             "query_settings": {
                 "search_radius": 0.01,                  # 搜索半径（度）（默认值：0.01）
-                "batch_query_interval_seconds": 5.0     # 批量查询之间的间隔时间（秒）（默认值：5秒）
+                "batch_query_interval_seconds": 5.0,    # 批量查询之间的间隔时间（秒）（默认值：5秒）
+                "batch_query_threads": 5                # pympc批量查询线程数（默认值：5）
             },
             "detection_filter_settings": {
                 "enable_center_distance_filter": False,  # 是否启用中心距离过滤（默认值：False）

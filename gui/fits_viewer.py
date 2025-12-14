@@ -427,7 +427,7 @@ class FitsImageViewer:
         # 批量查询间隔（秒），在高级设置中配置
         self.batch_query_interval_var = tk.StringVar(value="2.0")
         # pympc批量查询线程数，在高级设置中配置
-        self.batch_query_threads_var = tk.StringVar(value="10")
+        self.batch_query_threads_var = tk.StringVar(value="5")
 
         # 批量检测对齐按钮（移动至此，位于“批量本地查询(离线)”左侧）
         self.batch_alignment_button = ttk.Button(
@@ -1433,8 +1433,8 @@ class FitsImageViewer:
             # 加载批量查询间隔（秒），默认值：5秒
             interval = query_settings.get('batch_query_interval_seconds', 5.0)
             self.batch_query_interval_var.set(str(interval))
-            # 加载批量查询线程数，默认值：10
-            batch_threads = query_settings.get('batch_query_threads', 10)
+            # 加载批量查询线程数，默认值：5
+            batch_threads = query_settings.get('batch_query_threads', 5)
             self.batch_query_threads_var.set(str(batch_threads))
 
             self.logger.info(f"查询设置已加载: 搜索半径={search_radius}°, 批量查询间隔={interval}s, 批量线程数={batch_threads}")
@@ -1484,7 +1484,7 @@ class FitsImageViewer:
                 batch_query_threads=batch_threads,
             )
 
-            self.logger.info(f"查询设置已保存: 搜索半径={search_radius}°, 批量查询间隔={interval}s, pympc批量线程数={pympc_threads}")
+            self.logger.info(f"查询设置已保存: 搜索半径={search_radius}°, 批量查询间隔={interval}s, pympc批量线程数={batch_threads}")
 
         except ValueError:
             self.logger.error(f"无效的搜索半径: {self.search_radius_var.get()}")
@@ -12573,7 +12573,7 @@ class FitsImageViewer:
                 if thread_count < 1:
                     thread_count = 1
             except ValueError:
-                thread_count = 10  # 默认值
+                thread_count = 5  # 默认值
 
             self.logger.info(f"[pympc批量查询] 线程数设置: {thread_count}")
 
