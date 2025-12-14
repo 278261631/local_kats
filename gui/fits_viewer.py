@@ -12475,10 +12475,10 @@ class FitsImageViewer:
                 f.write(f"查询结果 - 检测目标 #{cutout_idx + 1}\n")
                 f.write("=" * 60 + "\n\n")
                 f.write(f"中心坐标: RA={ra:.6f}°, DEC={dec:.6f}°\n\n")
-                f.write("小行星查询结果:\n")
+                f.write("小行星列表:\n")
                 for line in skybot_lines:
                     f.write(line + "\n")
-                f.write("\n变星查询结果:\n")
+                f.write("\n变星列表:\n")
                 f.write("  - (未查询)\n")
 
             self.logger.info(f"保存查询结果到: {query_file}")
@@ -12762,7 +12762,7 @@ class FitsImageViewer:
                                 with open(query_file, 'r', encoding='utf-8') as f:
                                     content = f.read()
                                     # 检查是否找到小行星（有像素距离信息说明找到了）
-                                    if "小行星查询结果:" in content and "像素距离=" in content:
+                                    if "小行星列表:" in content and "像素距离=" in content:
                                         already_found = True
                             except:
                                 pass
