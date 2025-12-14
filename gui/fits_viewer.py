@@ -12534,8 +12534,18 @@ class FitsImageViewer:
             self.logger.warning(f"计算像素距离失败: {e}")
             return None
 
-    def _batch_pympc_query(self):
+    def _batch_pympc_query(self, on_complete=None):
         """执行批量pympc小行星查询"""
+        def _safe_invoke_on_complete():
+            if callable(on_complete):
+                try:
+                    self.parent_frame.after(0, on_complete)
+                except Exception:
+                    try:
+                        on_complete()
+                    except Exception:
+                        pass
+
         try:
             # 获取用户选择
             selection = self.directory_tree.selection()
@@ -12939,6 +12949,9 @@ class FitsImageViewer:
                         if self._all_cutout_sets:
                             self._show_current_cutout()
                             self.logger.info("批量查询完成，已恢复之前的显示状态")
+
+                    # 触发回调
+                    _safe_invoke_on_complete()
 
             # 启动进度更新
             progress_window.after(100, update_progress)

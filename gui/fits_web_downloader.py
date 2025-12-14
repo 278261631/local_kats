@@ -5124,19 +5124,29 @@ Diff统计:
 
             def _step3_batch_query():
                 if self._auto_select_download_root_in_viewer():
-                    try:
-                        # 先执行pympc批量查询
-                        self._log("[自动模式] 开始执行pympc批量查询...")
-                        self.fits_viewer._batch_pympc_query()
+                    def _run_vsx_after_pympc():
+                        try:
+                            self._log("[自动模式] 开始执行批量变星查询...")
+                            self.fits_viewer._batch_vsx_query()
+                        except Exception as e:
+                            self._log(f"[自动模式] 批量变星查询时出错: {e}")
+                        finally:
+                            self.root.after(500, _step4_update_pympc)
 
-                        # 然后执行批量变星查询
-                        self._log("[自动模式] 开始执行批量变星查询...")
-                        self.fits_viewer._batch_vsx_query()
+                    try:
+                        # 先执行pympc批量查询，完成后再启动变星查询
+                        self._log("[自动模式] 开始执行pympc批量查询...")
+                        self.fits_viewer._batch_pympc_query(on_complete=_run_vsx_after_pympc)
+                        return
+                    except TypeError:
+                        # 兼容旧版FitsImageViewer（无回调参数）
+                        self.fits_viewer._batch_pympc_query()
+                        _run_vsx_after_pympc()
                     except Exception as e:
                         self._log(f"[自动模式] 批量查询时出错: {e}")
-
-                # 最后一步：更新 pympc 轨道目录
-                self.root.after(500, _step4_update_pympc)
+                        self.root.after(500, _step4_update_pympc)
+                else:
+                    self.root.after(500, _step4_update_pympc)
 
             def _step4_update_pympc():
                 try:
