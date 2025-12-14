@@ -3908,15 +3908,9 @@ Diff统计:
             except Exception:
                 pass
 
-            # 
-            # 
-            # 
-            # 
-            # 
-            # [Auto] [Chain] [Batch] []
             if getattr(self, "_auto_chain_followups", False):
-                # [Note] :     GUI 
-                self.root.after(500, self._auto_batch_query)
+                # 启动完整的自动后处理链：批量检测对齐 → AI标记GOOD/BAD → 批量查询
+                self.root.after(500, self._start_auto_postprocessing_chain)
 
             self.root.after(0, lambda: self.url_builder.set_scan_button_state("normal"))
             self.root.after(0, lambda: self.download_button.config(state="normal"))
@@ -5131,8 +5125,13 @@ Diff统计:
             def _step3_batch_query():
                 if self._auto_select_download_root_in_viewer():
                     try:
-                        self._log("[自动模式] 开始批量查询小行星/变星……")
-                        self.fits_viewer._batch_query_asteroids_and_variables()
+                        # 先执行pympc批量查询
+                        self._log("[自动模式] 开始执行pympc批量查询...")
+                        self.fits_viewer._batch_pympc_query()
+
+                        # 然后执行批量变星查询
+                        self._log("[自动模式] 开始执行批量变星查询...")
+                        self.fits_viewer._batch_vsx_query()
                     except Exception as e:
                         self._log(f"[自动模式] 批量查询时出错: {e}")
 
@@ -5356,7 +5355,7 @@ Diff统计:
         try:
             self._log("开始批量下载并diff...")
 
-            # 标记后续需要自动执行 批量查询 和 批量导出未查询
+            # 标记后续需要自动执行完整后处理链：批量检测对齐 → AI标记GOOD/BAD → 批量查询
             self._auto_chain_followups = True
 
             # 开启静默模式，避免任何弹窗阻塞（包含后续查询/导出/上传链）
@@ -5394,7 +5393,103 @@ Diff统计:
             if not getattr(self, "_auto_silent_mode", False):
                 messagebox.showerror("错误", error_msg)
 
-    # ========================= 自动链：批量 → 批量查询 → 批量导出未查询 =========================
+    # ========================= 自动链：批量 → 批量检测对齐 → AI标记GOOD/BAD → 批量查询 =========================
+    
+    def _start_auto_postprocessing_chain(self):
+        """启动完整的自动后处理链：批量检测对齐 → AI标记GOOD/BAD → 批量查询"""
+        try:
+            self._log("[自动链] 开始完整的后处理链：批量检测对齐 → AI标记GOOD/BAD → 批量查询")
+            
+            # 保存当前的静默模式状态
+            prev_silent = getattr(self, "_auto_silent_mode", False)
+            # 开启静默模式
+            self._auto_silent_mode = True
+
+            def _step1_alignment():
+                # 刷新目录树并选中下载根目录，然后执行批量检测对齐
+                if self._auto_select_download_root_in_viewer():
+                    try:
+                        self._log("[自动链] 开始批量检测对齐质量……")
+                        self.fits_viewer._batch_evaluate_alignment_quality()
+                    except Exception as e:
+                        self._log(f"[自动链] 批量检测对齐质量时出错: {e}")
+
+                # 下一步：AI GOOD/BAD 标记
+                self.root.after(500, _step2_ai_mark)
+
+            def _step2_ai_mark():
+                if self._auto_select_download_root_in_viewer():
+                    try:
+                        self._log("[自动链] 开始 AI 标记 GOOD/BAD……")
+                        self.fits_viewer._ai_mark_detections()
+                    except Exception as e:
+                        self._log(f"[自动链] AI 标记 GOOD/BAD 时出错: {e}")
+
+                # 下一步：批量查询
+                self.root.after(500, _step3_batch_query)
+
+            def _step3_batch_query():
+                if self._auto_select_download_root_in_viewer():
+                    try:
+                        # 先执行pympc批量查询
+                        self._log("[自动链] 开始执行pympc批量查询...")
+                        self.fits_viewer._batch_pympc_query()
+
+                        # 然后执行批量变星查询
+                        self._log("[自动链] 开始执行批量变星查询...")
+                        self.fits_viewer._batch_vsx_query()
+                    except Exception as e:
+                        self._log(f"[自动链] 批量查询时出错: {e}")
+
+                # 批量查询完成后，结束自动链
+                self.root.after(500, _finish_chain)
+
+            def _finish_chain():
+                try:
+                    # 恢复静默标志
+                    self._auto_silent_mode = prev_silent
+                except Exception:
+                    pass
+
+                # 结束时恢复状态栏
+                try:
+                    self.status_label.config(text="就绪")
+                except Exception:
+                    pass
+
+                try:
+                    self._log("[自动链] 完整的后处理链已完成。")
+                except Exception:
+                    pass
+
+                # 关闭自动链标志
+                try:
+                    self._auto_chain_followups = False
+                except Exception:
+                    pass
+
+            # 启动第一步
+            self.root.after(500, _step1_alignment)
+
+        except Exception as e:
+            # 若自动后处理链本身异常终止，确保静默标志与状态栏恢复
+            try:
+                self._log(f"[自动链] 自动后处理链异常终止: {e}")
+            except Exception:
+                pass
+            try:
+                self._auto_silent_mode = prev_silent
+            except Exception:
+                pass
+            try:
+                self.status_label.config(text="就绪")
+            except Exception:
+                pass
+            try:
+                self._auto_chain_followups = False
+            except Exception:
+                pass
+
     def _normalize_path(self, p: str) -> str:
         import os
         return os.path.normcase(os.path.normpath(p)) if p else ""
