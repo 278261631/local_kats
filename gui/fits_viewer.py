@@ -14812,7 +14812,7 @@ class FitsImageViewer:
                     continue
 
             if updated_files == 0:
-                messagebox.showinfo("提示", "没有找到可更新的 analysis 文件或高分目标")
+                self.logger.info("批量对齐评估: 没有找到可更新的 analysis 文件或高分目标")
                 return
             if fast_mode:
                 _msg = (f"已更新 {updated_files} 个 analysis 文件，共填充 {updated_rows_total} 行；"
@@ -14820,7 +14820,7 @@ class FitsImageViewer:
             else:
                 _msg = (f"已更新 {updated_files} 个 analysis 文件，共填充 {updated_rows_total} 行；"
                         f"标记 {flagged_images_total} 张图像（misaligned/centerline），未进行删除操作")
-            messagebox.showinfo("完成", _msg)
+            self.logger.info("批量对齐评估完成: %s", _msg)
         except Exception as e:
             self.logger.error("批量对齐评估失败: %s", str(e), exc_info=True)
-            messagebox.showerror("错误", f"批量对齐评估失败:\n{str(e)}")
+            self.logger.error("批量对齐评估失败: %s", str(e))
