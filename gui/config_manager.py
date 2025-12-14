@@ -154,7 +154,11 @@ class ConfigManager:
             },
             "url_template_type": "standard",  # "standard" 或 "with_year"
             # URL模板现在从独立的URL配置文件中读取
-            "url_templates": url_config_manager.get_available_templates()
+            "url_templates": url_config_manager.get_available_templates(),
+            # 依赖检查状态
+            "dependencies_checked": False,  # 是否已通过依赖检查
+            "dependencies_check_date": "",  # 依赖检查通过日期
+            "missing_dependencies": []  # 缺失的依赖包列表
         }
 
         # 加载配置

@@ -8,9 +8,10 @@ import sys
 import argparse
 import tkinter as tk
 from tkinter import messagebox
+from datetime import datetime
 
-def check_dependencies():
-    """检查依赖包是否安装"""
+def check_dependencies(config_manager=None):
+    """检查依赖包是否安装，支持配置管理器保存检查状态"""
     required_packages = [
         'numpy',
         'matplotlib',
@@ -43,7 +44,22 @@ def check_dependencies():
         root.destroy()
         
         print(error_msg)
+        
+        # 如果有配置管理器，保存缺失的依赖包信息
+        if config_manager:
+            config_manager.config["dependencies_checked"] = False
+            config_manager.config["missing_dependencies"] = missing_packages
+            config_manager.save_config()
+        
         return False
+    
+    # 所有依赖包都安装成功
+    if config_manager:
+        config_manager.config["dependencies_checked"] = True
+        config_manager.config["dependencies_check_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        config_manager.config["missing_dependencies"] = []
+        config_manager.save_config()
+        print(f"依赖检查通过，状态已保存到配置文件（{config_manager.config_file}）")
     
     return True
 
@@ -97,13 +113,28 @@ def main():
     # 解析命令行参数
     args = parse_arguments()
 
-    # 检查依赖
-    print("检查依赖包...")
-    if not check_dependencies():
-        print("依赖检查失败，程序退出")
-        sys.exit(1)
+    # 导入配置管理器
+    try:
+        from config_manager import ConfigManager
+        config_manager = ConfigManager()
+    except ImportError:
+        print("警告：无法导入配置管理器，将使用默认依赖检查逻辑")
+        config_manager = None
 
-    print("依赖检查通过")
+    # 检查是否已经通过依赖检查
+    if config_manager and config_manager.config.get("dependencies_checked", False):
+        print("依赖检查已通过（上次检查时间：{}）".format(
+            config_manager.config.get("dependencies_check_date", "未知")
+        ))
+        print("跳过依赖检查，直接启动GUI")
+    else:
+        # 首次启动或依赖检查未通过，需要检查依赖
+        print("检查依赖包...")
+        if not check_dependencies(config_manager):
+            print("依赖检查失败，程序退出")
+            sys.exit(1)
+
+        print("依赖检查通过")
 
     # 导入并启动GUI
     try:
