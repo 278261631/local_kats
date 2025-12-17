@@ -11429,9 +11429,11 @@ class FitsImageViewer:
 
             # 如果文件不存在，返回未查询
             if not os.path.exists(query_results_file):
+                self.logger.info(f"查询结果文件不存在: {query_results_file} (query_type={query_type})")
                 return False, None
 
             # 读取文件内容
+            self.logger.info(f"读取查询结果文件: {query_results_file} (query_type={query_type})")
             with open(query_results_file, 'r', encoding='utf-8') as f:
                 content = f.read()
 
@@ -11456,14 +11458,21 @@ class FitsImageViewer:
                 match = re.search(r'变星列表:\n((?:  - .*\n)+)', content)
                 if match:
                     result_lines = match.group(1).strip()
+                    line_count = len(result_lines.split('\n'))
+                    self.logger.info(f"VSX检查: 匹配到变星列表，共 {line_count} 行")
                     if '(未查询)' in result_lines:
+                        self.logger.info("VSX检查: 标记为(未查询)，返回未查询")
                         return False, None  # 未查询
                     elif '(已查询，未找到)' in result_lines:
+                        self.logger.info("VSX检查: 标记为(已查询，未找到)")
                         return True, "已查询，未找到"  # 已查询但未找到
                     else:
                         # 已查询且找到结果
                         count = len(result_lines.split('\n'))
+                        self.logger.info(f"VSX检查: 已查询且找到 {count} 个")
                         return True, f"已查询，找到 {count} 个"
+                else:
+                    self.logger.info("VSX检查: 未匹配到'变星列表'段，视为未查询")
             else:  # satellite
                 # 查找卫星列表部分
                 import re
@@ -13052,7 +13061,7 @@ class FitsImageViewer:
                         # 检查是否已经查询过变星
                         vsx_queried, vsx_result = self._check_existing_query_results('vsx')
                         if vsx_queried:
-                            self.logger.info(f"目标 {cutout_idx+1}: 已查询过变星，跳过")
+                            self.logger.info(f"目标 {cutout_idx+1}: 已查询过变星，跳过，结果={vsx_result}")
                             skipped_vsx_count += 1
                             continue
 
