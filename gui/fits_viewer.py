@@ -48,6 +48,12 @@ try:
 except ImportError:
     WCSChecker = None
 
+# 导入GOOD/BAD列表导出器
+try:
+    from gui.export_good_bad_list import GoodBadListExporter
+except ImportError:
+    GoodBadListExporter = None
+
 # AI GOOD/BAD 质量自动标记分类器（可选依赖）
 try:
     from ai_filter.classifier import AIPairQualityClassifier
@@ -584,6 +590,7 @@ class FitsImageViewer:
         ttk.Button(refresh_frame, text="跳转未查询", command=self._jump_to_next_unqueried).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="批量导出未查询", command=self._batch_export_unqueried).pack(side=tk.LEFT, padx=(5, 0))
         ttk.Button(refresh_frame, text="导出AI训练数据", command=self._export_ai_training_data).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Button(refresh_frame, text="导出GOOD/BAD列表", command=self._export_good_bad_list).pack(side=tk.LEFT, padx=(5, 0))
 
         # 高分检测结果跳转按钮（单独一行）
         high_score_frame = ttk.Frame(left_frame)
@@ -4318,6 +4325,19 @@ class FitsImageViewer:
             err = f"导出AI训练数据失败: {str(e)}"
             self.logger.error(err, exc_info=True)
             messagebox.showerror("错误", err)
+
+    def _export_good_bad_list(self):
+        """导出GOOD/BAD标记目标的详细信息列表。
+
+        导出内容包括：序号、文件目录、对齐后文件名、FITS中心坐标、
+        文件名中的时间、像素坐标、RA/DEC坐标。
+        """
+        if GoodBadListExporter is None:
+            messagebox.showerror("错误", "GOOD/BAD列表导出模块未加载")
+            return
+
+        exporter = GoodBadListExporter(self, self.logger)
+        exporter.export()
 
 
 
