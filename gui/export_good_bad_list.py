@@ -330,25 +330,29 @@ class GoodBadListExporter:
             if not aligned_img or not detection_img:
                 return None
 
-            # File directory
-            file_dir = os.path.dirname(file_path)
+            # Find aligned FITS file (e.g. *_noise_cleaned_aligned.fits)
+            aligned_fits = find_aligned_fits(cutout_set, self.logger)
 
-            # Aligned filename
-            aligned_filename = os.path.basename(aligned_img) if aligned_img else ""
+            # File directory and aligned filename from aligned FITS
+            if aligned_fits:
+                file_dir = os.path.dirname(aligned_fits)
+                aligned_filename = os.path.basename(aligned_fits)
+            else:
+                file_dir = os.path.dirname(file_path)
+                aligned_filename = ""
 
-            # Extract time from filename
-            filename = os.path.basename(file_path)
-            time_str = extract_time_from_filename(filename)
+            # Extract time from aligned filename or original file path
+            time_str = extract_time_from_filename(aligned_filename)
+            if not time_str:
+                time_str = extract_time_from_filename(os.path.basename(file_path))
 
             # Get pixel coordinates
             pixel_x, pixel_y = extract_pixel_coords_from_cutout(detection_img)
 
             # Get RA/DEC for target
             ra_deg, dec_deg = None, None
-            if pixel_x is not None and pixel_y is not None:
-                aligned_fits = find_aligned_fits(cutout_set, self.logger)
-                if aligned_fits:
-                    ra_deg, dec_deg = pixel_to_radec(pixel_x, pixel_y, aligned_fits, self.logger)
+            if pixel_x is not None and pixel_y is not None and aligned_fits:
+                ra_deg, dec_deg = pixel_to_radec(pixel_x, pixel_y, aligned_fits, self.logger)
 
             return {
                 'file_dir': file_dir,
