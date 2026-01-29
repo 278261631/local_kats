@@ -223,7 +223,7 @@ class GoodBadListExporter:
         Export GOOD/BAD target list to text files.
 
         Export format:
-        - Output directory: {output_root}/good_bad_list/{date}{region}/
+        - Output directory: {output_root}/good_bad_list/{date}{region}/ (per date/region)
         - File names: good-{time}.txt, bad-{time}.txt
         - Content: index, file_dir, aligned_filename, template_aligned_filename,
                    fits_center, time, pixel_xy, ra_dec
@@ -253,43 +253,53 @@ class GoodBadListExporter:
                 messagebox.showinfo("Info", "No FITS files found in selected directory")
                 return
 
-            # 3. Process files and collect GOOD/BAD targets
-            good_records = []
-            bad_records = []
-            date_region_set = set()
+            # 3. Process files and collect GOOD/BAD targets (grouped by date/region/time)
+            good_records_by_drt = {}
+            bad_records_by_drt = {}
 
             self.logger.info("=" * 60)
             self.logger.info(f"Starting GOOD/BAD list export: {len(file_nodes)} files")
 
             for file_node in file_nodes:
-                self._process_file_node(file_node, good_records, bad_records, date_region_set)
+                self._process_file_node(file_node, good_records_by_drt, bad_records_by_drt)
 
-            if not good_records and not bad_records:
+            if not good_records_by_drt and not bad_records_by_drt:
                 messagebox.showinfo("Info", "No GOOD/BAD labeled targets found")
                 return
 
-            # 4. Determine output directory
-            output_dir = self._get_output_directory(date_region_set)
-            if not output_dir:
+            # 4. Determine output root directory
+            output_root = self._get_output_root_directory()
+            if not output_root:
                 messagebox.showerror("Error", "Cannot determine output directory")
                 return
 
-            os.makedirs(output_dir, exist_ok=True)
-
-            # 5. Write output files
+            # 5. Write output files (per date/region/time)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            good_count = self._write_records(output_dir, "good", timestamp, good_records)
-            bad_count = self._write_records(output_dir, "bad", timestamp, bad_records)
+            total_good = 0
+            total_bad = 0
+
+            all_keys = set(good_records_by_drt.keys()) | set(bad_records_by_drt.keys())
+            for date_str, region_str, time_str in sorted(all_keys):
+                date_str = date_str or "unknown"
+                region_str = region_str or "unknown"
+                time_str = time_str or "unknown_time"
+                output_dir = os.path.join(output_root, f"{date_str}{region_str}", time_str)
+                os.makedirs(output_dir, exist_ok=True)
+
+                good_records = good_records_by_drt.get((date_str, region_str, time_str), [])
+                bad_records = bad_records_by_drt.get((date_str, region_str, time_str), [])
+                total_good += self._write_records(output_dir, "good", timestamp, good_records)
+                total_bad += self._write_records(output_dir, "bad", timestamp, bad_records)
 
             # 6. Show result
             msg = (
                 f"Export completed!\n\n"
-                f"GOOD records: {good_count}\n"
-                f"BAD records: {bad_count}\n\n"
-                f"Output directory:\n{output_dir}"
+                f"GOOD records: {total_good}\n"
+                f"BAD records: {total_bad}\n\n"
+                f"Output root:\n{output_root}"
             )
             messagebox.showinfo("Export GOOD/BAD List", msg)
-            self.logger.info(f"Export completed: GOOD={good_count}, BAD={bad_count}")
+            self.logger.info(f"Export completed: GOOD={total_good}, BAD={total_bad}")
 
         except Exception as e:
             err = f"Export failed: {str(e)}"
@@ -307,8 +317,7 @@ class GoodBadListExporter:
             for child in self.viewer.directory_tree.get_children(node):
                 self._collect_file_nodes(child, file_nodes)
 
-    def _process_file_node(self, file_node, good_records: list, bad_records: list,
-                           date_region_set: set):
+    def _process_file_node(self, file_node, good_records_by_drt: dict, bad_records_by_drt: dict):
         """Process a single file node and extract GOOD/BAD targets."""
         try:
             values = self.viewer.directory_tree.item(file_node, "values")
@@ -330,8 +339,8 @@ class GoodBadListExporter:
 
             # Extract date and region
             date_str, region_str = extract_date_region_from_path(file_path)
-            if date_str and region_str:
-                date_region_set.add((date_str, region_str))
+            date_str = date_str or "unknown"
+            region_str = region_str or "unknown"
 
             # Get FITS center coordinates
             fits_center_ra, fits_center_dec = get_fits_center_coords(file_path, self.logger)
@@ -350,10 +359,12 @@ class GoodBadListExporter:
                 )
 
                 if record:
+                    time_str = record.get("time_str") or "unknown_time"
+                    key = (date_str, region_str, time_str)
                     if label_lower == "good":
-                        good_records.append(record)
+                        good_records_by_drt.setdefault(key, []).append(record)
                     else:
-                        bad_records.append(record)
+                        bad_records_by_drt.setdefault(key, []).append(record)
 
         except Exception as e:
             self.logger.error(f"Error processing file node: {e}", exc_info=True)
@@ -415,8 +426,8 @@ class GoodBadListExporter:
             self.logger.warning(f"Failed to build record: {e}")
             return None
 
-    def _get_output_directory(self, date_region_set: set) -> str:
-        """Determine output directory based on date and region."""
+    def _get_output_root_directory(self) -> str:
+        """Determine output root directory for GOOD/BAD list exports."""
         try:
             # Get diff output directory from config
             if hasattr(self.viewer, 'config_manager') and self.viewer.config_manager:
@@ -433,14 +444,7 @@ class GoodBadListExporter:
                                 break
 
                 if diff_output_dir:
-                    # Build subdirectory name from date and region
-                    if date_region_set:
-                        date_str, region_str = next(iter(date_region_set))
-                        subdir = f"{date_str}{region_str}"
-                    else:
-                        subdir = datetime.now().strftime("%Y%m%d")
-
-                    return os.path.join(diff_output_dir, "good_bad_list", subdir)
+                    return os.path.join(diff_output_dir, "good_bad_list")
 
             return None
         except Exception as e:
