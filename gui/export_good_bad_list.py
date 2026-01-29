@@ -140,6 +140,43 @@ def find_aligned_fits(cutout_set: dict, logger: logging.Logger = None) -> str:
     return None
 
 
+def find_template_aligned_fits(aligned_fits: str, file_path: str,
+                               logger: logging.Logger = None) -> str:
+    """
+    Find the aligned template FITS file (e.g. K053-1_noise_cleaned_aligned.fits).
+
+    Preference:
+    - filename starts with "K" and matches *noise_cleaned_aligned.fits
+    """
+    try:
+        search_dirs = []
+        if aligned_fits:
+            search_dirs.append(Path(aligned_fits).parent)
+        if file_path:
+            search_dirs.append(Path(file_path).parent)
+
+        seen = set()
+        for search_dir in search_dirs:
+            if not search_dir or not search_dir.exists():
+                continue
+            if search_dir in seen:
+                continue
+            seen.add(search_dir)
+
+            candidates = list(search_dir.glob("*noise_cleaned_aligned.fits"))
+            if not candidates:
+                continue
+
+            for candidate in sorted(candidates):
+                if candidate.name.upper().startswith("K"):
+                    return str(candidate)
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to find template aligned FITS: {e}")
+
+    return None
+
+
 def extract_date_region_from_path(file_path: str) -> tuple:
     """
     Extract date and region from file path.
@@ -188,7 +225,8 @@ class GoodBadListExporter:
         Export format:
         - Output directory: {output_root}/good_bad_list/{date}{region}/
         - File names: good-{time}.txt, bad-{time}.txt
-        - Content: index, file_dir, aligned_filename, fits_center, time, pixel_xy, ra_dec
+        - Content: index, file_dir, aligned_filename, template_aligned_filename,
+                   fits_center, time, pixel_xy, ra_dec
         """
         from tkinter import messagebox
 
@@ -332,6 +370,9 @@ class GoodBadListExporter:
 
             # Find aligned FITS file (e.g. *_noise_cleaned_aligned.fits)
             aligned_fits = find_aligned_fits(cutout_set, self.logger)
+            template_aligned_fits = find_template_aligned_fits(
+                aligned_fits, file_path, self.logger
+            )
 
             # File directory and aligned filename from aligned FITS
             if aligned_fits:
@@ -340,6 +381,10 @@ class GoodBadListExporter:
             else:
                 file_dir = os.path.dirname(file_path)
                 aligned_filename = ""
+
+            template_aligned_filename = (
+                os.path.basename(template_aligned_fits) if template_aligned_fits else ""
+            )
 
             # Extract time from aligned filename or original file path
             time_str = extract_time_from_filename(aligned_filename)
@@ -357,6 +402,7 @@ class GoodBadListExporter:
             return {
                 'file_dir': file_dir,
                 'aligned_filename': aligned_filename,
+                'template_aligned_filename': template_aligned_filename,
                 'fits_center_ra': fits_center_ra,
                 'fits_center_dec': fits_center_dec,
                 'time_str': time_str,
@@ -418,7 +464,7 @@ class GoodBadListExporter:
                 f.write(f"# Export Time: {timestamp}\n")
                 f.write(f"# Total Records: {len(records)}\n")
                 f.write("#" + "=" * 79 + "\n")
-                f.write("# Format: index file_dir aligned_filename ")
+                f.write("# Format: index file_dir aligned_filename template_aligned_filename ")
                 f.write("fits_center_ra fits_center_dec time pixel_x pixel_y ra dec\n")
                 f.write("#" + "=" * 79 + "\n\n")
 
@@ -445,6 +491,7 @@ class GoodBadListExporter:
             f"{idx:04d}",
             rec.get('file_dir', 'N/A'),
             rec.get('aligned_filename', 'N/A'),
+            rec.get('template_aligned_filename', 'N/A'),
             fmt_coord(rec.get('fits_center_ra')),
             fmt_coord(rec.get('fits_center_dec')),
             rec.get('time_str', 'N/A'),
