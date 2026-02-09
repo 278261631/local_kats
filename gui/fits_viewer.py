@@ -4179,6 +4179,38 @@ class FitsImageViewer:
                     idx_ += 1
                 return os.path.join(dest_dir_, f"{root_name_}_{idx_}{ext_}")
 
+            def _sanitize_export_prefix(name_: str) -> str:
+                """清洗导出文件名前缀，去掉不想要的相机参数片段。
+
+                例如：
+                GY5_K053-1_No%20Filter_60S_Bin2_UTC20250628_190147_-15C
+                -> GY5_K053-1_20250628_190147
+                """
+                if not name_:
+                    return name_
+
+                s_ = str(name_)
+                try:
+                    # 去掉 No%20Filter / 曝光 / Bin / UTC 标记（保留后面的日期时间）
+                    s_ = re.sub(r"(?i)No%20Filter_?", "", s_)
+                    s_ = re.sub(r"(?i)_\d+S", "", s_)
+                    s_ = re.sub(r"(?i)_Bin\d+", "", s_)
+                    s_ = re.sub(r"(?i)_UTC(?=\d)", "_", s_)
+
+                    # 去掉温度，如 _-15C 或 -15C
+                    s_ = re.sub(r"(?i)_-?\d+C", "", s_)
+                    s_ = re.sub(r"(?i)-?\d+C", "", s_)
+
+                    # 去掉 _1024（避免把裁剪尺寸写进名字）
+                    s_ = re.sub(r"(?i)_1024$", "", s_)
+
+                    # 清理多余分隔符
+                    s_ = re.sub(r"__+", "_", s_)
+                    s_ = s_.strip("_- ")
+                    return s_
+                except Exception:
+                    return name_
+
             def _pick_reference_and_aligned_fits(fits_dir_: Path):
                 """在 fits_dir_ 中选择 reference(模板) / aligned(对齐后下载图) 两个 FITS。
 
@@ -4412,6 +4444,7 @@ class FitsImageViewer:
                         continue
 
                     fits_basename = os.path.splitext(os.path.basename(file_path))[0]
+                    export_prefix = _sanitize_export_prefix(fits_basename)
 
                     # 尝试为该 FITS 文件确定 reference/aligned 原始 FITS 路径（整文件复用，避免每个 cutout 重复查找）
                     ref_fits_path = None
@@ -4452,7 +4485,7 @@ class FitsImageViewer:
                         def _copy_with_prefix(src_path: str) -> bool:
                             """以 fits_basename 为前缀复制单个文件，处理重名，成功返回 True。"""
                             src_name = os.path.basename(src_path)
-                            base_name = f"{fits_basename}_{src_name}"
+                            base_name = f"{export_prefix}_{src_name}"
                             dst_path = os.path.join(dest_dir, base_name)
 
                             if os.path.exists(dst_path):
@@ -4496,7 +4529,7 @@ class FitsImageViewer:
                                             cx,
                                             cy,
                                             dest_dir,
-                                            f"{fits_basename}_{idx_prefix}_1_reference_1024.fits",
+                                            f"{export_prefix}_{idx_prefix}_1_reference.fits",
                                         )
                                     else:
                                         ok_rf = False
@@ -4507,7 +4540,7 @@ class FitsImageViewer:
                                             cx,
                                             cy,
                                             dest_dir,
-                                            f"{fits_basename}_{idx_prefix}_2_aligned_1024.fits",
+                                            f"{export_prefix}_{idx_prefix}_2_aligned.fits",
                                         )
                                     else:
                                         ok_af = False
