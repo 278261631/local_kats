@@ -4160,10 +4160,170 @@ class FitsImageViewer:
         导出规则：
         - 仅导出手工标记 manual_label 为 'good' 或 'bad' 的目标；
         - *成对*导出 cutout 的 "*_1_reference.png" 和 "*_2_aligned.png" 两张图；
+        - 同时导出 reference/aligned 对应的原始 FITS 图中，以目标中心为中心的 1024x1024 区域（若越界则自动补零）；
         - GOOD/BAD 分别保存到 <根目录>/good 和 <根目录>/bad；
         - 输出文件名采用 "<FITS文件名去扩展>_<原文件名>", 如有重名则自动追加序号。
         """
         try:
+            import re
+            from pathlib import Path
+
+            def _ensure_unique_path(dest_dir_: str, base_filename_: str) -> str:
+                """返回一个不会重名的目标路径（若已存在则追加 _1/_2...）。"""
+                dst_path_ = os.path.join(dest_dir_, base_filename_)
+                if not os.path.exists(dst_path_):
+                    return dst_path_
+                root_name_, ext_ = os.path.splitext(base_filename_)
+                idx_ = 1
+                while os.path.exists(os.path.join(dest_dir_, f"{root_name_}_{idx_}{ext_}")):
+                    idx_ += 1
+                return os.path.join(dest_dir_, f"{root_name_}_{idx_}{ext_}")
+
+            def _pick_reference_and_aligned_fits(fits_dir_: Path):
+                """在 fits_dir_ 中选择 reference(模板) / aligned(对齐后下载图) 两个 FITS。
+
+                约定（来自 diff_orb 输出）：
+                - 模板文件通常以 "K" 开头（如 K053-1_noise_cleaned_aligned.fits）
+                - 下载/对齐文件通常以 "GY" 开头（如 GY1_K053-1_noise_cleaned_aligned.fits）
+                """
+                if not fits_dir_ or not fits_dir_.exists():
+                    return None, None
+
+                all_fits_ = []
+                for pat in ("*.fits", "*.fit", "*.fts"):
+                    all_fits_.extend(list(fits_dir_.glob(pat)))
+
+                if not all_fits_:
+                    return None, None
+
+                # 优先 noise_cleaned_aligned（且非 stretched）
+                preferred_ = [
+                    f for f in all_fits_
+                    if ("noise_cleaned_aligned" in f.name.lower() and "stretched" not in f.name.lower())
+                ]
+                candidates_ = preferred_ if preferred_ else all_fits_
+
+                # 再次收缩到 aligned 相关文件，避免误选原始未对齐 FITS
+                aligned_like_ = [f for f in candidates_ if "aligned" in f.name.lower()]
+                candidates_ = aligned_like_ if aligned_like_ else candidates_
+
+                # 选择模板(reference) 与 对齐图(aligned)
+                ref_ = next((f for f in candidates_ if re.match(r"^k\d", f.name, re.IGNORECASE)), None)
+                ali_ = next((f for f in candidates_ if re.match(r"^gy\d", f.name, re.IGNORECASE)), None)
+
+                if ref_ and not ali_:
+                    ali_ = next((f for f in candidates_ if f != ref_), None)
+                if ali_ and not ref_:
+                    ref_ = next((f for f in candidates_ if f != ali_), None)
+
+                # 兜底：如果仍无法区分，但恰好两个候选，则按名字排序取前后
+                if (ref_ is None or ali_ is None) and len(candidates_) == 2:
+                    s_ = sorted(candidates_, key=lambda p: p.name.lower())
+                    ref_ = ref_ or s_[0]
+                    ali_ = ali_ or s_[1]
+
+                return ref_, ali_
+
+            def _get_cutout_center_xy_from_detection_filename(detection_img_path_: str, aligned_fits_path_: Path):
+                """从 detection cutout 文件名提取中心像素坐标（在 aligned 坐标系下）。"""
+                if not detection_img_path_:
+                    return None
+                name_ = os.path.basename(detection_img_path_)
+
+                m_xy_ = re.search(r"X(\d+)_Y(\d+)", name_)
+                if m_xy_:
+                    return float(m_xy_.group(1)), float(m_xy_.group(2))
+
+                m_radec_ = re.search(r"RA([\d.]+)_DEC([-\d.]+)", name_, re.IGNORECASE)
+                if m_radec_ and aligned_fits_path_ and aligned_fits_path_.exists():
+                    try:
+                        from astropy.io import fits as _fits
+                        from astropy.wcs import WCS as _WCS
+                        ra_ = float(m_radec_.group(1))
+                        dec_ = float(m_radec_.group(2))
+                        with _fits.open(aligned_fits_path_, memmap=True) as hdul_:
+                            hdr_ = hdul_[0].header
+                            wcs_ = _WCS(hdr_)
+                            pix_ = wcs_.all_world2pix([[ra_, dec_]], 0)
+                            return float(pix_[0][0]), float(pix_[0][1])
+                    except Exception:
+                        return None
+                return None
+
+            def _export_fits_cutout_1024(src_fits_path_: Path, center_x_: float, center_y_: float, dest_dir_: str, out_basename_: str) -> bool:
+                """从 src_fits_path_ 裁剪 1024x1024 区域并写入 dest_dir_。"""
+                try:
+                    from astropy.io import fits as _fits
+                    import numpy as _np
+
+                    if not src_fits_path_ or not src_fits_path_.exists():
+                        return False
+
+                    size_ = 1024
+                    half_ = size_ // 2
+                    cx_ = int(round(center_x_))
+                    cy_ = int(round(center_y_))
+                    x0_ = cx_ - half_
+                    y0_ = cy_ - half_
+                    x1_ = x0_ + size_
+                    y1_ = y0_ + size_
+
+                    with _fits.open(src_fits_path_, memmap=True) as hdul_:
+                        hdr_ = hdul_[0].header
+                        data_ = hdul_[0].data
+                        if data_ is None:
+                            return False
+                        # 兼容多维，取最后两维作为图像
+                        if getattr(data_, "ndim", 0) > 2:
+                            data2_ = data_[0]
+                        else:
+                            data2_ = data_
+
+                        h_, w_ = data2_.shape[-2], data2_.shape[-1]
+                        out_ = _np.zeros((size_, size_), dtype=data2_.dtype)
+
+                        ox0_ = max(0, x0_)
+                        oy0_ = max(0, y0_)
+                        ox1_ = min(w_, x1_)
+                        oy1_ = min(h_, y1_)
+                        if ox1_ <= ox0_ or oy1_ <= oy0_:
+                            return False
+
+                        dx0_ = ox0_ - x0_
+                        dy0_ = oy0_ - y0_
+                        dx1_ = dx0_ + (ox1_ - ox0_)
+                        dy1_ = dy0_ + (oy1_ - oy0_)
+
+                        out_[dy0_:dy1_, dx0_:dx1_] = data2_[oy0_:oy1_, ox0_:ox1_]
+
+                        new_hdr_ = hdr_.copy()
+                        # 尝试更新 WCS 的参考像素（如果存在）
+                        try:
+                            if "CRPIX1" in new_hdr_:
+                                new_hdr_["CRPIX1"] = float(new_hdr_["CRPIX1"]) - float(x0_)
+                            if "CRPIX2" in new_hdr_:
+                                new_hdr_["CRPIX2"] = float(new_hdr_["CRPIX2"]) - float(y0_)
+                        except Exception:
+                            pass
+
+                        new_hdr_["NAXIS1"] = size_
+                        new_hdr_["NAXIS2"] = size_
+                        try:
+                            new_hdr_.add_history(f"AI export cutout: {size_}x{size_}, center=({cx_},{cy_}), origin=({x0_},{y0_})")
+                        except Exception:
+                            pass
+
+                    os.makedirs(dest_dir_, exist_ok=True)
+                    dst_path_ = _ensure_unique_path(dest_dir_, out_basename_)
+                    _fits.writeto(dst_path_, out_, header=new_hdr_, overwrite=True)
+                    return True
+                except Exception as e_:
+                    try:
+                        self.logger.warning(f"导出FITS 1024x1024 失败: {src_fits_path_} -> {dest_dir_}, 错误: {e_}")
+                    except Exception:
+                        pass
+                    return False
+
             # 1. 读取配置中的导出根目录
             if not self.config_manager:
                 messagebox.showerror("错误", "配置管理器未初始化")
@@ -4226,6 +4386,8 @@ class FitsImageViewer:
             total_files = len(file_nodes)
             exported_good_pairs = 0
             exported_bad_pairs = 0
+            exported_good_fits = 0
+            exported_bad_fits = 0
             processed_files = 0
 
             self.logger.info("=" * 60)
@@ -4250,6 +4412,20 @@ class FitsImageViewer:
                         continue
 
                     fits_basename = os.path.splitext(os.path.basename(file_path))[0]
+
+                    # 尝试为该 FITS 文件确定 reference/aligned 原始 FITS 路径（整文件复用，避免每个 cutout 重复查找）
+                    ref_fits_path = None
+                    ali_fits_path = None
+                    try:
+                        if self._all_cutout_sets:
+                            any_det_img = (self._all_cutout_sets[0] or {}).get("detection")
+                            if any_det_img:
+                                cutout_dir0 = Path(any_det_img).parent
+                                detection_dir0 = cutout_dir0.parent
+                                fits_dir0 = detection_dir0.parent
+                                ref_fits_path, ali_fits_path = _pick_reference_and_aligned_fits(fits_dir0)
+                    except Exception:
+                        ref_fits_path, ali_fits_path = None, None
 
                     for cutout_set in self._all_cutout_sets:
                         label = (cutout_set or {}).get("manual_label")
@@ -4301,6 +4477,50 @@ class FitsImageViewer:
                             else:
                                 exported_bad_pairs += 1
 
+                        # 额外导出 reference/aligned 原始 FITS 的 1024x1024 区域（以 detection 文件名中的中心像素为中心）
+                        try:
+                            det_img = (cutout_set or {}).get("detection")
+                            if det_img and (ref_fits_path or ali_fits_path):
+                                # 使用 aligned FITS（若存在）辅助解析 RA/DEC 格式
+                                center_xy = _get_cutout_center_xy_from_detection_filename(det_img, ali_fits_path or ref_fits_path)
+                                if center_xy:
+                                    cx, cy = center_xy
+                                    # 从 detection 文件名提取序号（如 001_...），用于命名更稳定
+                                    det_base = os.path.basename(det_img)
+                                    m_idx = re.match(r"^(\d{3})_", det_base)
+                                    idx_prefix = m_idx.group(1) if m_idx else "idx"
+
+                                    if ref_fits_path:
+                                        ok_rf = _export_fits_cutout_1024(
+                                            ref_fits_path,
+                                            cx,
+                                            cy,
+                                            dest_dir,
+                                            f"{fits_basename}_{idx_prefix}_1_reference_1024.fits",
+                                        )
+                                    else:
+                                        ok_rf = False
+
+                                    if ali_fits_path:
+                                        ok_af = _export_fits_cutout_1024(
+                                            ali_fits_path,
+                                            cx,
+                                            cy,
+                                            dest_dir,
+                                            f"{fits_basename}_{idx_prefix}_2_aligned_1024.fits",
+                                        )
+                                    else:
+                                        ok_af = False
+
+                                    if ok_rf and ok_af:
+                                        if label_lower == "good":
+                                            exported_good_fits += 1
+                                        else:
+                                            exported_bad_fits += 1
+                        except Exception:
+                            # FITS裁剪导出失败不影响 PNG 导出
+                            pass
+
                     processed_files += 1
 
                 except Exception as e:
@@ -4312,6 +4532,8 @@ class FitsImageViewer:
                 f"处理FITS文件数: {processed_files} / {total_files}\n"
                 f"GOOD 样本(对，ref+aligned): {exported_good_pairs}\n"
                 f"BAD 样本(对，ref+aligned): {exported_bad_pairs}\n\n"
+                f"GOOD FITS(对，ref+aligned, 1024x1024): {exported_good_fits}\n"
+                f"BAD FITS(对，ref+aligned, 1024x1024): {exported_bad_fits}\n\n"
                 f"导出根目录: {export_root}"
             )
             messagebox.showinfo("导出AI训练数据", msg)
