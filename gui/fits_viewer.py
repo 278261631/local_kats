@@ -4198,15 +4198,16 @@ class FitsImageViewer:
                 "bad": 2,
             }
 
-            def _paint_5x5(mask_: "np.ndarray", x_: int, y_: int, code_: int, overwrite_: bool = False):
-                """在 mask_ 上以 (x_, y_) 为中心绘制 5x5 方块（越界自动裁剪）。"""
+            def _paint_11x11(mask_: "np.ndarray", x_: int, y_: int, code_: int, overwrite_: bool = False):
+                """在 mask_ 上以 (x_, y_) 为中心绘制 11x11 方块（越界自动裁剪）。"""
                 if mask_ is None:
                     return
                 h_, w_ = mask_.shape[:2]
-                x0_ = max(0, int(x_) - 2)
-                x1_ = min(w_, int(x_) + 3)
-                y0_ = max(0, int(y_) - 2)
-                y1_ = min(h_, int(y_) + 3)
+                # 11x11 => 半径 5（包含中心）
+                x0_ = max(0, int(x_) - 5)
+                x1_ = min(w_, int(x_) + 6)
+                y0_ = max(0, int(y_) - 5)
+                y1_ = min(h_, int(y_) + 6)
                 if x1_ <= x0_ or y1_ <= y0_:
                     return
                 if overwrite_:
@@ -4438,8 +4439,8 @@ class FitsImageViewer:
                     "version": "1.0",
                     "mask_types": [
                         {"name": "normal", "code": MASK_CODEBOOK["normal"], "desc": "非 good/bad 区域"},
-                        {"name": "good", "code": MASK_CODEBOOK["good"], "desc": "good 目标附近 5x5 像素"},
-                        {"name": "bad", "code": MASK_CODEBOOK["bad"], "desc": "bad 目标附近 5x5 像素（覆盖 good）"},
+                        {"name": "good", "code": MASK_CODEBOOK["good"], "desc": "good 目标附近 11x11 像素"},
+                        {"name": "bad", "code": MASK_CODEBOOK["bad"], "desc": "bad 目标附近 11x11 像素（覆盖 good）"},
                     ],
                     "note": "mask 为 8-bit 灰度 PNG，像素值为 code；同一 tile 可包含多个 good/bad。",
                 }
@@ -4667,10 +4668,10 @@ class FitsImageViewer:
 
                                 # 先画 good（只覆盖 normal）
                                 for (lx, ly) in goods:
-                                    _paint_5x5(mask, lx, ly, MASK_CODEBOOK["good"], overwrite_=False)
+                                    _paint_11x11(mask, lx, ly, MASK_CODEBOOK["good"], overwrite_=False)
                                 # 再画 bad（强制覆盖）
                                 for (lx, ly) in bads:
-                                    _paint_5x5(mask, lx, ly, MASK_CODEBOOK["bad"], overwrite_=True)
+                                    _paint_11x11(mask, lx, ly, MASK_CODEBOOK["bad"], overwrite_=True)
 
                                 mask_name = f"{export_prefix}_tile{tile_idx:04d}_mask.png"
                                 mask_path = _ensure_unique_path(tiles_dir, mask_name)
