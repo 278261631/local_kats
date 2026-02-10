@@ -4283,20 +4283,34 @@ class FitsImageViewer:
                 return None
 
             def _export_fits_cutout_1024(src_fits_path_: Path, center_x_: float, center_y_: float, dest_dir_: str, out_basename_: str) -> bool:
-                """从 src_fits_path_ 裁剪 1024x1024 区域并写入 dest_dir_。"""
+                """从 src_fits_path_ 按 1024x1024 网格分块导出目标所在 tile，并写入 dest_dir_。
+
+                规则：
+                - 先用目标像素坐标(center_x_/center_y_)计算所属 tile：
+                  x0=floor(x/1024)*1024, y0=floor(y/1024)*1024
+                - 导出该 tile（越界补零到 1024x1024）
+                - 同步更新 header 中 CRPIX1/CRPIX2（若存在）
+
+                Returns:
+                    (ok, new_x, new_y): new_x/new_y 为目标在 tile 内的新像素坐标（0-based）
+                """
                 try:
                     from astropy.io import fits as _fits
                     import numpy as _np
 
                     if not src_fits_path_ or not src_fits_path_.exists():
-                        return False
+                        return False, None, None
 
                     size_ = 1024
-                    half_ = size_ // 2
                     cx_ = int(round(center_x_))
                     cy_ = int(round(center_y_))
-                    x0_ = cx_ - half_
-                    y0_ = cy_ - half_
+
+                    # 计算所属 tile 的左上角（0-based）
+                    # cx_/cy_ 已是 int，直接用整除即可
+                    tile_x_ = cx_ // size_
+                    tile_y_ = cy_ // size_
+                    x0_ = tile_x_ * size_
+                    y0_ = tile_y_ * size_
                     x1_ = x0_ + size_
                     y1_ = y0_ + size_
 
@@ -4319,7 +4333,7 @@ class FitsImageViewer:
                         ox1_ = min(w_, x1_)
                         oy1_ = min(h_, y1_)
                         if ox1_ <= ox0_ or oy1_ <= oy0_:
-                            return False
+                            return False, None, None
 
                         dx0_ = ox0_ - x0_
                         dy0_ = oy0_ - y0_
@@ -4341,20 +4355,23 @@ class FitsImageViewer:
                         new_hdr_["NAXIS1"] = size_
                         new_hdr_["NAXIS2"] = size_
                         try:
-                            new_hdr_.add_history(f"AI export cutout: {size_}x{size_}, center=({cx_},{cy_}), origin=({x0_},{y0_})")
+                            new_hdr_.add_history(
+                                f"AI export tile: {size_}x{size_}, target=({cx_},{cy_}), tile_origin=({x0_},{y0_}), "
+                                f"target_in_tile=({cx_ - x0_},{cy_ - y0_})"
+                            )
                         except Exception:
                             pass
 
                     os.makedirs(dest_dir_, exist_ok=True)
                     dst_path_ = _ensure_unique_path(dest_dir_, out_basename_)
                     _fits.writeto(dst_path_, out_, header=new_hdr_, overwrite=True)
-                    return True
+                    return True, int(cx_ - x0_), int(cy_ - y0_)
                 except Exception as e_:
                     try:
                         self.logger.warning(f"导出FITS 1024x1024 失败: {src_fits_path_} -> {dest_dir_}, 错误: {e_}")
                     except Exception:
                         pass
-                    return False
+                    return False, None, None
 
             # 1. 读取配置中的导出根目录
             if not self.config_manager:
@@ -4518,32 +4535,38 @@ class FitsImageViewer:
                                 center_xy = _get_cutout_center_xy_from_detection_filename(det_img, ali_fits_path or ref_fits_path)
                                 if center_xy:
                                     cx, cy = center_xy
+                                    cx_i = int(round(cx))
+                                    cy_i = int(round(cy))
+                                    tile_x = cx_i // 1024
+                                    tile_y = cy_i // 1024
+                                    local_x = cx_i - tile_x * 1024
+                                    local_y = cy_i - tile_y * 1024
                                     # 从 detection 文件名提取序号（如 001_...），用于命名更稳定
                                     det_base = os.path.basename(det_img)
                                     m_idx = re.match(r"^(\d{3})_", det_base)
                                     idx_prefix = m_idx.group(1) if m_idx else "idx"
 
                                     if ref_fits_path:
-                                        ok_rf = _export_fits_cutout_1024(
+                                        ok_rf, new_x, new_y = _export_fits_cutout_1024(
                                             ref_fits_path,
                                             cx,
                                             cy,
                                             dest_dir,
-                                            f"{export_prefix}_{idx_prefix}_1_reference.fits",
+                                            f"{export_prefix}_{idx_prefix}_1_reference_X{local_x:04d}_Y{local_y:04d}.fits",
                                         )
                                     else:
-                                        ok_rf = False
+                                        ok_rf, new_x, new_y = False, None, None
 
                                     if ali_fits_path:
-                                        ok_af = _export_fits_cutout_1024(
+                                        ok_af, new_x2, new_y2 = _export_fits_cutout_1024(
                                             ali_fits_path,
                                             cx,
                                             cy,
                                             dest_dir,
-                                            f"{export_prefix}_{idx_prefix}_2_aligned.fits",
+                                            f"{export_prefix}_{idx_prefix}_2_aligned_X{local_x:04d}_Y{local_y:04d}.fits",
                                         )
                                     else:
-                                        ok_af = False
+                                        ok_af, new_x2, new_y2 = False, None, None
 
                                     if ok_rf and ok_af:
                                         if label_lower == "good":
