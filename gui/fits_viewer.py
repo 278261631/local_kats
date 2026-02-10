@@ -4163,10 +4163,22 @@ class FitsImageViewer:
         - 同时导出 reference/aligned 对应的原始 FITS 图中，以目标中心为中心的 1024x1024 区域（若越界则自动补零）；
         - GOOD/BAD 分别保存到 <根目录>/good 和 <根目录>/bad；
         - 输出文件名采用 "<FITS文件名去扩展>_<原文件名>", 如有重名则自动追加序号。
+
+        1024x1024 FITS 裁剪（tile）导出规则（2026-02 更新）：
+        - 以 1024 网格 tile 为单位导出，每个 tile 只导出一次（即使同一个 tile 上有多个 good/bad）；
+        - tile 文件名使用从 1 开始的索引号，不再在文件名中包含目标的 XY 坐标；
+        - 目标位置通过 mask 文件输出（同一 tile 内可以包含多个 good 与多个 bad）：
+          normal: 0（非 good/bad 区域）
+          good:   1（good 目标附近 5x5 像素）
+          bad:    2（bad 目标附近 5x5 像素，优先级覆盖 good）
+        - tile FITS 与 mask 保存到 <根目录>/tiles 下；
+        - 同时在 <根目录>/mask_codebook.json 输出 mask 种类与码表。
         """
         try:
             import re
             from pathlib import Path
+            import numpy as np
+            from PIL import Image as PILImage
 
             def _ensure_unique_path(dest_dir_: str, base_filename_: str) -> str:
                 """返回一个不会重名的目标路径（若已存在则追加 _1/_2...）。"""
@@ -4178,6 +4190,31 @@ class FitsImageViewer:
                 while os.path.exists(os.path.join(dest_dir_, f"{root_name_}_{idx_}{ext_}")):
                     idx_ += 1
                 return os.path.join(dest_dir_, f"{root_name_}_{idx_}{ext_}")
+
+            # mask 码表（uint8）
+            MASK_CODEBOOK = {
+                "normal": 0,
+                "good": 1,
+                "bad": 2,
+            }
+
+            def _paint_5x5(mask_: "np.ndarray", x_: int, y_: int, code_: int, overwrite_: bool = False):
+                """在 mask_ 上以 (x_, y_) 为中心绘制 5x5 方块（越界自动裁剪）。"""
+                if mask_ is None:
+                    return
+                h_, w_ = mask_.shape[:2]
+                x0_ = max(0, int(x_) - 2)
+                x1_ = min(w_, int(x_) + 3)
+                y0_ = max(0, int(y_) - 2)
+                y1_ = min(h_, int(y_) + 3)
+                if x1_ <= x0_ or y1_ <= y0_:
+                    return
+                if overwrite_:
+                    mask_[y0_:y1_, x0_:x1_] = code_
+                else:
+                    block_ = mask_[y0_:y1_, x0_:x1_]
+                    block_[block_ == MASK_CODEBOOK["normal"]] = code_
+                    mask_[y0_:y1_, x0_:x1_] = block_
 
             def _sanitize_export_prefix(name_: str) -> str:
                 """清洗导出文件名前缀，去掉不想要的相机参数片段。
@@ -4394,6 +4431,25 @@ class FitsImageViewer:
                 messagebox.showerror("错误", f"无法创建AI训练导出根目录: {export_root}\n{str(e)}")
                 return
 
+            # 写入 mask 码表索引文件（幂等覆盖）
+            try:
+                codebook_path = os.path.join(export_root, "mask_codebook.json")
+                payload = {
+                    "version": "1.0",
+                    "mask_types": [
+                        {"name": "normal", "code": MASK_CODEBOOK["normal"], "desc": "非 good/bad 区域"},
+                        {"name": "good", "code": MASK_CODEBOOK["good"], "desc": "good 目标附近 5x5 像素"},
+                        {"name": "bad", "code": MASK_CODEBOOK["bad"], "desc": "bad 目标附近 5x5 像素（覆盖 good）"},
+                    ],
+                    "note": "mask 为 8-bit 灰度 PNG，像素值为 code；同一 tile 可包含多个 good/bad。",
+                }
+                import json as _json
+                with open(codebook_path, "w", encoding="utf-8") as f:
+                    _json.dump(payload, f, ensure_ascii=False, indent=2)
+            except Exception:
+                # 写码表失败不影响导出主流程
+                pass
+
             # 2. 获取当前目录树选择
             selection = self.directory_tree.selection()
             if not selection:
@@ -4435,8 +4491,9 @@ class FitsImageViewer:
             total_files = len(file_nodes)
             exported_good_pairs = 0
             exported_bad_pairs = 0
-            exported_good_fits = 0
-            exported_bad_fits = 0
+            exported_tiles = 0
+            exported_tile_ref_ali_pairs = 0
+            exported_tile_masks = 0
             processed_files = 0
 
             self.logger.info("=" * 60)
@@ -4476,6 +4533,39 @@ class FitsImageViewer:
                                 ref_fits_path, ali_fits_path = _pick_reference_and_aligned_fits(fits_dir0)
                     except Exception:
                         ref_fits_path, ali_fits_path = None, None
+
+                    # 先收集该 FITS 文件中所有 tile 上的 good/bad 目标，用于导出 tile FITS 与 mask
+                    # tile_key = (tile_x, tile_y), values: {"first_cxcy": (cx, cy), "good": [(lx, ly)], "bad": [(lx, ly)]}
+                    tile_targets = {}
+                    for cutout_set in self._all_cutout_sets:
+                        label = (cutout_set or {}).get("manual_label")
+                        if not label:
+                            continue
+                        label_lower = str(label).lower()
+                        if label_lower not in ("good", "bad"):
+                            continue
+                        det_img = (cutout_set or {}).get("detection")
+                        if not det_img:
+                            continue
+                        if not (ref_fits_path or ali_fits_path):
+                            continue
+                        # 使用 aligned FITS（若存在）辅助解析 RA/DEC 格式
+                        center_xy = _get_cutout_center_xy_from_detection_filename(det_img, ali_fits_path or ref_fits_path)
+                        if not center_xy:
+                            continue
+                        cx, cy = center_xy
+                        cx_i = int(round(cx))
+                        cy_i = int(round(cy))
+                        tile_x = cx_i // 1024
+                        tile_y = cy_i // 1024
+                        local_x = cx_i - tile_x * 1024
+                        local_y = cy_i - tile_y * 1024
+                        key = (int(tile_x), int(tile_y))
+                        entry = tile_targets.get(key)
+                        if entry is None:
+                            entry = {"first_cxcy": (cx, cy), "good": [], "bad": []}
+                            tile_targets[key] = entry
+                        entry[label_lower].append((int(local_x), int(local_y)))
 
                     for cutout_set in self._all_cutout_sets:
                         label = (cutout_set or {}).get("manual_label")
@@ -4527,55 +4617,71 @@ class FitsImageViewer:
                             else:
                                 exported_bad_pairs += 1
 
-                        # 额外导出 reference/aligned 原始 FITS 的 1024x1024 区域（以 detection 文件名中的中心像素为中心）
-                        try:
-                            det_img = (cutout_set or {}).get("detection")
-                            if det_img and (ref_fits_path or ali_fits_path):
-                                # 使用 aligned FITS（若存在）辅助解析 RA/DEC 格式
-                                center_xy = _get_cutout_center_xy_from_detection_filename(det_img, ali_fits_path or ref_fits_path)
-                                if center_xy:
-                                    cx, cy = center_xy
-                                    cx_i = int(round(cx))
-                                    cy_i = int(round(cy))
-                                    tile_x = cx_i // 1024
-                                    tile_y = cy_i // 1024
-                                    local_x = cx_i - tile_x * 1024
-                                    local_y = cy_i - tile_y * 1024
-                                    # 从 detection 文件名提取序号（如 001_...），用于命名更稳定
-                                    det_base = os.path.basename(det_img)
-                                    m_idx = re.match(r"^(\d{3})_", det_base)
-                                    idx_prefix = m_idx.group(1) if m_idx else "idx"
+                    # 导出 1024x1024 tile FITS + mask（同一个 tile 只导出一次，mask 可包含多个 good/bad）
+                    try:
+                        if tile_targets and (ref_fits_path or ali_fits_path):
+                            tiles_dir = os.path.join(export_root, "tiles")
+                            os.makedirs(tiles_dir, exist_ok=True)
 
-                                    if ref_fits_path:
-                                        ok_rf, new_x, new_y = _export_fits_cutout_1024(
-                                            ref_fits_path,
-                                            cx,
-                                            cy,
-                                            dest_dir,
-                                            f"{export_prefix}_{idx_prefix}_1_reference_X{local_x:04d}_Y{local_y:04d}.fits",
-                                        )
-                                    else:
-                                        ok_rf, new_x, new_y = False, None, None
+                            tile_index_map = {}  # key -> idx (1-based)
+                            next_tile_idx = 1
 
-                                    if ali_fits_path:
-                                        ok_af, new_x2, new_y2 = _export_fits_cutout_1024(
-                                            ali_fits_path,
-                                            cx,
-                                            cy,
-                                            dest_dir,
-                                            f"{export_prefix}_{idx_prefix}_2_aligned_X{local_x:04d}_Y{local_y:04d}.fits",
-                                        )
-                                    else:
-                                        ok_af, new_x2, new_y2 = False, None, None
+                            for key, entry in tile_targets.items():
+                                if key not in tile_index_map:
+                                    tile_index_map[key] = next_tile_idx
+                                    next_tile_idx += 1
+                                tile_idx = tile_index_map[key]
 
-                                    if ok_rf and ok_af:
-                                        if label_lower == "good":
-                                            exported_good_fits += 1
-                                        else:
-                                            exported_bad_fits += 1
-                        except Exception:
-                            # FITS裁剪导出失败不影响 PNG 导出
-                            pass
+                                cx, cy = (entry or {}).get("first_cxcy") or (None, None)
+                                if cx is None or cy is None:
+                                    continue
+
+                                # 1) 导出 reference / aligned tile FITS（各一次）
+                                ok_rf = False
+                                ok_af = False
+                                if ref_fits_path:
+                                    ok_rf, _, _ = _export_fits_cutout_1024(
+                                        ref_fits_path,
+                                        cx,
+                                        cy,
+                                        tiles_dir,
+                                        f"{export_prefix}_tile{tile_idx:04d}_1_reference.fits",
+                                    )
+                                if ali_fits_path:
+                                    ok_af, _, _ = _export_fits_cutout_1024(
+                                        ali_fits_path,
+                                        cx,
+                                        cy,
+                                        tiles_dir,
+                                        f"{export_prefix}_tile{tile_idx:04d}_2_aligned.fits",
+                                    )
+                                if ok_rf and ok_af:
+                                    exported_tile_ref_ali_pairs += 1
+
+                                exported_tiles += 1
+
+                                # 2) 输出 mask（PNG，uint8 code）
+                                mask = np.zeros((1024, 1024), dtype=np.uint8)
+                                goods = (entry or {}).get("good") or []
+                                bads = (entry or {}).get("bad") or []
+
+                                # 先画 good（只覆盖 normal）
+                                for (lx, ly) in goods:
+                                    _paint_5x5(mask, lx, ly, MASK_CODEBOOK["good"], overwrite_=False)
+                                # 再画 bad（强制覆盖）
+                                for (lx, ly) in bads:
+                                    _paint_5x5(mask, lx, ly, MASK_CODEBOOK["bad"], overwrite_=True)
+
+                                mask_name = f"{export_prefix}_tile{tile_idx:04d}_mask.png"
+                                mask_path = _ensure_unique_path(tiles_dir, mask_name)
+                                try:
+                                    PILImage.fromarray(mask, mode="L").save(mask_path)
+                                    exported_tile_masks += 1
+                                except Exception as e:
+                                    self.logger.warning(f"保存mask失败: {mask_path}, 错误: {e}")
+                    except Exception:
+                        # tile FITS / mask 导出失败不影响 PNG 导出
+                        pass
 
                     processed_files += 1
 
@@ -4588,15 +4694,16 @@ class FitsImageViewer:
                 f"处理FITS文件数: {processed_files} / {total_files}\n"
                 f"GOOD 样本(对，ref+aligned): {exported_good_pairs}\n"
                 f"BAD 样本(对，ref+aligned): {exported_bad_pairs}\n\n"
-                f"GOOD FITS(对，ref+aligned, 1024x1024): {exported_good_fits}\n"
-                f"BAD FITS(对，ref+aligned, 1024x1024): {exported_bad_fits}\n\n"
+                f"tile 导出数(1024x1024): {exported_tiles}\n"
+                f"tile FITS对(ref+aligned): {exported_tile_ref_ali_pairs}\n"
+                f"tile mask 数: {exported_tile_masks}\n\n"
                 f"导出根目录: {export_root}"
             )
             messagebox.showinfo("导出AI训练数据", msg)
             self.logger.info("=" * 60)
             self.logger.info(
                 f"AI训练数据导出完成: GOOD_pairs={exported_good_pairs}, "
-                f"BAD_pairs={exported_bad_pairs}, 文件数={processed_files}"
+                f"BAD_pairs={exported_bad_pairs}, tiles={exported_tiles}, 文件数={processed_files}"
             )
 
         except Exception as e:
