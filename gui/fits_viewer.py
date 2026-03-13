@@ -439,6 +439,8 @@ class FitsImageViewer:
         self.batch_query_threads_var = tk.StringVar(value="5")
         # pympc server批量查询线程数，在高级设置中配置
         self.batch_pympc_server_threads_var = tk.StringVar(value="3")
+        # 变星server批量查询线程数，在高级设置中配置
+        self.batch_vsx_server_threads_var = tk.StringVar(value="3")
 
         # 批量检测对齐按钮（移动至此，位于“批量本地查询(离线)”左侧）
         self.batch_alignment_button = ttk.Button(
@@ -487,6 +489,15 @@ class FitsImageViewer:
                                                   command=self._batch_vsx_query,
                                                   state="disabled")
         self.batch_vsx_query_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        # 变星server批量查询按钮（调用本地server接口）
+        self.batch_vsx_server_query_button = ttk.Button(
+            toolbar_frame6,
+            text="变星server批量查询",
+            command=self._batch_vsx_server_query,
+            state="disabled"
+        )
+        self.batch_vsx_server_query_button.pack(side=tk.LEFT, padx=(5, 5))
         
         # 记录按钮初始状态
         self.logger.info(f"批量变星查询按钮已创建，初始状态: {self.batch_vsx_query_button['state']}")
@@ -1460,10 +1471,14 @@ class FitsImageViewer:
             # 加载pympc server批量查询线程数，默认值：3
             pympc_server_threads = query_settings.get('batch_pympc_server_threads', 3)
             self.batch_pympc_server_threads_var.set(str(pympc_server_threads))
+            # 加载变星server批量查询线程数，默认值：3
+            vsx_server_threads = query_settings.get('batch_vsx_server_threads', 3)
+            self.batch_vsx_server_threads_var.set(str(vsx_server_threads))
 
             self.logger.info(
                 f"查询设置已加载: 搜索半径={search_radius}°, 批量查询间隔={interval}s, "
-                f"批量线程数={batch_threads}, pympc server线程数={pympc_server_threads}"
+                f"批量线程数={batch_threads}, pympc server线程数={pympc_server_threads}, "
+                f"变星server线程数={vsx_server_threads}"
             )
 
         except Exception as e:
@@ -1473,6 +1488,7 @@ class FitsImageViewer:
             self.batch_query_interval_var.set("5.0")
             self.batch_query_threads_var.set("5")
             self.batch_pympc_server_threads_var.set("3")
+            self.batch_vsx_server_threads_var.set("3")
 
     def _save_query_settings(self):
         """保存查询设置到配置文件（搜索半径与批量查询间隔）"""
@@ -1517,17 +1533,30 @@ class FitsImageViewer:
                 self.logger.error(f"pympc server批量线程数必须大于0: {pympc_server_threads}")
                 return
 
+            # 获取变星server批量查询线程数
+            try:
+                vsx_server_threads = int(self.batch_vsx_server_threads_var.get())
+            except ValueError:
+                self.logger.error(f"无效的变星server批量线程数: {self.batch_vsx_server_threads_var.get()}")
+                return
+
+            if vsx_server_threads <= 0:
+                self.logger.error(f"变星server批量线程数必须大于0: {vsx_server_threads}")
+                return
+
             # 保存到配置文件
             self.config_manager.update_query_settings(
                 search_radius=search_radius,
                 batch_query_interval_seconds=interval,
                 batch_query_threads=batch_threads,
                 batch_pympc_server_threads=pympc_server_threads,
+                batch_vsx_server_threads=vsx_server_threads,
             )
 
             self.logger.info(
                 f"查询设置已保存: 搜索半径={search_radius}°, 批量查询间隔={interval}s, "
-                f"pympc批量线程数={batch_threads}, pympc server批量线程数={pympc_server_threads}"
+                f"pympc批量线程数={batch_threads}, pympc server批量线程数={pympc_server_threads}, "
+                f"变星server批量线程数={vsx_server_threads}"
             )
 
         except ValueError:
@@ -2400,6 +2429,8 @@ class FitsImageViewer:
             if hasattr(self, 'batch_vsx_query_button'):
                 self.batch_vsx_query_button.config(state="normal")
                 self.logger.info("批量变星查询按钮状态更新: 启用 (选中FITS文件)")
+            if hasattr(self, 'batch_vsx_server_query_button'):
+                self.batch_vsx_server_query_button.config(state="normal")
             # 启用批量删除查询结果按钮
             self.batch_delete_query_button.config(state="normal")
         else:
@@ -2431,6 +2462,8 @@ class FitsImageViewer:
                 if hasattr(self, 'batch_vsx_query_button'):
                     self.batch_vsx_query_button.config(state="normal")
                     self.logger.info("批量变星查询按钮状态更新: 启用 (选中目录节点)")
+                if hasattr(self, 'batch_vsx_server_query_button'):
+                    self.batch_vsx_server_query_button.config(state="normal")
                 self.batch_delete_query_button.config(state="normal")
                 self.file_info_label.config(text="已选择目录 [可批量查询]")
             else:
@@ -2446,6 +2479,8 @@ class FitsImageViewer:
                 if hasattr(self, 'batch_vsx_query_button'):
                     self.batch_vsx_query_button.config(state="disabled")
                     self.logger.info("批量变星查询按钮状态更新: 禁用 (未选中有效文件或目录)")
+                if hasattr(self, 'batch_vsx_server_query_button'):
+                    self.batch_vsx_server_query_button.config(state="disabled")
                 self.batch_delete_query_button.config(state="disabled")
                 self.file_info_label.config(text="未选择FITS文件")
 
@@ -9847,11 +9882,12 @@ class FitsImageViewer:
 
 
 
-    def _query_vsx(self, skip_gui=False):
+    def _query_vsx(self, skip_gui=False, use_server=False):
         """使用VSX查询变星数据
 
         Args:
             skip_gui: 是否跳过GUI操作（在非主线程调用时应设为True）
+            use_server: 是否使用本地变星server接口查询
         """
         try:
             # 立即重置结果标签，确保用户能看到查询状态变化
@@ -9917,22 +9953,25 @@ class FitsImageViewer:
                 self.vsx_result_label.config(text="查询中...", foreground="orange")
                 self.vsx_result_label.update_idletasks()  # 强制刷新界面
 
-            # 执行VSX查询（根据设置/覆盖开关选择本地/在线）
+            # 执行VSX查询（根据设置/覆盖开关选择本地/在线/本地server）
             force_online = getattr(self, '_force_online_query', False)
             use_local = getattr(self, '_use_local_query_override', False)
-            if force_online:
+            if use_server:
+                results = self._perform_vsx_server_query(ra, dec, mag_limit, search_radius)
+            elif force_online:
                 use_local = False
-            elif (not use_local) and self.config_manager:
-                try:
-                    _ls = self.config_manager.get_local_catalog_settings()
-                    if bool((_ls or {}).get("buttons_use_local_query", False)):
-                        use_local = True
-                except Exception:
-                    pass
-            if use_local:
-                results = self._perform_local_vsx_query(ra, dec, mag_limit, search_radius)
             else:
-                results = self._perform_vsx_query(ra, dec, mag_limit, search_radius)
+                if (not use_local) and self.config_manager:
+                    try:
+                        _ls = self.config_manager.get_local_catalog_settings()
+                        if bool((_ls or {}).get("buttons_use_local_query", False)):
+                            use_local = True
+                    except Exception:
+                        pass
+                if use_local:
+                    results = self._perform_local_vsx_query(ra, dec, mag_limit, search_radius)
+                else:
+                    results = self._perform_vsx_query(ra, dec, mag_limit, search_radius)
 
             if results is not None:
                 # 保存查询结果到当前cutout
@@ -10104,6 +10143,86 @@ class FitsImageViewer:
                     self._update_auto_classification_for_current_cutout()
             except Exception:
                 pass
+
+    def _perform_vsx_server_query(self, ra, dec, mag_limit=16.0, search_radius=0.01):
+        """通过本地变星server接口查询（http://localhost:5000/search）。"""
+        try:
+            from astropy.table import Table
+
+            try:
+                search_radius_deg = float(search_radius)
+            except Exception:
+                search_radius_deg = 0.01
+            search_radius_arcsec = search_radius_deg * 3600.0
+
+            params = {
+                "ra": ra,
+                "dec": dec,
+                "radius": search_radius_arcsec,
+            }
+            endpoint = f"http://localhost:5000/search?{urlencode(params)}"
+
+            self.logger.info("VSX server查询参数:")
+            self.logger.info(f"  URL: {endpoint}")
+            self.logger.info(f"  星等限制(后过滤): ≤{mag_limit}")
+            if self.log_callback:
+                self.log_callback("VSX server查询参数:", "INFO")
+                self.log_callback(f"  URL: {endpoint}", "INFO")
+
+            with urlopen(endpoint, timeout=60) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            payload = json.loads(raw)
+
+            result_rows = payload.get("results") or []
+            if not isinstance(result_rows, list):
+                msg = f"VSX server 返回 results 类型异常: {type(result_rows)}"
+                self.logger.error(msg)
+                if self.log_callback:
+                    self.log_callback(msg, "ERROR")
+                return None
+
+            table_rows = []
+            for row in result_rows:
+                if not isinstance(row, dict):
+                    continue
+
+                # 尽量兼容不同字段名
+                max_mag = row.get("mag_max")
+                min_mag = row.get("mag_min")
+                period = row.get("period")
+                name = row.get("name") or row.get("label") or ""
+                row_ra = row.get("ra")
+                row_dec = row.get("dec")
+
+                # 星等后过滤：优先用max_mag
+                try:
+                    if max_mag is not None and float(max_mag) > float(mag_limit):
+                        continue
+                except Exception:
+                    pass
+
+                table_rows.append({
+                    "Name": str(name),
+                    "Type": "server",
+                    "RAJ2000": float(row_ra) if row_ra is not None else np.nan,
+                    "DEJ2000": float(row_dec) if row_dec is not None else np.nan,
+                    "max": float(max_mag) if max_mag is not None else np.nan,
+                    "min": float(min_mag) if min_mag is not None else np.nan,
+                    "Period": float(period) if period is not None else np.nan,
+                })
+
+            if not table_rows:
+                return Table(names=("Name", "Type", "RAJ2000", "DEJ2000", "max", "min", "Period"),
+                             dtype=("U128", "U32", "f8", "f8", "f8", "f8", "f8"))
+
+            return Table(rows=table_rows, names=("Name", "Type", "RAJ2000", "DEJ2000", "max", "min", "Period"))
+
+        except Exception as e:
+            msg = f"VSX server 查询执行失败: {str(e)}"
+            self.logger.error(msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(msg, "ERROR")
+            return None
 
     def _perform_vsx_query(self, ra, dec, mag_limit=16.0, search_radius=0.01):
         """
@@ -13520,9 +13639,14 @@ class FitsImageViewer:
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
 
-    def _batch_vsx_query(self, on_complete=None):
+    def _batch_vsx_server_query(self, on_complete=None):
+        """执行批量变星server查询（调用本地HTTP服务）"""
+        return self._batch_vsx_query(on_complete=on_complete, use_server=True)
+
+    def _batch_vsx_query(self, on_complete=None, use_server=False):
         """执行批量变星查询（跳过非GOOD和已有小行星结果的目标）"""
-        self.logger.info("批量变星查询按钮被点击，开始执行批量查询")
+        backend_label = "批量变星server查询" if use_server else "批量变星查询"
+        self.logger.info(f"{backend_label}按钮被点击，开始执行批量查询")
 
         def _safe_invoke_on_complete():
             if callable(on_complete):
@@ -13558,11 +13682,12 @@ class FitsImageViewer:
 
             # 获取线程数
             try:
-                thread_count = int(self.batch_query_threads_var.get())
+                thread_var = self.batch_vsx_server_threads_var if use_server else self.batch_query_threads_var
+                thread_count = int(thread_var.get())
                 if thread_count < 1:
                     thread_count = 1
             except ValueError:
-                thread_count = 10  # 默认值
+                thread_count = 3 if use_server else 10  # 默认值
 
             # 处理单个文件
             def process_file(file_path):
@@ -13617,7 +13742,7 @@ class FitsImageViewer:
                         self.logger.info(f"目标 {cutout_idx+1}: 执行变星查询...")
                         
                         # 执行变星查询
-                        self._query_vsx(skip_gui=True)  # 跳过GUI操作
+                        self._query_vsx(skip_gui=True, use_server=use_server)  # 跳过GUI操作
                         queried_count += 1
 
                         # 检查查询结果
@@ -13657,7 +13782,7 @@ class FitsImageViewer:
             if is_file:
                 # 单个文件
                 files_to_process.append(values[0])
-                self.logger.info(f"开始批量变星查询: 单个文件 {values[0]}")
+                self.logger.info(f"开始{backend_label}: 单个文件 {values[0]}")
             else:
                 # 目录
                 directory = values[0]
@@ -13666,13 +13791,13 @@ class FitsImageViewer:
                         if filename.lower().endswith(('.fits', '.fit', '.fts')):
                             file_path = os.path.join(root, filename)
                             files_to_process.append(file_path)
-                self.logger.info(f"开始批量变星查询: 目录 {directory}, 找到 {len(files_to_process)} 个FITS文件")
+                self.logger.info(f"开始{backend_label}: 目录 {directory}, 找到 {len(files_to_process)} 个FITS文件")
 
             if not files_to_process:
                 messagebox.showinfo("信息", "没有找到需要查询的FITS文件")
                 return
 
-            self.logger.info(f"批量变星查询配置: 线程数={thread_count}, 总文件数={len(files_to_process)}")
+            self.logger.info(f"{backend_label}配置: 线程数={thread_count}, 总文件数={len(files_to_process)}")
 
             # 使用多线程执行查询
             import threading
@@ -13709,7 +13834,7 @@ class FitsImageViewer:
 
             # 显示进度窗口
             progress_window = tk.Toplevel(self.parent_frame)
-            progress_window.title("批量变星查询进度")
+            progress_window.title("批量变星Server查询进度" if use_server else "批量变星查询进度")
             progress_window.geometry("500x250")
 
             # 进度标签
@@ -13781,7 +13906,7 @@ class FitsImageViewer:
 
                     # 最终统计
                     final_stats = (
-                        f"批量变星查询完成！\n"+
+                        f"{'批量变星server查询' if use_server else '批量变星查询'}完成！\n"+
                         f"总文件数: {len(files_to_process)}\n"+
                         f"成功处理: {success_count}\n"+
                         f"跳过: {skip_count}\n"+
@@ -13792,7 +13917,7 @@ class FitsImageViewer:
                         f"跳过已查询变星: {total_skipped_vsx}"
                     )
                     
-                    self.logger.info(f"批量变星查询完成: {final_stats.replace(chr(10), ' ')}")
+                    self.logger.info(f"{backend_label}完成: {final_stats.replace(chr(10), ' ')}")
                     messagebox.showinfo("查询完成", final_stats)
                     progress_window.destroy()
 
@@ -13805,13 +13930,16 @@ class FitsImageViewer:
                         # 重新显示当前cutout
                         if self._all_cutout_sets:
                             self._show_current_cutout()
-                            self.logger.info("批量变星查询完成，已恢复之前的显示状态")
+                            self.logger.info(f"{backend_label}完成，已恢复之前的显示状态")
 
             # 启动进度更新
             progress_window.after(100, update_progress)
 
         except Exception as e:
-            error_msg = f"批量变星查询失败: {str(e)}"
+            if use_server:
+                error_msg = f"批量变星server查询失败: {str(e)}"
+            else:
+                error_msg = f"批量变星查询失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
         finally:
