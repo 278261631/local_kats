@@ -14,6 +14,9 @@ import csv
 import time
 import threading
 import queue
+import json
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 
 import matplotlib.pyplot as plt
@@ -434,6 +437,8 @@ class FitsImageViewer:
         self.batch_query_interval_var = tk.StringVar(value="2.0")
         # pympc批量查询线程数，在高级设置中配置
         self.batch_query_threads_var = tk.StringVar(value="5")
+        # pympc server批量查询线程数，在高级设置中配置
+        self.batch_pympc_server_threads_var = tk.StringVar(value="3")
 
         # 批量检测对齐按钮（移动至此，位于“批量本地查询(离线)”左侧）
         self.batch_alignment_button = ttk.Button(
@@ -467,6 +472,15 @@ class FitsImageViewer:
                                                    command=self._batch_pympc_query,
                                                    state="disabled")
         self.batch_pympc_query_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        # pympc server批量查询按钮（多线程）
+        self.batch_pympc_server_query_button = ttk.Button(
+            toolbar_frame6,
+            text="pympc server 批量查询",
+            command=self._batch_pympc_server_query,
+            state="disabled"
+        )
+        self.batch_pympc_server_query_button.pack(side=tk.LEFT, padx=(5, 5))
 
         # 批量变星查询按钮（跳过非GOOD和已有小行星结果的）
         self.batch_vsx_query_button = ttk.Button(toolbar_frame6, text="批量变星查询",
@@ -1443,14 +1457,22 @@ class FitsImageViewer:
             # 加载批量查询线程数，默认值：5
             batch_threads = query_settings.get('batch_query_threads', 5)
             self.batch_query_threads_var.set(str(batch_threads))
+            # 加载pympc server批量查询线程数，默认值：3
+            pympc_server_threads = query_settings.get('batch_pympc_server_threads', 3)
+            self.batch_pympc_server_threads_var.set(str(pympc_server_threads))
 
-            self.logger.info(f"查询设置已加载: 搜索半径={search_radius}°, 批量查询间隔={interval}s, 批量线程数={batch_threads}")
+            self.logger.info(
+                f"查询设置已加载: 搜索半径={search_radius}°, 批量查询间隔={interval}s, "
+                f"批量线程数={batch_threads}, pympc server线程数={pympc_server_threads}"
+            )
 
         except Exception as e:
             self.logger.error(f"加载查询设置失败: {str(e)}")
             # 使用默认值
             self.search_radius_var.set("0.01")
             self.batch_query_interval_var.set("5.0")
+            self.batch_query_threads_var.set("5")
+            self.batch_pympc_server_threads_var.set("3")
 
     def _save_query_settings(self):
         """保存查询设置到配置文件（搜索半径与批量查询间隔）"""
@@ -1484,14 +1506,29 @@ class FitsImageViewer:
                 self.logger.error(f"批量线程数必须大于0: {batch_threads}")
                 return
 
+            # 获取pympc server批量查询线程数
+            try:
+                pympc_server_threads = int(self.batch_pympc_server_threads_var.get())
+            except ValueError:
+                self.logger.error(f"无效的pympc server批量线程数: {self.batch_pympc_server_threads_var.get()}")
+                return
+
+            if pympc_server_threads <= 0:
+                self.logger.error(f"pympc server批量线程数必须大于0: {pympc_server_threads}")
+                return
+
             # 保存到配置文件
             self.config_manager.update_query_settings(
                 search_radius=search_radius,
                 batch_query_interval_seconds=interval,
                 batch_query_threads=batch_threads,
+                batch_pympc_server_threads=pympc_server_threads,
             )
 
-            self.logger.info(f"查询设置已保存: 搜索半径={search_radius}°, 批量查询间隔={interval}s, pympc批量线程数={batch_threads}")
+            self.logger.info(
+                f"查询设置已保存: 搜索半径={search_radius}°, 批量查询间隔={interval}s, "
+                f"pympc批量线程数={batch_threads}, pympc server批量线程数={pympc_server_threads}"
+            )
 
         except ValueError:
             self.logger.error(f"无效的搜索半径: {self.search_radius_var.get()}")
@@ -2358,6 +2395,8 @@ class FitsImageViewer:
                 self.batch_alignment_button.config(state="normal")
             if hasattr(self, 'batch_pympc_query_button'):
                 self.batch_pympc_query_button.config(state="normal")
+            if hasattr(self, 'batch_pympc_server_query_button'):
+                self.batch_pympc_server_query_button.config(state="normal")
             if hasattr(self, 'batch_vsx_query_button'):
                 self.batch_vsx_query_button.config(state="normal")
                 self.logger.info("批量变星查询按钮状态更新: 启用 (选中FITS文件)")
@@ -2387,6 +2426,8 @@ class FitsImageViewer:
                     self.batch_alignment_button.config(state="normal")
                 if hasattr(self, 'batch_pympc_query_button'):
                     self.batch_pympc_query_button.config(state="normal")
+                if hasattr(self, 'batch_pympc_server_query_button'):
+                    self.batch_pympc_server_query_button.config(state="normal")
                 if hasattr(self, 'batch_vsx_query_button'):
                     self.batch_vsx_query_button.config(state="normal")
                     self.logger.info("批量变星查询按钮状态更新: 启用 (选中目录节点)")
@@ -2400,6 +2441,8 @@ class FitsImageViewer:
                     self.batch_alignment_button.config(state="disabled")
                 if hasattr(self, 'batch_pympc_query_button'):
                     self.batch_pympc_query_button.config(state="disabled")
+                if hasattr(self, 'batch_pympc_server_query_button'):
+                    self.batch_pympc_server_query_button.config(state="disabled")
                 if hasattr(self, 'batch_vsx_query_button'):
                     self.batch_vsx_query_button.config(state="disabled")
                     self.logger.info("批量变星查询按钮状态更新: 禁用 (未选中有效文件或目录)")
@@ -12949,7 +12992,100 @@ class FitsImageViewer:
             self.logger.warning(f"计算像素距离失败: {e}")
             return None
 
-    def _batch_pympc_query(self, on_complete=None):
+    def _perform_pympc_server_query(self, ra, dec, utc_time, mpc_code, latitude, longitude, search_radius=0.01):
+        """通过本地 pympc server HTTP 接口进行查询。
+
+        接口示例:
+        http://localhost:5001/search?ra=...&dec=...&epoch=...&radius=...
+        """
+        try:
+            try:
+                from astropy.time import Time
+                from astropy.table import Table
+            except ImportError as e:  # noqa: F841
+                msg = "astropy 未安装或导入失败，请先安装: pip install astropy"
+                self.logger.error(msg)
+                if self.log_callback:
+                    self.log_callback(msg, "ERROR")
+                return None
+
+            t = Time(utc_time)
+            epoch_mjd = float(t.mjd)
+            try:
+                search_radius_deg = float(search_radius)
+            except Exception:
+                search_radius_deg = 0.01
+            search_radius_arcsec = search_radius_deg * 3600.0
+
+            params = {
+                "ra": ra,
+                "dec": dec,
+                "epoch": epoch_mjd,
+                "radius": search_radius_arcsec,
+            }
+            endpoint = f"http://localhost:5001/search?{urlencode(params)}"
+
+            self.logger.info("pympc server 查询参数:")
+            self.logger.info(f"  URL: {endpoint}")
+            self.logger.info(f"  观测站(仅记录): {mpc_code or '未指定'}")
+            self.logger.info(f"  (GPS参考: 经度={longitude}°, 纬度={latitude}°)")
+            if self.log_callback:
+                self.log_callback("pympc server 查询参数:", "INFO")
+                self.log_callback(f"  URL: {endpoint}", "INFO")
+
+            with urlopen(endpoint, timeout=90) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            payload = json.loads(raw)
+
+            if not payload.get("success", False):
+                msg = f"pympc server 查询失败: {payload.get('error') or payload}"
+                self.logger.error(msg)
+                if self.log_callback:
+                    self.log_callback(msg, "ERROR")
+                return None
+
+            if payload.get("degraded"):
+                warn_msg = payload.get("warning") or "pympc server 查询返回 degraded=true"
+                self.logger.warning(warn_msg)
+                if self.log_callback:
+                    self.log_callback(warn_msg, "WARNING")
+
+            result_rows = payload.get("results") or []
+            if not isinstance(result_rows, list):
+                msg = f"pympc server 返回 results 类型异常: {type(result_rows)}"
+                self.logger.error(msg)
+                if self.log_callback:
+                    self.log_callback(msg, "ERROR")
+                return None
+
+            if not result_rows:
+                return Table(names=("Name", "RA", "DEC", "Mv"), dtype=("U128", "f8", "f8", "f8"))
+
+            table_rows = []
+            for row in result_rows:
+                if not isinstance(row, dict):
+                    continue
+                table_rows.append({
+                    "Name": row.get("name", ""),
+                    "RA": float(row.get("ra")) if row.get("ra") is not None else np.nan,
+                    "DEC": float(row.get("dec")) if row.get("dec") is not None else np.nan,
+                    "Mv": float(row.get("mag")) if row.get("mag") is not None else np.nan,
+                })
+
+            return Table(rows=table_rows, names=("Name", "RA", "DEC", "Mv"))
+
+        except Exception as e:
+            msg = f"pympc server 查询执行失败: {str(e)}"
+            self.logger.error(msg, exc_info=True)
+            if self.log_callback:
+                self.log_callback(msg, "ERROR")
+            return None
+
+    def _batch_pympc_server_query(self, on_complete=None):
+        """执行批量 pympc server 小行星查询"""
+        return self._batch_pympc_query(on_complete=on_complete, use_server=True)
+
+    def _batch_pympc_query(self, on_complete=None, use_server=False):
         """执行批量pympc小行星查询"""
         def _safe_invoke_on_complete():
             if callable(on_complete):
@@ -12982,15 +13118,19 @@ class FitsImageViewer:
             saved_cutout_index = getattr(self, '_current_cutout_index', 0)
             saved_detection_result_dir = getattr(self, '_current_detection_result_dir', None)
 
+            backend_label = "pympc server批量查询" if use_server else "pympc批量查询"
+            query_runner = self._perform_pympc_server_query if use_server else self._perform_pympc_query
+
             # 获取线程数
             try:
-                thread_count = int(self.batch_query_threads_var.get())
+                thread_var = self.batch_pympc_server_threads_var if use_server else self.batch_query_threads_var
+                thread_count = int(thread_var.get())
                 if thread_count < 1:
                     thread_count = 1
             except ValueError:
-                thread_count = 5  # 默认值
+                thread_count = 3 if use_server else 5  # 默认值
 
-            self.logger.info(f"[pympc批量查询] 线程数设置: {thread_count}")
+            self.logger.info(f"[{backend_label}] 线程数设置: {thread_count}")
 
             # 预先收集查询配置（避免多线程访问GUI控件）
             try:
@@ -13010,7 +13150,7 @@ class FitsImageViewer:
                 'mpc_code': mpc_code,
                 'search_radius': search_radius,
             }
-            self.logger.info(f"[pympc批量查询] 查询配置: {query_config}")
+            self.logger.info(f"[{backend_label}] 查询配置: {query_config}")
 
             # 收集所有需要处理的文件
             files_to_process = []
@@ -13032,7 +13172,7 @@ class FitsImageViewer:
                 messagebox.showinfo("信息", "没有找到需要查询的FITS文件")
                 return
 
-            self.logger.info(f"[pympc批量查询] 待处理文件数: {len(files_to_process)}")
+            self.logger.info(f"[{backend_label}] 待处理文件数: {len(files_to_process)}")
 
             # 独立的文件处理函数（不使用共享状态）
             def process_file_standalone(file_path, config):
@@ -13209,8 +13349,8 @@ class FitsImageViewer:
 
                         self.logger.info(f"[{thread_name}] {filename} cutout#{cutout_idx+1}: 执行查询 RA={ra:.4f}, DEC={dec:.4f}")
 
-                        # 执行pympc查询
-                        results = self._perform_pympc_query(
+                        # 执行查询
+                        results = query_runner(
                             ra, dec, utc_time,
                             config['mpc_code'],
                             config['gps_lat'],
@@ -13282,7 +13422,7 @@ class FitsImageViewer:
 
             # 显示进度窗口
             progress_window = tk.Toplevel(self.parent_frame)
-            progress_window.title("批量PYMPC查询进度")
+            progress_window.title("批量PYMPC Server查询进度" if use_server else "批量PYMPC查询进度")
             progress_window.geometry("500x250")
 
             # 进度标签
@@ -13373,7 +13513,10 @@ class FitsImageViewer:
             progress_window.after(100, update_progress)
 
         except Exception as e:
-            error_msg = f"批量pympc查询失败: {str(e)}"
+            if use_server:
+                error_msg = f"批量pympc server查询失败: {str(e)}"
+            else:
+                error_msg = f"批量pympc查询失败: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             messagebox.showerror("错误", error_msg)
 

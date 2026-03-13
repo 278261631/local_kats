@@ -510,6 +510,11 @@ class FitsWebDownloaderGUI:
             threads_entry = ttk.Entry(display_row, textvariable=self.fits_viewer.batch_query_threads_var, width=8)
             threads_entry.grid(row=2, column=4, sticky=tk.W, padx=(0, 5), pady=(10, 0))
 
+            # pympc server 批量查询线程数
+            ttk.Label(display_row, text="pympc server并发数:").grid(row=2, column=5, sticky=tk.W, padx=(20, 5), pady=(10, 0))
+            server_threads_entry = ttk.Entry(display_row, textvariable=self.fits_viewer.batch_pympc_server_threads_var, width=8)
+            server_threads_entry.grid(row=2, column=6, sticky=tk.W, padx=(0, 5), pady=(10, 0))
+
         row3_frame = ttk.LabelFrame(settings_container, text="检测参数", padding=10)
         row3_frame.pack(fill=tk.X, pady=(0, 10))
 
