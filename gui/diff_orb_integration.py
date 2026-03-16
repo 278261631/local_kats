@@ -151,7 +151,7 @@ class DiffOrbIntegration:
             self.logger.error(f"查找模板文件时出错: {str(e)}")
             return None
     
-    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95, fast_mode: bool = False, max_jaggedness_ratio: float = 2.0, detection_method: str = 'contour', sort_by: str = 'aligned_snr', wcs_use_sparse: bool = False, generate_gif: bool = False) -> Optional[Dict]:
+    def process_diff(self, download_file: str, template_file: str, output_dir: str = None, noise_methods: list = None, alignment_method: str = 'rigid', remove_bright_lines: bool = True, stretch_method: str = 'peak', percentile_low: float = 99.95, fast_mode: bool = False, max_jaggedness_ratio: float = 2.0, detection_method: str = 'contour', sort_by: str = 'aligned_snr', wcs_use_sparse: bool = False, generate_gif: bool = False, science_bg_mode: str = 'off') -> Optional[Dict]:
         """
         执行diff操作
 
@@ -170,6 +170,7 @@ class DiffOrbIntegration:
             sort_by (str): 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
             wcs_use_sparse (bool): WCS对齐时是否使用稀疏采样优化，默认False
             generate_gif (bool): 是否生成GIF动画，默认False
+            science_bg_mode (str): 科学图背景处理模式，'off'|'scheme_a'|'scheme_b'
 
         Returns:
             Optional[Dict]: 处理结果字典，包含输出文件路径等信息
@@ -199,7 +200,8 @@ class DiffOrbIntegration:
                 "输出目录": output_dir,
                 "对齐方式": alignment_method,
                 "降噪方式": str(noise_methods),
-                "快速模式": fast_mode
+                "快速模式": fast_mode,
+                "科学图背景处理": science_bg_mode
             })
 
             # 验证输入文件
@@ -276,6 +278,19 @@ class DiffOrbIntegration:
 
             self.error_logger.log_info("图像对齐成功")
 
+            # 步骤1.5：可选科学图背景处理（仅处理科学图，不处理模板图）
+            bg_start = time.time()
+            science_bg_applied = self._apply_science_background_processing(
+                alignment_result=alignment_result,
+                output_dir=output_dir,
+                mode=science_bg_mode,
+                fast_mode=fast_mode
+            )
+            timing_stats['科学图背景处理'] = time.time() - bg_start
+            self.logger.info(f"⏱️  步骤1.5 科学图背景处理耗时: {timing_stats['科学图背景处理']:.3f}秒")
+            if science_bg_mode != 'off' and not science_bg_applied:
+                self.logger.warning("科学图背景处理未成功应用，已回退为原始对齐图参与差异比较")
+
             # 步骤2: 使用已对齐文件进行差异比较
             diff_comparison_start = time.time()
             self.logger.info("步骤2: 执行已对齐文件差异比较...")
@@ -321,6 +336,8 @@ class DiffOrbIntegration:
                 self.logger.info(f"  文件验证: {timing_stats.get('文件验证', 0):.3f}秒")
                 self.logger.info(f"  步骤0 噪点处理: {timing_stats.get('噪点处理', 0):.3f}秒")
                 self.logger.info(f"  步骤1 图像对齐: {timing_stats.get('图像对齐', 0):.3f}秒")
+                if science_bg_mode != 'off':
+                    self.logger.info(f"  步骤1.5 科学图背景处理: {timing_stats.get('科学图背景处理', 0):.3f}秒")
                 self.logger.info(f"  步骤2 差异比较: {timing_stats.get('差异比较', 0):.3f}秒")
                 if fast_mode:
                     self.logger.info(f"  清理中间文件: {timing_stats.get('清理中间文件', 0):.3f}秒")
@@ -349,6 +366,7 @@ class DiffOrbIntegration:
                     'reference_file': template_file,
                     'compared_file': download_file,
                     'fast_mode': fast_mode,
+                    'science_bg_mode': science_bg_mode,
                     'error_log_file': error_log_path,
                     'timing_stats': timing_stats  # 添加耗时统计信息
                 }
@@ -369,6 +387,187 @@ class DiffOrbIntegration:
             })
             self.error_logger.close()
             return None
+
+    def _apply_science_background_processing(self, alignment_result: Dict, output_dir: str, mode: str, fast_mode: bool = False) -> bool:
+        """
+        对科学图（下载图）执行可选背景处理，不修改模板图。
+
+        Args:
+            alignment_result: 对齐结果字典
+            output_dir: 输出目录
+            mode: off/scheme_a/scheme_b
+            fast_mode: 是否快速模式（快速模式下仅覆盖科学图，不额外输出背景处理文件）
+
+        Returns:
+            bool: 是否成功应用（off 视为成功）
+        """
+        normalized_mode = (mode or 'off').strip().lower()
+        if normalized_mode in ('off', 'none', ''):
+            return True
+
+        try:
+            science_file = self._find_science_aligned_file(alignment_result, output_dir)
+            if not science_file or not os.path.exists(science_file):
+                self.logger.warning("未找到科学图对齐文件，跳过背景处理")
+                return False
+
+            from astropy.io import fits
+            import numpy as np
+
+            with fits.open(science_file) as hdul:
+                header = hdul[0].header.copy()
+                data = hdul[0].data.astype(np.float32)
+                if data.ndim == 3:
+                    data = data[0]
+
+            finite_mask = np.isfinite(data)
+            if not np.any(finite_mask):
+                self.logger.warning("科学图数据无有效像素，跳过背景处理")
+                return False
+
+            fill_value = float(np.median(data[finite_mask]))
+            filled_data = np.where(finite_mask, data, fill_value)
+
+            if normalized_mode == 'scheme_a':
+                processed_data, bg_model = self._background_subtract_scheme_a(filled_data)
+            elif normalized_mode == 'scheme_b':
+                processed_data, bg_model = self._background_subtract_scheme_b_rpca(filled_data)
+            else:
+                self.logger.warning(f"未知背景处理模式: {mode}，跳过")
+                return False
+
+            processed_data = np.where(finite_mask, processed_data, data).astype(np.float32)
+            fits.writeto(science_file, processed_data, header=header, overwrite=True)
+
+            # 非快速模式下额外保存“科学图剪除背景后”的独立输出文件
+            try:
+                base_name = os.path.splitext(os.path.basename(science_file))[0]
+                if not fast_mode:
+                    bg_removed_path = os.path.join(output_dir, f"{base_name}_science_bg_subtracted_{normalized_mode}.fits")
+                    fits.writeto(bg_removed_path, processed_data.astype(np.float32), header=header, overwrite=True)
+                    self.logger.info(f"已输出科学图背景剪除文件: {os.path.basename(bg_removed_path)}")
+
+                # 背景模型仅在非快速模式下输出，便于调试
+                if not fast_mode:
+                    debug_bg_path = os.path.join(output_dir, f"{base_name}_bgmodel_{normalized_mode}.fits")
+                    fits.writeto(debug_bg_path, bg_model.astype(np.float32), header=header, overwrite=True)
+            except Exception:
+                pass
+
+            self.logger.info(f"已应用科学图背景处理: {normalized_mode} -> {os.path.basename(science_file)}")
+            if self.error_logger:
+                self.error_logger.log_info("科学图背景处理完成", {"模式": normalized_mode, "文件": os.path.basename(science_file)})
+            return True
+        except Exception as e:
+            self.logger.error(f"科学图背景处理失败: {e}")
+            if self.error_logger:
+                self.error_logger.log_error("科学图背景处理失败", exception=e, context={"模式": mode})
+            return False
+
+    def _find_science_aligned_file(self, alignment_result: Dict, output_dir: str) -> Optional[str]:
+        """定位科学图（下载图）对齐后的FITS文件。"""
+        try:
+            if isinstance(alignment_result, dict):
+                candidate = alignment_result.get('download_aligned_file')
+                if candidate and os.path.exists(candidate):
+                    return candidate
+        except Exception:
+            pass
+
+        # 回退：从输出目录按既有命名规则查找
+        try:
+            candidates = sorted(Path(output_dir).glob("*noise_cleaned_aligned.fits"))
+            for p in candidates:
+                if p.name.startswith("GY"):
+                    return str(p)
+            if len(candidates) == 1:
+                return str(candidates[0])
+        except Exception:
+            pass
+        return None
+
+    def _background_subtract_scheme_a(self, image):
+        """方案A：低频背景估计（大sigma高斯）并减除。"""
+        import numpy as np
+        from scipy.ndimage import gaussian_filter
+
+        min_dim = max(16, min(image.shape))
+        sigma = max(12.0, min_dim * 0.03)
+        bg_model = gaussian_filter(image.astype(np.float32), sigma=sigma)
+        processed = image - bg_model
+        return processed, bg_model
+
+    def _background_subtract_scheme_b_rpca(self, image):
+        """方案B：RPCA估计低秩背景后减除（仅科学图）。"""
+        import numpy as np
+        from scipy.ndimage import zoom
+
+        data = image.astype(np.float64)
+        h, w = data.shape
+        max_side = max(h, w)
+        target_side = 384
+        scale = target_side / float(max_side) if max_side > target_side else 1.0
+
+        if scale < 1.0:
+            small = zoom(data, zoom=scale, order=1)
+        else:
+            small = data.copy()
+
+        lam = 1.0 / np.sqrt(max(small.shape))
+        low_rank_small, _sparse_small = self._rpca_decompose(small, lam=lam, max_iter=30, tol=1e-5)
+
+        if scale < 1.0:
+            zoom_y = h / float(low_rank_small.shape[0])
+            zoom_x = w / float(low_rank_small.shape[1])
+            bg_model = zoom(low_rank_small, zoom=(zoom_y, zoom_x), order=1)
+            bg_model = bg_model[:h, :w]
+        else:
+            bg_model = low_rank_small
+
+        processed = data - bg_model
+        return processed.astype(np.float32), bg_model.astype(np.float32)
+
+    def _rpca_decompose(self, matrix, lam=None, max_iter=30, tol=1e-5):
+        """Inexact ALM RPCA: M = L + S。"""
+        import numpy as np
+
+        m = matrix.astype(np.float64)
+        norm_m = np.linalg.norm(m, ord='fro')
+        if norm_m == 0:
+            return np.zeros_like(m), np.zeros_like(m)
+
+        if lam is None:
+            lam = 1.0 / np.sqrt(max(m.shape))
+
+        sparse = np.zeros_like(m)
+        lagrange = np.zeros_like(m)
+
+        spectral_norm = np.linalg.norm(m, ord=2)
+        mu = 1.25 / (spectral_norm + 1e-8)
+        mu_bar = mu * 1e7
+        rho = 1.5
+
+        low_rank = np.zeros_like(m)
+        for _ in range(max_iter):
+            u, s, vt = np.linalg.svd(m - sparse + lagrange / mu, full_matrices=False)
+            s_threshold = np.maximum(s - 1.0 / mu, 0)
+            rank = int(np.sum(s_threshold > 0))
+            if rank > 0:
+                low_rank = (u[:, :rank] * s_threshold[:rank]) @ vt[:rank, :]
+            else:
+                low_rank = np.zeros_like(m)
+
+            residual_for_sparse = m - low_rank + lagrange / mu
+            sparse = np.sign(residual_for_sparse) * np.maximum(np.abs(residual_for_sparse) - lam / mu, 0)
+
+            residual = m - low_rank - sparse
+            err = np.linalg.norm(residual, ord='fro') / (norm_m + 1e-8)
+            lagrange = lagrange + mu * residual
+            mu = min(mu * rho, mu_bar)
+            if err < tol:
+                break
+
+        return low_rank, sparse
     
     def _cleanup_intermediate_files(self, output_dir: str, template_file: str, download_file: str):
         """
@@ -468,6 +667,9 @@ class DiffOrbIntegration:
                     elif 'reference' in filename and filename.endswith('.fits'):
                         output_files['reference_fits'] = str(file_path)
                         self.logger.info(f"找到参考FITS文件: {original_filename}")
+                    elif 'science_bg_subtracted' in filename and filename.endswith('.fits'):
+                        output_files['science_bg_subtracted_fits'] = str(file_path)
+                        self.logger.info(f"找到科学图背景剪除FITS文件: {original_filename}")
                     elif 'aligned' in filename and filename.endswith('.fits'):
                         output_files['aligned_fits'] = str(file_path)
                         self.logger.info(f"找到对齐FITS文件: {original_filename}")

@@ -274,6 +274,15 @@ class FitsImageViewer:
 
         # AI GOOD/BAD 自动标记置信度阈值（在高级设置中可调）
         self.ai_confidence_threshold_var = tk.DoubleVar(value=0.5)
+        # 科学图背景处理模式（off/scheme_a/scheme_b）
+        self.science_bg_mode_var = tk.StringVar(value="off")
+        self._science_bg_mode_display_map = {
+            "off": "关闭",
+            "scheme_a": "方案A",
+            "scheme_b": "方案B(RPCA)"
+        }
+        self._science_bg_mode_key_map = {v: k for k, v in self._science_bg_mode_display_map.items()}
+        self.science_bg_mode_display_var = tk.StringVar(value=self._science_bg_mode_display_map["off"])
 
 
         # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
@@ -297,6 +306,17 @@ class FitsImageViewer:
         self.diff_button = ttk.Button(toolbar_frame2, text="执行Diff",
                                     command=self._execute_diff, state="disabled")
         self.diff_button.pack(side=tk.LEFT, padx=(0, 0))
+
+        # 科学图背景处理模式（放在执行Diff按钮后）
+        ttk.Label(toolbar_frame2, text="科学图背景:").pack(side=tk.LEFT, padx=(10, 4))
+        self.science_bg_mode_combo = ttk.Combobox(
+            toolbar_frame2,
+            textvariable=self.science_bg_mode_display_var,
+            values=list(self._science_bg_mode_display_map.values()),
+            state="readonly",
+            width=12
+        )
+        self.science_bg_mode_combo.pack(side=tk.LEFT, padx=(0, 6))
 
         # WCS稀疏采样优化选项（放在执行Diff按钮后面）
         self.wcs_sparse_var = tk.BooleanVar(value=False)  # 默认不启用稀疏采样
@@ -838,6 +858,16 @@ class FitsImageViewer:
         )
         self.requery_suspect_asteroids_button.pack(side=tk.LEFT, padx=(5, 0))
 
+    def _get_science_bg_mode(self) -> str:
+        """获取科学图背景处理模式配置值"""
+        return self._science_bg_mode_key_map.get(self.science_bg_mode_display_var.get(), "off")
+
+    def _set_science_bg_mode(self, mode: str):
+        """设置科学图背景处理模式显示值"""
+        display = self._science_bg_mode_display_map.get(mode, self._science_bg_mode_display_map["off"])
+        self.science_bg_mode_var.set(mode if mode in self._science_bg_mode_display_map else "off")
+        self.science_bg_mode_display_var.set(display)
+
     def _load_batch_settings(self):
         """从配置文件加载批量处理参数到控件"""
         if not self.config_manager:
@@ -940,11 +970,15 @@ class FitsImageViewer:
             generate_gif = batch_settings.get('generate_gif', False)
             self.generate_gif_var.set(generate_gif)
 
+            # 科学图背景处理模式
+            science_bg_mode = batch_settings.get('science_bg_mode', 'off')
+            self._set_science_bg_mode(science_bg_mode)
+
             # 直线检测过滤开关
             enable_line_detection_filter = batch_settings.get('enable_line_detection_filter', True)
             self.enable_line_detection_filter_var.set(enable_line_detection_filter)
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 直线检测过滤={enable_line_detection_filter}")
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 科学图背景={science_bg_mode}, 直线检测过滤={enable_line_detection_filter}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -1014,6 +1048,9 @@ class FitsImageViewer:
             # 绑定生成GIF复选框
             self.generate_gif_var.trace('w', self._on_batch_settings_change)
 
+            # 绑定科学图背景处理模式
+            self.science_bg_mode_display_var.trace('w', self._on_batch_settings_change)
+
             # 绑定直线检测过滤复选框
             self.enable_line_detection_filter_var.trace('w', self._on_batch_settings_change)
 
@@ -1065,6 +1102,9 @@ class FitsImageViewer:
             # 获取生成GIF设置
             generate_gif = self.generate_gif_var.get()
 
+            # 获取科学图背景处理模式
+            science_bg_mode = self._get_science_bg_mode()
+
             # 获取直线检测过滤设置
             enable_line_detection_filter = self.enable_line_detection_filter_var.get()
 
@@ -1079,10 +1119,11 @@ class FitsImageViewer:
                 sort_by=sort_by,
                 wcs_use_sparse=wcs_use_sparse,
                 generate_gif=generate_gif,
+                science_bg_mode=science_bg_mode,
                 enable_line_detection_filter=enable_line_detection_filter
             )
 
-            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 直线检测过滤={enable_line_detection_filter}")
+            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 科学图背景={science_bg_mode}, 直线检测过滤={enable_line_detection_filter}")
 
         except Exception as e:
             self.logger.error(f"保存批量处理参数失败: {str(e)}")
@@ -6077,6 +6118,10 @@ class FitsImageViewer:
             generate_gif = self.generate_gif_var.get()
             self.logger.info(f"生成GIF: {'启用' if generate_gif else '禁用'}")
 
+            # 获取科学图背景处理模式
+            science_bg_mode = self._get_science_bg_mode()
+            self.logger.info(f"科学图背景处理模式: {science_bg_mode}")
+
             # 更新进度：开始执行Diff
             filename = os.path.basename(self.selected_file_path)
             self.parent_frame.after(0, lambda f=filename: self.diff_progress_label.config(
@@ -6093,7 +6138,8 @@ class FitsImageViewer:
                                               detection_method=detection_method,
                                               sort_by=sort_by,
                                               wcs_use_sparse=wcs_use_sparse,
-                                              generate_gif=generate_gif)
+                                              generate_gif=generate_gif,
+                                              science_bg_mode=science_bg_mode)
 
             if result and result.get('success'):
                 # 更新进度：处理完成
