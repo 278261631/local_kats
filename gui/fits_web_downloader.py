@@ -4273,7 +4273,7 @@ Diff统计:
         percentile_low = 99.95
         if stretch_method == 'percentile':
             try:
-                percentile_low = float(self.fits_viewer.percentile_entry.get())
+                percentile_low = float(self.fits_viewer.percentile_var.get())
             except:
                 percentile_low = 99.95
         sort_by = self.fits_viewer.sort_by_var.get()
