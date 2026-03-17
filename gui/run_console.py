@@ -281,6 +281,7 @@ def run_pipeline_for_files(
         wcs_use_sparse = bool(batch_cfg.get("wcs_use_sparse", False))
         generate_gif = bool(batch_cfg.get("generate_gif", False))
         diff_calc_mode = str(batch_cfg.get("diff_calc_mode", "abs"))
+        apply_diff_postprocess = bool(batch_cfg.get("apply_diff_postprocess", False))
 
         result = diff_integration.process_diff(
             download_file,
@@ -298,6 +299,7 @@ def run_pipeline_for_files(
             wcs_use_sparse=wcs_use_sparse,
             generate_gif=generate_gif,
             diff_calc_mode=diff_calc_mode,
+            apply_diff_postprocess=apply_diff_postprocess,
         )
 
         if result and result.get("success"):

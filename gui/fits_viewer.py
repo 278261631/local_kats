@@ -291,6 +291,7 @@ class FitsImageViewer:
         }
         self._diff_calc_mode_key_map = {v: k for k, v in self._diff_calc_mode_display_map.items()}
         self.diff_calc_mode_display_var = tk.StringVar(value=self._diff_calc_mode_display_map["abs"])
+        self.apply_diff_postprocess_var = tk.BooleanVar(value=False)
 
 
         # 初始化GPS和MPC变量（这些变量会在高级设置标签页中使用）
@@ -336,6 +337,14 @@ class FitsImageViewer:
             width=14
         )
         self.diff_calc_mode_combo.pack(side=tk.LEFT, padx=(0, 6))
+
+        # difference 后处理开关
+        self.apply_diff_postprocess_checkbox = ttk.Checkbutton(
+            toolbar_frame2,
+            text="difference后处理(去负值+中值)",
+            variable=self.apply_diff_postprocess_var
+        )
+        self.apply_diff_postprocess_checkbox.pack(side=tk.LEFT, padx=(8, 0))
 
         # WCS稀疏采样优化选项（放在执行Diff按钮后面）
         self.wcs_sparse_var = tk.BooleanVar(value=False)  # 默认不启用稀疏采样
@@ -1006,12 +1015,14 @@ class FitsImageViewer:
             # 差异计算方式
             diff_calc_mode = batch_settings.get('diff_calc_mode', 'abs')
             self._set_diff_calc_mode(diff_calc_mode)
+            apply_diff_postprocess = batch_settings.get('apply_diff_postprocess', False)
+            self.apply_diff_postprocess_var.set(bool(apply_diff_postprocess))
 
             # 直线检测过滤开关
             enable_line_detection_filter = batch_settings.get('enable_line_detection_filter', True)
             self.enable_line_detection_filter_var.set(enable_line_detection_filter)
 
-            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 科学图背景={science_bg_mode}, 差异计算={diff_calc_mode}, 直线检测过滤={enable_line_detection_filter}")
+            self.logger.info(f"批量处理参数已加载到控件: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 快速模式={fast_mode}, 拉伸={stretch_method}, 百分位={percentile_low}%, 锯齿比率={max_jaggedness_ratio}, 检测方法={detection_method}, 综合得分阈值={score_threshold}, Aligned SNR阈值={aligned_snr_threshold}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 科学图背景={science_bg_mode}, 差异计算={diff_calc_mode}, difference后处理={apply_diff_postprocess}, 直线检测过滤={enable_line_detection_filter}")
 
         except Exception as e:
             self.logger.error(f"加载批量处理参数失败: {str(e)}")
@@ -1086,6 +1097,7 @@ class FitsImageViewer:
 
             # 绑定差异计算方式
             self.diff_calc_mode_display_var.trace('w', self._on_batch_settings_change)
+            self.apply_diff_postprocess_var.trace('w', self._on_batch_settings_change)
 
             # 绑定直线检测过滤复选框
             self.enable_line_detection_filter_var.trace('w', self._on_batch_settings_change)
@@ -1143,6 +1155,7 @@ class FitsImageViewer:
 
             # 获取差异计算方式
             diff_calc_mode = self._get_diff_calc_mode()
+            apply_diff_postprocess = self.apply_diff_postprocess_var.get()
 
             # 获取直线检测过滤设置
             enable_line_detection_filter = self.enable_line_detection_filter_var.get()
@@ -1160,10 +1173,11 @@ class FitsImageViewer:
                 generate_gif=generate_gif,
                 science_bg_mode=science_bg_mode,
                 diff_calc_mode=diff_calc_mode,
+                apply_diff_postprocess=apply_diff_postprocess,
                 enable_line_detection_filter=enable_line_detection_filter
             )
 
-            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 科学图背景={science_bg_mode}, 差异计算={diff_calc_mode}, 直线检测过滤={enable_line_detection_filter}")
+            self.logger.info(f"批量处理参数已保存: 降噪={noise_method}, 对齐={alignment_method}, 去亮线={self.remove_lines_var.get()}, 快速模式={self.fast_mode_var.get()}, 拉伸={stretch_method}, 检测方法={detection_method}, 排序方式={sort_by}, WCS稀疏采样={wcs_use_sparse}, 生成GIF={generate_gif}, 科学图背景={science_bg_mode}, 差异计算={diff_calc_mode}, difference后处理={apply_diff_postprocess}, 直线检测过滤={enable_line_detection_filter}")
 
         except Exception as e:
             self.logger.error(f"保存批量处理参数失败: {str(e)}")
@@ -6165,6 +6179,8 @@ class FitsImageViewer:
             # 获取差异计算方式
             diff_calc_mode = self._get_diff_calc_mode()
             self.logger.info(f"差异计算方式: {diff_calc_mode}")
+            apply_diff_postprocess = self.apply_diff_postprocess_var.get()
+            self.logger.info(f"difference后处理(去负值+中值): {'启用' if apply_diff_postprocess else '禁用'}")
 
             # 更新进度：开始执行Diff
             filename = os.path.basename(self.selected_file_path)
@@ -6184,7 +6200,8 @@ class FitsImageViewer:
                                               wcs_use_sparse=wcs_use_sparse,
                                               generate_gif=generate_gif,
                                               science_bg_mode=science_bg_mode,
-                                              diff_calc_mode=diff_calc_mode)
+                                              diff_calc_mode=diff_calc_mode,
+                                              apply_diff_postprocess=apply_diff_postprocess)
 
             if result and result.get('success'):
                 # 更新进度：处理完成

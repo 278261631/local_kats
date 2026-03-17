@@ -84,6 +84,7 @@ class ConfigManager:
                 "generate_gif": False,  # 是否生成GIF动画（GUI默认值：False，不生成）
                 "science_bg_mode": "off",  # 科学图背景处理模式: off, scheme_a, scheme_b
                 "diff_calc_mode": "abs",  # 差异计算方式: abs(绝对值) 或 signed(带符号)
+                "apply_diff_postprocess": False,  # 是否对difference.fits执行后处理（负值置零+中值滤波）
                 "enable_line_detection_filter": True,  # 批量导出时是否启用直线检测过滤（GUI默认值：True，启用）
                 # Alignment quality batch cleanup settings
                 "alignment_prune_non_high": True,  # 批量检测对齐时，清除“不是高分目标”的记录与检测结果文件（默认清除）

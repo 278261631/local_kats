@@ -14,7 +14,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from astropy.io import fits
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, median_filter
 from pathlib import Path
 import logging
 from datetime import datetime
@@ -124,7 +124,7 @@ class AlignedFITSComparator:
 
         return overlap_mask
     
-    def detect_differences(self, img1, img2, diff_calc_mode='abs'):
+    def detect_differences(self, img1, img2, diff_calc_mode='abs', apply_diff_postprocess=False):
         """
         检测两个图像之间的差异
 
@@ -132,6 +132,7 @@ class AlignedFITSComparator:
             img1 (numpy.ndarray): 参考图像
             img2 (numpy.ndarray): 比较图像
             diff_calc_mode (str): 差异计算方式，'abs' 或 'signed'
+            apply_diff_postprocess (bool): 是否对差异图执行后处理（负值置零+中值滤波）
 
         Returns:
             tuple: (差异图像, 二值化差异图像, 新亮点信息, 重叠区域掩码, 中间图像字典)
@@ -160,6 +161,13 @@ class AlignedFITSComparator:
             diff_image = diff_raw * overlap_mask
         else:
             diff_image = np.abs(diff_raw) * overlap_mask
+
+        # 可选：对差异图执行后处理（仅影响 difference 产物与后续二值化）
+        if apply_diff_postprocess:
+            # 排除负值
+            diff_image = np.where(diff_image < 0, 0, diff_image)
+            # 3x3 中值滤波，抑制孤立噪声
+            diff_image = median_filter(diff_image, size=3)
         self.logger.debug(f"  ⏱️  计算差异耗时: {time.time() - diff_start:.3f}秒")
 
         # 二值化差异图像
@@ -496,7 +504,7 @@ class AlignedFITSComparator:
             self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
             return {'success': False, 'error': str(e)}
 
-    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0, detection_method='contour', sort_by='aligned_snr', generate_gif=False, diff_calc_mode='abs'):
+    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0, detection_method='contour', sort_by='aligned_snr', generate_gif=False, diff_calc_mode='abs', apply_diff_postprocess=False):
         """
         处理已对齐FITS文件的差异比较
 
@@ -512,6 +520,7 @@ class AlignedFITSComparator:
             sort_by (str): 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
             generate_gif (bool): 是否生成GIF动画，默认False
             diff_calc_mode (str): 差异计算方式，'abs'（默认）或 'signed'
+            apply_diff_postprocess (bool): 是否对差异图执行后处理（负值置零+中值滤波）
 
         Returns:
             dict: 处理结果信息
@@ -560,7 +569,9 @@ class AlignedFITSComparator:
         diff_start = time.time()
         self.logger.info("执行差异检测...")
         diff_image, binary_diff, bright_spots, overlap_mask, intermediate_images = self.detect_differences(
-            ref_data, aligned_data, diff_calc_mode=diff_calc_mode
+            ref_data, aligned_data,
+            diff_calc_mode=diff_calc_mode,
+            apply_diff_postprocess=apply_diff_postprocess
         )
         timing_stats['差异检测'] = time.time() - diff_start
         self.logger.info(f"⏱️  差异检测耗时: {timing_stats['差异检测']:.3f}秒")
