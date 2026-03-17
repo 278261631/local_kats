@@ -3655,7 +3655,7 @@ Diff统计:
 
     def _process_single_diff(self, download_file, template_dir, noise_methods, alignment_method,
                             remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by='aligned_snr',
-                            science_bg_mode='off'):
+                            science_bg_mode='off', diff_calc_mode='abs'):
         """
         处理单个文件的diff操作（线程安全）
 
@@ -3703,7 +3703,8 @@ Diff统计:
                 percentile_low=percentile_low,
                 fast_mode=fast_mode,
                 sort_by=sort_by,
-                science_bg_mode=science_bg_mode
+                science_bg_mode=science_bg_mode,
+                diff_calc_mode=diff_calc_mode
             )
 
             if diff_result and diff_result.get('success'):
@@ -4276,6 +4277,7 @@ Diff统计:
                 percentile_low = 99.95
         sort_by = self.fits_viewer.sort_by_var.get()
         science_bg_mode = self.fits_viewer._get_science_bg_mode()
+        diff_calc_mode = self.fits_viewer._get_diff_calc_mode()
 
         # 启动ASTAP工作线程池
         def astap_worker():
@@ -4389,7 +4391,7 @@ Diff统计:
                         # 执行Diff处理
                         result = self._process_single_diff(
                             file_path, template_dir, noise_methods, alignment_method,
-                            remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by, science_bg_mode
+                            remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by, science_bg_mode, diff_calc_mode
                         )
 
                         with stats_lock:
@@ -4702,8 +4704,9 @@ Diff统计:
         # 获取排序方式参数
         sort_by = self.fits_viewer.sort_by_var.get()
         science_bg_mode = self.fits_viewer._get_science_bg_mode()
+        diff_calc_mode = self.fits_viewer._get_diff_calc_mode()
 
-        self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}, 排序方式={sort_by}, 科学图背景={science_bg_mode}")
+        self._log(f"使用配置: 降噪={noise_methods}, 对齐={alignment_method}, 去亮线={remove_bright_lines}, 拉伸={stretch_method}, 快速模式={fast_mode}, 排序方式={sort_by}, 科学图背景={science_bg_mode}, 差异计算={diff_calc_mode}")
         self._log(f"使用 {thread_count} 个线程并行处理")
 
         # 使用线程池并行处理
@@ -4727,7 +4730,7 @@ Diff统计:
                 future = executor.submit(
                     self._process_single_diff,
                     download_file, template_dir, noise_methods, alignment_method,
-                    remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by, science_bg_mode
+                    remove_bright_lines, stretch_method, percentile_low, fast_mode, sort_by, science_bg_mode, diff_calc_mode
                 )
                 future_to_file[future] = download_file
 

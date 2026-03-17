@@ -280,6 +280,7 @@ def run_pipeline_for_files(
         sort_by = batch_cfg.get("sort_by", "aligned_snr")
         wcs_use_sparse = bool(batch_cfg.get("wcs_use_sparse", False))
         generate_gif = bool(batch_cfg.get("generate_gif", False))
+        diff_calc_mode = str(batch_cfg.get("diff_calc_mode", "abs"))
 
         result = diff_integration.process_diff(
             download_file,
@@ -296,6 +297,7 @@ def run_pipeline_for_files(
             sort_by=sort_by,
             wcs_use_sparse=wcs_use_sparse,
             generate_gif=generate_gif,
+            diff_calc_mode=diff_calc_mode,
         )
 
         if result and result.get("success"):

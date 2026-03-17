@@ -124,16 +124,17 @@ class AlignedFITSComparator:
 
         return overlap_mask
     
-    def detect_differences(self, img1, img2):
+    def detect_differences(self, img1, img2, diff_calc_mode='abs'):
         """
         检测两个图像之间的差异
 
         Args:
             img1 (numpy.ndarray): 参考图像
             img2 (numpy.ndarray): 比较图像
+            diff_calc_mode (str): 差异计算方式，'abs' 或 'signed'
 
         Returns:
-            tuple: (差异图像, 二值化差异图像, 新亮点信息, 重叠区域掩码)
+            tuple: (差异图像, 二值化差异图像, 新亮点信息, 重叠区域掩码, 中间图像字典)
         """
         # 创建重叠区域掩码
         mask_start = time.time()
@@ -154,7 +155,11 @@ class AlignedFITSComparator:
 
         # 计算差异（只在重叠区域）
         diff_start = time.time()
-        diff_image = np.abs(blurred_img2 - blurred_img1) * overlap_mask
+        diff_raw = blurred_img2 - blurred_img1
+        if diff_calc_mode == 'signed':
+            diff_image = diff_raw * overlap_mask
+        else:
+            diff_image = np.abs(diff_raw) * overlap_mask
         self.logger.debug(f"  ⏱️  计算差异耗时: {time.time() - diff_start:.3f}秒")
 
         # 二值化差异图像
@@ -189,7 +194,14 @@ class AlignedFITSComparator:
 
         self.logger.info(f"检测到 {len(bright_spots)} 个新亮点")
 
-        return diff_image, binary_diff, bright_spots, overlap_mask
+        intermediate_images = {
+            'normalized_reference': norm_img1,
+            'normalized_aligned': norm_img2,
+            'blurred_reference': blurred_img1,
+            'blurred_aligned': blurred_img2
+        }
+
+        return diff_image, binary_diff, bright_spots, overlap_mask, intermediate_images
     
     def save_fits_result(self, data, output_path, header=None):
         """
@@ -484,7 +496,7 @@ class AlignedFITSComparator:
             self.logger.error(f"执行signal_blob_detector时出错: {str(e)}")
             return {'success': False, 'error': str(e)}
 
-    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0, detection_method='contour', sort_by='aligned_snr', generate_gif=False):
+    def process_aligned_fits_comparison(self, input_directory, output_directory=None, remove_bright_lines=True, stretch_method='peak', percentile_low=99.95, fast_mode=False, max_jaggedness_ratio=2.0, detection_method='contour', sort_by='aligned_snr', generate_gif=False, diff_calc_mode='abs'):
         """
         处理已对齐FITS文件的差异比较
 
@@ -499,6 +511,7 @@ class AlignedFITSComparator:
             detection_method (str): 检测方法，'contour'=轮廓检测（默认）, 'simple_blob'=SimpleBlobDetector
             sort_by (str): 排序方式，'quality_score'=综合得分（默认）, 'aligned_snr'=Aligned中心7x7 SNR, 'snr'=差异图像SNR
             generate_gif (bool): 是否生成GIF动画，默认False
+            diff_calc_mode (str): 差异计算方式，'abs'（默认）或 'signed'
 
         Returns:
             dict: 处理结果信息
@@ -546,7 +559,9 @@ class AlignedFITSComparator:
         # 执行差异检测
         diff_start = time.time()
         self.logger.info("执行差异检测...")
-        diff_image, binary_diff, bright_spots, overlap_mask = self.detect_differences(ref_data, aligned_data)
+        diff_image, binary_diff, bright_spots, overlap_mask, intermediate_images = self.detect_differences(
+            ref_data, aligned_data, diff_calc_mode=diff_calc_mode
+        )
         timing_stats['差异检测'] = time.time() - diff_start
         self.logger.info(f"⏱️  差异检测耗时: {timing_stats['差异检测']:.3f}秒")
 
@@ -580,6 +595,10 @@ class AlignedFITSComparator:
         binary_fits_path = None
         marked_fits_path = None
         overlap_mask_fits_path = None
+        normalized_ref_fits_path = None
+        normalized_aligned_fits_path = None
+        blurred_ref_fits_path = None
+        blurred_aligned_fits_path = None
         ref_jpg_path = None
         aligned_jpg_path = None
         diff_jpg_path = None
@@ -603,6 +622,20 @@ class AlignedFITSComparator:
             # 保存重叠掩码（FITS）
             overlap_mask_fits_path = os.path.join(output_directory, f"{base_name}_overlap_mask.fits")
             self.save_fits_result(overlap_mask.astype(np.float32), overlap_mask_fits_path)
+
+            # 保存归一化后的图像（FITS）
+            normalized_ref_fits_path = os.path.join(output_directory, f"{base_name}_normalized_reference.fits")
+            self.save_fits_result(intermediate_images['normalized_reference'], normalized_ref_fits_path)
+
+            normalized_aligned_fits_path = os.path.join(output_directory, f"{base_name}_normalized_aligned.fits")
+            self.save_fits_result(intermediate_images['normalized_aligned'], normalized_aligned_fits_path)
+
+            # 保存高斯平滑后的图像（FITS）
+            blurred_ref_fits_path = os.path.join(output_directory, f"{base_name}_blurred_reference.fits")
+            self.save_fits_result(intermediate_images['blurred_reference'], blurred_ref_fits_path)
+
+            blurred_aligned_fits_path = os.path.join(output_directory, f"{base_name}_blurred_aligned.fits")
+            self.save_fits_result(intermediate_images['blurred_aligned'], blurred_aligned_fits_path)
 
         timing_stats['保存FITS文件'] = time.time() - save_fits_start
         self.logger.info(f"⏱️  保存FITS文件耗时: {timing_stats['保存FITS文件']:.3f}秒")
@@ -743,6 +776,14 @@ class AlignedFITSComparator:
             output_files['fits']['marked'] = marked_fits_path
         if overlap_mask_fits_path:
             output_files['fits']['overlap_mask'] = overlap_mask_fits_path
+        if normalized_ref_fits_path:
+            output_files['fits']['normalized_reference'] = normalized_ref_fits_path
+        if normalized_aligned_fits_path:
+            output_files['fits']['normalized_aligned'] = normalized_aligned_fits_path
+        if blurred_ref_fits_path:
+            output_files['fits']['blurred_reference'] = blurred_ref_fits_path
+        if blurred_aligned_fits_path:
+            output_files['fits']['blurred_aligned'] = blurred_aligned_fits_path
         if ref_jpg_path:
             output_files['jpg']['reference'] = ref_jpg_path
         if aligned_jpg_path:
